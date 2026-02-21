@@ -1,0 +1,23 @@
+[gd_resource type="TileSet" format=3 uid="uid://dp6okpca82gwy"]
+
+[ext_resource type="Texture2D" uid="uid://07dmnjrm5em" path="res://sprites/overworld/map_tiles/summer/summer_tileset.png" id="1_wk7rr"]
+
+[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_yormb"]
+texture = ExtResource("1_wk7rr")
+texture_region_size = Vector2i(64, 32)
+0:0/0 = 0
+0:0/0/custom_data_0 = true
+0:1/0 = 0
+0:4/0 = 0
+0:5/0 = 0
+1:5/0 = 0
+2:5/0 = 0
+3:5/0 = 0
+1:4/0 = 0
+
+[resource]
+tile_shape = 1
+tile_size = Vector2i(64, 32)
+custom_data_layer_0/name = "walkable"
+custom_data_layer_0/type = 1
+sources/0 = SubResource("TileSetAtlasSource_yormb")

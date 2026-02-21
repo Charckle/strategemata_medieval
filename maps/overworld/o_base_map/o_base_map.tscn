@@ -1,0 +1,15 @@
+[gd_scene format=3 uid="uid://6ytluejirihy"]
+
+[ext_resource type="PackedScene" uid="uid://cqsfl6wcfmb6j" path="res://menus/gui/base_bottom/basebottomGUI.tscn" id="1_pughb"]
+[ext_resource type="Script" path="res://maps/overworld/o_base_map/camera_pan.gd" id="2_camera"]
+
+[node name="OBaseMap" type="Node2D" unique_id=1673006526]
+
+[node name="tilemap" type="Node2D" parent="." unique_id=2009527472]
+
+[node name="provinces" type="Node2D" parent="." unique_id=1550993670]
+
+[node name="BasebottomGUI" parent="." unique_id=956857993 instance=ExtResource("1_pughb")]
+
+[node name="Camera2D" type="Camera2D" parent="." unique_id=860185085]
+script = ExtResource("2_camera")

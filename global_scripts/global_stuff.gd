@@ -1,0 +1,4 @@
+extends Node
+
+
+enum BUILDING_TYPE { VILLAGE, TOWN, CASTLE, ECONOMY, FIELD }

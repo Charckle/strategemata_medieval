@@ -1,0 +1,19 @@
+[gd_scene format=3 uid="uid://dioakqgy71pqq"]
+
+[ext_resource type="Script" uid="uid://dua3hx3fphqt1" path="res://objects/overworld/field/field.gd" id="1_uqcct"]
+[ext_resource type="Texture2D" uid="uid://bxrkdfvsesd0s" path="res://sprites/overworld/objects/province/field/field_autumn.png" id="2_n7ljv"]
+
+[sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_n7ljv"]
+points = PackedVector2Array(32, 0, 0, 16, 32, 32, 64, 16)
+
+[node name="Field" type="Node2D" unique_id=990920519]
+script = ExtResource("1_uqcct")
+
+[node name="field_sprite" type="Sprite2D" parent="." unique_id=371399114]
+position = Vector2(32, 14)
+texture = ExtResource("2_n7ljv")
+
+[node name="Area2D" type="Area2D" parent="." unique_id=31070806]
+
+[node name="Polygon2D" type="CollisionShape2D" parent="Area2D" unique_id=911444680]
+shape = SubResource("ConvexPolygonShape2D_n7ljv")

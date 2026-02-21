@@ -1,0 +1,24 @@
+[gd_scene format=3 uid="uid://eaj3p4kvbv8x"]
+
+[ext_resource type="Script" uid="uid://gxkd5r7i27hb" path="res://objects/overworld/economy/basic_building/basic_building.gd" id="1_xmnlu"]
+[ext_resource type="Texture2D" uid="uid://hyku2irqn8sl" path="res://sprites/overworld/objects/province/economy/base_ground_economy.png" id="2_xmnlu"]
+[ext_resource type="Texture2D" uid="uid://c43brywdf0lxo" path="res://sprites/overworld/objects/province/economy/woodcutter/woodcutter.png" id="3_w8dfw"]
+
+[sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_ks4hd"]
+points = PackedVector2Array(32, 0, 0, 16, 32, 32, 64, 16)
+
+[node name="BasicEconomyBuilding" type="Node2D" unique_id=1538586528]
+script = ExtResource("1_xmnlu")
+
+[node name="ground" type="Sprite2D" parent="." unique_id=770476407]
+position = Vector2(32, 16)
+texture = ExtResource("2_xmnlu")
+
+[node name="building_spr" type="Sprite2D" parent="." unique_id=809438191]
+position = Vector2(32, 12)
+texture = ExtResource("3_w8dfw")
+
+[node name="Area2D" type="Area2D" parent="." unique_id=1509579706]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Area2D" unique_id=95953650]
+shape = SubResource("ConvexPolygonShape2D_ks4hd")

@@ -1,0 +1,44 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="strategx"
+run/main_scene="res://menus/main_menu/main_menu.tscn"
+config/features=PackedStringArray("4.6", "Mobile")
+config/icon="res://icon.svg"
+
+[audio]
+
+buses/default_bus_layout="uid://bu3pn1g3phyyw"
+
+[autoload]
+
+GlobalSet="*res://global_scripts/global_set.gd"
+SettingsLoad="*res://global_scripts/settings_load.gd"
+ContinueGame="*res://global_scripts/continue_game.gd"
+GlobalStuff="*uid://bgmnfgvljrhlp"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="viewport"
+window/stretch/aspect="expand"
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
+[rendering]
+
+textures/canvas_textures/default_texture_filter=0
+rendering_device/driver.windows="d3d12"
+renderer/rendering_method="mobile"

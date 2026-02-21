@@ -1,0 +1,268 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://menus/main_menu/main_menu.gd" id="1_main"]
+[ext_resource type="Script" path="res://menus/main_menu/buttons.gd" id="2_btns"]
+[ext_resource type="Script" path="res://menus/main_menu/settings_pan.gd" id="3_settings"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.12, 0.12, 0.18, 0.95)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="MainMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_main")
+
+[node name="background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.08, 0.1, 0.14, 1)
+
+[node name="center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 40.0
+offset_top = 40.0
+offset_right = -40.0
+offset_bottom = -40.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="panel" type="MarginContainer" parent="center"]
+layout_mode = 2
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 48
+theme_override_constants/margin_right = 48
+theme_override_constants/margin_bottom = 48
+
+[node name="buttons" type="VBoxContainer" parent="center/panel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+script = ExtResource("2_btns")
+
+[node name="continue_btn" type="Button" parent="center/panel/buttons"]
+visible = false
+custom_minimum_size = Vector2(280, 50)
+layout_mode = 2
+text = "Continue"
+
+[node name="new_game_btn" type="Button" parent="center/panel/buttons"]
+custom_minimum_size = Vector2(280, 50)
+layout_mode = 2
+text = "New Game"
+
+[node name="load_game_btn" type="Button" parent="center/panel/buttons"]
+custom_minimum_size = Vector2(280, 50)
+layout_mode = 2
+text = "Load Game"
+
+[node name="settings_btn" type="Button" parent="center/panel/buttons"]
+custom_minimum_size = Vector2(280, 50)
+layout_mode = 2
+text = "Settings"
+
+[node name="exit_btn" type="Button" parent="center/panel/buttons"]
+custom_minimum_size = Vector2(280, 50)
+layout_mode = 2
+text = "Exit"
+
+[node name="overlays" type="Control" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="settings_pan" type="PanelContainer" parent="overlays"]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -220.0
+offset_top = -200.0
+offset_right = 220.0
+offset_bottom = 200.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+script = ExtResource("3_settings")
+
+[node name="margin" type="MarginContainer" parent="overlays/settings_pan"]
+layout_mode = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="vbox" type="VBoxContainer" parent="overlays/settings_pan/margin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="tabs" type="TabContainer" parent="overlays/settings_pan/margin/vbox"]
+custom_minimum_size = Vector2(0, 260)
+layout_mode = 2
+
+[node name="Audio" type="VBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="content" type="VBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs/Audio"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="master_row" type="HBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="master_lbl" type="Label" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content/master_row"]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+text = "Master"
+
+[node name="master_slider" type="HSlider" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content/master_row"]
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.0
+max_value = 1.0
+step = 0.01
+value = 1.0
+
+[node name="sfx_row" type="HBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="sfx_lbl" type="Label" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content/sfx_row"]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+text = "sfx"
+
+[node name="sfx_slider" type="HSlider" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content/sfx_row"]
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.0
+max_value = 1.0
+step = 0.01
+value = 1.0
+
+[node name="music_row" type="HBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="music_lbl" type="Label" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content/music_row"]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+text = "music"
+
+[node name="music_slider" type="HSlider" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content/music_row"]
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.0
+max_value = 1.0
+step = 0.01
+value = 1.0
+
+[node name="music_on_off_row" type="HBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="music_on_off_lbl" type="Label" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content/music_on_off_row"]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+text = "Music"
+
+[node name="music_on_off_btn" type="OptionButton" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content/music_on_off_row"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+item_count = 2
+popup/item_0/text = "On"
+popup/item_0/id = 1
+popup/item_1/text = "Off"
+popup/item_1/id = 0
+
+[node name="sfx_on_off_row" type="HBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="sfx_on_off_lbl" type="Label" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content/sfx_on_off_row"]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+text = "Sound effects"
+
+[node name="sfx_on_off_btn" type="OptionButton" parent="overlays/settings_pan/margin/vbox/tabs/Audio/content/sfx_on_off_row"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+item_count = 2
+popup/item_0/text = "On"
+popup/item_0/id = 1
+popup/item_1/text = "Off"
+popup/item_1/id = 0
+
+[node name="Video" type="VBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs"]
+layout_mode = 2
+
+[node name="content" type="VBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs/Video"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="fullscreen_row" type="HBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs/Video/content"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="fullscreen_lbl" type="Label" parent="overlays/settings_pan/margin/vbox/tabs/Video/content/fullscreen_row"]
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+text = "Fullscreen"
+
+[node name="fullscreen_btn" type="OptionButton" parent="overlays/settings_pan/margin/vbox/tabs/Video/content/fullscreen_row"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+item_count = 2
+popup/item_0/text = "Off"
+popup/item_0/id = 0
+popup/item_1/text = "On"
+popup/item_1/id = 1
+
+[node name="Gameplay" type="VBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs"]
+layout_mode = 2
+
+[node name="placeholder" type="Label" parent="overlays/settings_pan/margin/vbox/tabs/Gameplay"]
+layout_mode = 2
+text = "No gameplay settings yet."
+
+[node name="back_btn" type="Button" parent="overlays/settings_pan/margin/vbox"]
+layout_mode = 2
+text = "Back"
+
+[connection signal="pressed" from="center/panel/buttons/continue_btn" to="center/panel/buttons" method="_on_continue_btn_pressed"]
+[connection signal="pressed" from="center/panel/buttons/new_game_btn" to="center/panel/buttons" method="_on_new_game_btn_pressed"]
+[connection signal="pressed" from="center/panel/buttons/load_game_btn" to="center/panel/buttons" method="_on_load_game_btn_pressed"]
+[connection signal="pressed" from="center/panel/buttons/settings_btn" to="center/panel/buttons" method="_on_settings_btn_pressed"]
+[connection signal="pressed" from="center/panel/buttons/exit_btn" to="center/panel/buttons" method="_on_exit_btn_pressed"]
+[connection signal="value_changed" from="overlays/settings_pan/margin/vbox/tabs/Audio/content/master_row/master_slider" to="overlays/settings_pan" method="_on_master_slider_value_changed"]
+[connection signal="value_changed" from="overlays/settings_pan/margin/vbox/tabs/Audio/content/sfx_row/sfx_slider" to="overlays/settings_pan" method="_on_sfx_slider_value_changed"]
+[connection signal="value_changed" from="overlays/settings_pan/margin/vbox/tabs/Audio/content/music_row/music_slider" to="overlays/settings_pan" method="_on_music_slider_value_changed"]
+[connection signal="item_selected" from="overlays/settings_pan/margin/vbox/tabs/Audio/content/music_on_off_row/music_on_off_btn" to="overlays/settings_pan" method="_on_music_on_off_btn_item_selected"]
+[connection signal="item_selected" from="overlays/settings_pan/margin/vbox/tabs/Audio/content/sfx_on_off_row/sfx_on_off_btn" to="overlays/settings_pan" method="_on_sfx_on_off_btn_item_selected"]
+[connection signal="item_selected" from="overlays/settings_pan/margin/vbox/tabs/Video/content/fullscreen_row/fullscreen_btn" to="overlays/settings_pan" method="_on_fullscreen_btn_item_selected"]
+[connection signal="pressed" from="overlays/settings_pan/margin/vbox/back_btn" to="overlays/settings_pan" method="_on_back_btn_pressed"]

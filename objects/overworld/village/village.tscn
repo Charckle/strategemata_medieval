@@ -1,0 +1,25 @@
+[gd_scene format=3 uid="uid://cqq66khc4ubqw"]
+
+[ext_resource type="Script" uid="uid://cutkmgw2xtx6a" path="res://objects/overworld/village/village.gd" id="1_1lfvh"]
+[ext_resource type="Texture2D" uid="uid://dg7hnbwwy1n47" path="res://sprites/overworld/objects/province/village/village_ground.png" id="1_ixt21"]
+[ext_resource type="Texture2D" uid="uid://bt6jc1n6v1xry" path="res://sprites/overworld/objects/province/village/village.png" id="2_6it72"]
+
+[sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_1lfvh"]
+points = PackedVector2Array(32, 0, 0, 16, 32, 32, 64, 16)
+
+[node name="Village" type="Node2D" unique_id=474199087]
+script = ExtResource("1_1lfvh")
+
+[node name="ground" type="Sprite2D" parent="." unique_id=588403506]
+position = Vector2(32, 16)
+texture = ExtResource("1_ixt21")
+region_rect = Rect2(5.648346, 161.634, 53.3517, 32.484467)
+
+[node name="building_spr" type="Sprite2D" parent="." unique_id=930332046]
+position = Vector2(32, 12)
+texture = ExtResource("2_6it72")
+
+[node name="Area2D" type="Area2D" parent="." unique_id=1808410074]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Area2D" unique_id=1417823941]
+shape = SubResource("ConvexPolygonShape2D_1lfvh")
