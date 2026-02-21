@@ -1,6 +1,17 @@
 [gd_scene format=3 uid="uid://cqsfl6wcfmb6j"]
 
+[ext_resource type="Script" uid="uid://5pb6cgyfnhnt" path="res://menus/gui/base_bottom/basebottomGUI.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://b1s2p2mvablma" path="res://menus/gui/base_bottom/draggable_menu.gd" id="2_draggable"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.12, 0.12, 0.18, 0.95)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
 [node name="BasebottomGUI" type="CanvasLayer" unique_id=956857993]
+script = ExtResource("1_main")
 
 [node name="Panel" type="Panel" parent="." unique_id=672924979]
 anchors_preset = 7
@@ -9,7 +20,7 @@ anchor_top = 1.0
 anchor_right = 0.5
 anchor_bottom = 1.0
 offset_left = -128.0
-offset_top = -64.0
+offset_top = -48.0
 offset_right = 128.0
 grow_horizontal = 2
 grow_vertical = 0
@@ -17,27 +28,293 @@ grow_vertical = 0
 [node name="map_btn" type="Button" parent="Panel" unique_id=1967978685]
 layout_mode = 0
 offset_right = 64.0
-offset_bottom = 64.0
+offset_bottom = 48.0
 text = "MAP"
 
 [node name="economy_btn" type="Button" parent="Panel" unique_id=1959207728]
 layout_mode = 0
 offset_left = 64.0
 offset_right = 128.0
-offset_bottom = 64.0
+offset_bottom = 48.0
 text = "ECO"
 
 [node name="war_btn" type="Button" parent="Panel" unique_id=109808777]
 layout_mode = 0
 offset_left = 128.0
 offset_right = 192.0
-offset_bottom = 64.0
+offset_bottom = 48.0
 text = "WAR"
 
 [node name="settings_btn" type="Button" parent="Panel" unique_id=2075683938]
 layout_mode = 0
 offset_left = 192.0
 offset_right = 256.0
-offset_bottom = 64.0
-text = "SET
-"
+offset_bottom = 48.0
+text = "SET"
+
+[node name="map_menu" type="PanelContainer" parent="." unique_id=110571874]
+offset_left = 224.0
+offset_top = 96.0
+offset_right = 1056.0
+offset_bottom = 624.0
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+script = ExtResource("2_draggable")
+menu_title = "Map"
+
+[node name="margin" type="MarginContainer" parent="map_menu" unique_id=1012879300]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="vbox" type="VBoxContainer" parent="map_menu/margin" unique_id=1465643937]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="header" type="HBoxContainer" parent="map_menu/margin/vbox" unique_id=493859142]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="title" type="Label" parent="map_menu/margin/vbox/header" unique_id=694526473]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Map"
+
+[node name="close_btn" type="Button" parent="map_menu/margin/vbox/header" unique_id=31318979]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+text = "X"
+
+[node name="tabs" type="TabContainer" parent="map_menu/margin/vbox" unique_id=1923431865]
+layout_mode = 2
+size_flags_vertical = 3
+current_tab = 0
+
+[node name="Overview" type="VBoxContainer" parent="map_menu/margin/vbox/tabs" unique_id=47764997]
+layout_mode = 2
+metadata/_tab_index = 0
+
+[node name="Label" type="Label" parent="map_menu/margin/vbox/tabs/Overview" unique_id=930196907]
+layout_mode = 2
+text = "Map overview content"
+
+[node name="Provinces" type="VBoxContainer" parent="map_menu/margin/vbox/tabs" unique_id=514889972]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 1
+
+[node name="Label" type="Label" parent="map_menu/margin/vbox/tabs/Provinces" unique_id=112756277]
+layout_mode = 2
+text = "Provinces content"
+
+[node name="Diplomacy" type="VBoxContainer" parent="map_menu/margin/vbox/tabs" unique_id=548468031]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 2
+
+[node name="Label" type="Label" parent="map_menu/margin/vbox/tabs/Diplomacy" unique_id=2089743352]
+layout_mode = 2
+text = "Diplomacy content"
+
+[node name="economy_menu" type="PanelContainer" parent="." unique_id=733854810]
+visible = false
+offset_left = 420.0
+offset_top = 200.0
+offset_right = 860.0
+offset_bottom = 520.0
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+script = ExtResource("2_draggable")
+menu_title = "Economy"
+
+[node name="margin" type="MarginContainer" parent="economy_menu" unique_id=198862649]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="vbox" type="VBoxContainer" parent="economy_menu/margin" unique_id=1183294816]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="header" type="HBoxContainer" parent="economy_menu/margin/vbox" unique_id=741212439]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="title" type="Label" parent="economy_menu/margin/vbox/header" unique_id=676214538]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Economy"
+
+[node name="close_btn" type="Button" parent="economy_menu/margin/vbox/header" unique_id=1149163479]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+text = "X"
+
+[node name="tabs" type="TabContainer" parent="economy_menu/margin/vbox" unique_id=768368010]
+layout_mode = 2
+size_flags_vertical = 3
+current_tab = 0
+
+[node name="Resources" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs" unique_id=763224628]
+layout_mode = 2
+metadata/_tab_index = 0
+
+[node name="Label" type="Label" parent="economy_menu/margin/vbox/tabs/Resources" unique_id=1244430796]
+layout_mode = 2
+text = "Resources content"
+
+[node name="Trade" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs" unique_id=1844819315]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 1
+
+[node name="Label" type="Label" parent="economy_menu/margin/vbox/tabs/Trade" unique_id=753235413]
+layout_mode = 2
+text = "Trade content"
+
+[node name="Buildings" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs" unique_id=2040139432]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 2
+
+[node name="Label" type="Label" parent="economy_menu/margin/vbox/tabs/Buildings" unique_id=1543648826]
+layout_mode = 2
+text = "Buildings content"
+
+[node name="war_menu" type="PanelContainer" parent="." unique_id=1949477651]
+visible = false
+offset_left = 420.0
+offset_top = 200.0
+offset_right = 860.0
+offset_bottom = 520.0
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+script = ExtResource("2_draggable")
+menu_title = "War"
+
+[node name="margin" type="MarginContainer" parent="war_menu" unique_id=1053525705]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="vbox" type="VBoxContainer" parent="war_menu/margin" unique_id=2147105178]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="header" type="HBoxContainer" parent="war_menu/margin/vbox" unique_id=961152120]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="title" type="Label" parent="war_menu/margin/vbox/header" unique_id=903133423]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "War"
+
+[node name="close_btn" type="Button" parent="war_menu/margin/vbox/header" unique_id=1861027746]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+text = "X"
+
+[node name="tabs" type="TabContainer" parent="war_menu/margin/vbox" unique_id=1319147194]
+layout_mode = 2
+size_flags_vertical = 3
+current_tab = 0
+
+[node name="Military" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=1830100081]
+layout_mode = 2
+metadata/_tab_index = 0
+
+[node name="Label" type="Label" parent="war_menu/margin/vbox/tabs/Military" unique_id=332577333]
+layout_mode = 2
+text = "Military content"
+
+[node name="Alliances" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=1449656036]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 1
+
+[node name="Label" type="Label" parent="war_menu/margin/vbox/tabs/Alliances" unique_id=1370428403]
+layout_mode = 2
+text = "Alliances content"
+
+[node name="Wars" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=128505888]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 2
+
+[node name="Label" type="Label" parent="war_menu/margin/vbox/tabs/Wars" unique_id=2127039925]
+layout_mode = 2
+text = "Active wars content"
+
+[node name="settings_menu" type="PanelContainer" parent="." unique_id=1003244573]
+visible = false
+offset_left = 420.0
+offset_top = 200.0
+offset_right = 860.0
+offset_bottom = 520.0
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+script = ExtResource("2_draggable")
+menu_title = "Settings"
+
+[node name="margin" type="MarginContainer" parent="settings_menu" unique_id=933055740]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="vbox" type="VBoxContainer" parent="settings_menu/margin" unique_id=591436281]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="header" type="HBoxContainer" parent="settings_menu/margin/vbox" unique_id=502198765]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="title" type="Label" parent="settings_menu/margin/vbox/header" unique_id=1955520760]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Settings"
+
+[node name="close_btn" type="Button" parent="settings_menu/margin/vbox/header" unique_id=1391109410]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+text = "X"
+
+[node name="tabs" type="TabContainer" parent="settings_menu/margin/vbox" unique_id=141757905]
+layout_mode = 2
+size_flags_vertical = 3
+current_tab = 0
+
+[node name="Audio" type="VBoxContainer" parent="settings_menu/margin/vbox/tabs" unique_id=886583502]
+layout_mode = 2
+metadata/_tab_index = 0
+
+[node name="Label" type="Label" parent="settings_menu/margin/vbox/tabs/Audio" unique_id=1225261223]
+layout_mode = 2
+text = "Audio settings content"
+
+[node name="Video" type="VBoxContainer" parent="settings_menu/margin/vbox/tabs" unique_id=1248756573]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 1
+
+[node name="Label" type="Label" parent="settings_menu/margin/vbox/tabs/Video" unique_id=582567864]
+layout_mode = 2
+text = "Video settings content"
+
+[node name="Gameplay" type="VBoxContainer" parent="settings_menu/margin/vbox/tabs" unique_id=1765294011]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 2
+
+[node name="Label" type="Label" parent="settings_menu/margin/vbox/tabs/Gameplay" unique_id=1147833269]
+layout_mode = 2
+text = "Gameplay settings content"
