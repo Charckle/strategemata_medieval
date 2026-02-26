@@ -17,6 +17,9 @@ var status_ = PROVINCE_STATUS.STABLE
 @onready var economy = $economy
 @onready var defense = $defense
 
+# Reference to the overworld map (OBaseMap); set from parent hierarchy if not set.
+@onready var base_map: Node = get_parent().get_parent()
+
 func _ready() -> void:
 	create_de_resorce_dict()
 	dejure = player_owner
@@ -25,15 +28,25 @@ func _ready() -> void:
 	allocate_fields_to_settlements()
 	sync_player_owner_to_children(self)
 
+func set_flags():
+	print("setting flag")
+	for settlement in settlements.get_children():
+		if settlement.has_method("setup_building"):
+			settlement.setup_building()
+
 func get_status() -> PROVINCE_STATUS:
 	# Placeholder: rules will be added later
 	return PROVINCE_STATUS.STABLE
 
-func sync_player_owner_to_children(node: Node) -> void:
-	for child in node.get_children():
-		if child.get("player_owner") != null:
-			child.player_owner = player_owner
-		sync_player_owner_to_children(child)
+func sync_player_owner_to_children(_node: Node) -> void:
+	print("setting children")
+	for container in [settlements, economy, defense]:
+		for child in container.get_children():
+			if child.get("player_owner") != null:
+				child.player_owner = player_owner
+			if child.base_map == null and base_map != null:
+				print("base map set")
+				child.base_map = base_map
 
 
 func create_de_resorce_dict():

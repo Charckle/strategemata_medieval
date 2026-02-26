@@ -26,6 +26,8 @@ class PlayerData:
 	var ended_turn
 	
 	var game_data = {"dummy": true}
+	# RGB 0-255; used for flags, UI; default gray until set (e.g. from lobby)
+	var color : Dictionary = {"red": 128, "green": 128, "blue": 128}
 	
 	func _init(
 			p_player_id:int,

@@ -17,13 +17,21 @@ var players = {}
 func dummy_player_data():
 	players[0] = GlobalStuff.PlayerData.new(0, GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL, 1, 0, "Richard", {"marks": 100, "people": 0})
 	players[1] = GlobalStuff.PlayerData.new(1, GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL, 1, 1, "William", {"marks": 2300, "people": 0})
+	players[0].color = {"red": 0, "green": 100, "blue": 255}
+	players[1].color = {"red": 255, "green": 0, "blue": 0}
 
 
 func _ready() -> void:
 	dummy_player_data()
 	update_player_data.rpc(players)
 	assign_players_home_provinces()
+	initialize_map()
 	set_players_turn()
+
+
+func initialize_map() -> void:
+	for prov in provinces.get_children():
+		prov.set_flags()
 
 @rpc("any_peer", "call_local", "reliable")
 func player_ended_turn(player_id):
@@ -73,7 +81,7 @@ func switch_to_player(r_player_id):
 	my_pl_id = r_player_id
 	# recalculate everything
 	update_visuals_and_stats()
-	
+	center_camera_on_current_player_home()
 
 @rpc("authority", "call_local", "reliable")
 func check_if_end_turn():

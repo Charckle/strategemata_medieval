@@ -12,6 +12,8 @@ var fields = []
 
 @export var player_owner = 1
 
+var base_map: Node = null
+
 var population
 var base_pop_growth = 0.05
 var predicted_growth
@@ -20,8 +22,12 @@ var predicted_marks = 0
 func _ready() -> void:
 	update_for_stage()
 	get_start_data()
-	
-	
+
+
+func setup_building() -> void:
+	pass  # No flag yet; will get other visuals later
+
+
 func update_for_stage():
 	change_sprite()
 

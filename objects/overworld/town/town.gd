@@ -10,6 +10,8 @@ var fields = []
 
 @export var player_owner = 1
 
+var base_map: Node = null
+
 var population
 var base_pop_growth = 0.05
 var predicted_growth
@@ -17,7 +19,12 @@ var predicted_marks = 0
 
 func _ready() -> void:
 	get_start_data()
-	
+
+
+func setup_building() -> void:
+	if has_node("Flag"):
+		$Flag.setup_flag()
+
 
 func get_start_data():
 	get_pop()
