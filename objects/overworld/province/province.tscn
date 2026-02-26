@@ -1,0 +1,14 @@
+[gd_scene format=3 uid="uid://hoxsoa8bteah"]
+
+[ext_resource type="Script" uid="uid://dtmcg6jhlkpsm" path="res://objects/overworld/province/province.gd" id="1_hfq8b"]
+
+[node name="Province" type="Node2D" unique_id=496899077]
+script = ExtResource("1_hfq8b")
+
+[node name="settlements" type="Node2D" parent="." unique_id=1960527604]
+
+[node name="fields" type="Node2D" parent="." unique_id=380677438]
+
+[node name="economy" type="Node2D" parent="." unique_id=967963434]
+
+[node name="defense" type="Node2D" parent="." unique_id=1932121289]

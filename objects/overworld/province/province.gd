@@ -1,0 +1,116 @@
+extends Node2D
+
+enum PROVINCE_STATUS { STABLE, DISPUTED, OCCUPIED, CONQUERED }
+
+var resources
+
+var p_name = "noname"
+@export var player_owner = 1
+var dejure
+var defacto
+
+@onready var settlements = $settlements
+@onready var fields = $fields
+
+func _ready() -> void:
+	create_de_resorce_dict()
+	dejure = player_owner
+	defacto = player_owner
+	allocate_fields_to_settlements()
+	sync_player_owner_to_children(self)
+
+func sync_player_owner_to_children(node: Node) -> void:
+	for child in node.get_children():
+		if child.get("player_owner") != null:
+			child.player_owner = player_owner
+		sync_player_owner_to_children(child)
+
+
+func create_de_resorce_dict():
+	var _resource = {
+		"grain": {
+			"has": 0,
+			"will": 0
+		},
+		"population": {
+			"has": 0,
+			"will": 0
+		},
+		"wood": {
+			"will": 0
+		},
+		"stone": {
+			"will": 0
+		},
+		"iron": {
+			"will": 0
+		},
+		"people": {
+			"has": 0,
+			"will": 0
+		},
+		"marks": {
+			"will": 0
+		}
+	}
+	resources = _resource
+
+func allocate_fields_to_settlements() -> void:
+	var field_list: Array = fields.get_children()
+	var settlement_list: Array = settlements.get_children()
+
+	if settlement_list.is_empty() or field_list.is_empty():
+		return
+
+	var num_fields := field_list.size()
+	var num_settlements := settlement_list.size()
+	var fields_per_settlement := int(ceil(num_fields / float(num_settlements)))
+
+	for settlement in settlement_list:
+		settlement.fields.clear()
+	for f in field_list:
+		f.owner_building = null
+
+	for settlement in settlement_list:
+		var needed := fields_per_settlement
+		while needed > 0:
+			var best_field = null
+			var best_dist := INF
+			for f in field_list:
+				if f.owner_building != null:
+					continue
+				var d = settlement.global_position.distance_squared_to(f.global_position)
+				if d < best_dist:
+					best_dist = d
+					best_field = f
+			if best_field == null:
+				break
+			best_field.owner_building = settlement
+			settlement.fields.append(best_field)
+			needed -= 1
+
+
+func recalculate_settlements_growth() -> void:
+	var settlement_list: Array = settlements.get_children()
+	for settlement in settlement_list:
+		if settlement.has_method("calculate_predicted_growth"):
+			settlement.calculate_predicted_growth()
+	update_population_in_resources()
+
+
+func update_population_in_resources() -> void:
+	var settlement_list: Array = settlements.get_children()
+	var has_total := 0
+	var will_total := 0
+	for settlement in settlement_list:
+		has_total += settlement.population
+		will_total += settlement.population + settlement.predicted_growth
+	resources["population"]["has"] = has_total
+	resources["population"]["will"] = will_total
+
+
+func apply_predicted_growth_to_settlements() -> void:
+	var settlement_list: Array = settlements.get_children()
+	for settlement in settlement_list:
+		settlement.population += settlement.predicted_growth
+	update_population_in_resources()

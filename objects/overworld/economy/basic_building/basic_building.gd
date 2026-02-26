@@ -11,6 +11,8 @@ enum STAGES { EMPTY, SMALL, MEDIUM, BIG, RAZED }
 
 @onready var building_spr: Sprite2D = $building_spr
 
+@export var player_owner = 1
+
 
 func _ready() -> void:
 	update_for_stage()

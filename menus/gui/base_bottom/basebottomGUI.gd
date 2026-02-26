@@ -5,6 +5,7 @@ extends CanvasLayer
 @onready var war_menu := $war_menu
 @onready var settings_menu := $settings_menu
 
+@onready var parent_n = get_parent()
 
 func _ready() -> void:
 	$Panel/map_btn.pressed.connect(_on_map_btn_pressed)
@@ -44,3 +45,16 @@ func _toggle_menu(menu: Control) -> void:
 func _bring_to_front(menu: Control) -> void:
 	var parent := menu.get_parent()
 	parent.move_child(menu, parent.get_child_count() - 1)
+
+
+func _on_end_turn_btn_pressed() -> void:
+	parent_n.player_ended_turn.rpc_id(1, parent_n.my_pl_id)
+
+func update_season(season_id):
+	$top_panel/MarginContainer/HBoxContainer/season_lbl.text = GlobalStuff.get_season_name(season_id)
+
+func update_money(m_value):
+	$top_panel/MarginContainer/HBoxContainer/mark_val_lbl.text = str(m_value)
+
+func update_pname(player_name):
+	$top_panel/MarginContainer/HBoxContainer/player_name_lbl.text = player_name

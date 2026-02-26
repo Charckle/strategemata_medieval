@@ -1,12 +1,14 @@
 [gd_scene format=3 uid="uid://bpe0y7utvewqk"]
 
 [ext_resource type="Texture2D" uid="uid://bc1ouly624a1c" path="res://sprites/overworld/objects/province/base_ground_castle.png" id="1_5qiun"]
+[ext_resource type="Script" uid="uid://bcxski0n682ps" path="res://objects/overworld/town/town.gd" id="1_i1a14"]
 [ext_resource type="Texture2D" uid="uid://g2nnfmojh5o3" path="res://sprites/overworld/objects/province/town/town.png" id="2_ak4yw"]
 
 [sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_ak4yw"]
 points = PackedVector2Array(64, 0, 0, 32, 64, 64, 128, 32)
 
 [node name="Town" type="Node2D" unique_id=772232724]
+script = ExtResource("1_i1a14")
 
 [node name="ground" type="Sprite2D" parent="." unique_id=990613847]
 position = Vector2(64, 32)

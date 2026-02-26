@@ -8,6 +8,8 @@ enum GROWN_STAGES { EMPTY, WINTER, SPRING, SUMMER, AUTUMN }
 
 @onready var field_sprite: Sprite2D = $field_sprite
 
+var owner_building
+
 func _ready() -> void:
 	update_for_growth()
 	
