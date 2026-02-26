@@ -17,7 +17,9 @@ tile_map_data = PackedByteArray("AAAAAAIAAAAAAAEAAAAAAAMAAAAAAAEAAAABAAIAAAAAAAE
 tile_set = ExtResource("2_vw55j")
 
 [node name="Province" parent="provinces" parent_id_path=PackedInt32Array(1550993670) index="0" unique_id=496899077 instance=ExtResource("3_yormb")]
+p_name = "Shire"
 player_owner = 0
+home_province = true
 
 [node name="Town" parent="provinces/Province/settlements" parent_id_path=PackedInt32Array(496899077, 1960527604) index="0" unique_id=772232724 instance=ExtResource("4_enhbj")]
 position = Vector2(224, 288)
@@ -83,6 +85,8 @@ position = Vector2(480, 240)
 position = Vector2(384, 272)
 
 [node name="Province2" parent="provinces" parent_id_path=PackedInt32Array(1550993670) index="1" unique_id=851865952 instance=ExtResource("3_yormb")]
+p_name = "Gondor"
+home_province = true
 
 [node name="Town" parent="provinces/Province2/settlements" parent_id_path=PackedInt32Array(851865952, 1960527604) index="0" unique_id=1638598210 instance=ExtResource("4_enhbj")]
 position = Vector2(608, 480)

@@ -128,10 +128,10 @@ text = "Diplomacy content"
 
 [node name="economy_menu" type="PanelContainer" parent="." unique_id=733854810]
 visible = false
-offset_left = 320.0
-offset_top = 128.0
-offset_right = 960.0
-offset_bottom = 592.0
+offset_left = 224.0
+offset_top = 96.0
+offset_right = 1056.0
+offset_bottom = 624.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 script = ExtResource("2_draggable")
 menu_title = "Economy"
@@ -167,31 +167,113 @@ layout_mode = 2
 size_flags_vertical = 3
 current_tab = 0
 
-[node name="Resources" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs" unique_id=763224628]
+[node name="overview" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs" unique_id=763224628]
 layout_mode = 2
+theme_override_constants/separation = 8
 metadata/_tab_index = 0
 
-[node name="Label" type="Label" parent="economy_menu/margin/vbox/tabs/Resources" unique_id=1244430796]
+[node name="provinces_count_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/overview" unique_id=1244430796]
 layout_mode = 2
-text = "Resources content"
+text = "Provinces: 0"
 
-[node name="Trade" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs" unique_id=1844819315]
+[node name="money_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/overview" unique_id=1244430797]
+layout_mode = 2
+text = "Marks: 0"
+
+[node name="population_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/overview" unique_id=1244430798]
+layout_mode = 2
+text = "Population: 0"
+
+[node name="all_provinces" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs" unique_id=1844819315]
 visible = false
 layout_mode = 2
+theme_override_constants/separation = 4
 metadata/_tab_index = 1
 
-[node name="Label" type="Label" parent="economy_menu/margin/vbox/tabs/Trade" unique_id=753235413]
+[node name="ScrollContainer" type="ScrollContainer" parent="economy_menu/margin/vbox/tabs/all_provinces" unique_id=753235413]
 layout_mode = 2
-text = "Trade content"
+size_flags_vertical = 3
 
-[node name="Buildings" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs" unique_id=2040139432]
+[node name="provinces_list" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/all_provinces/ScrollContainer" unique_id=753235414]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 2
+
+[node name="province" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs" unique_id=2040139432]
 visible = false
 layout_mode = 2
+theme_override_constants/separation = 6
 metadata/_tab_index = 2
 
-[node name="Label" type="Label" parent="economy_menu/margin/vbox/tabs/Buildings" unique_id=1543648826]
+[node name="province_name_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province" unique_id=1543648826]
 layout_mode = 2
-text = "Buildings content"
+text = "—"
+
+[node name="status_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province" unique_id=1543648827]
+layout_mode = 2
+text = "Status: —"
+
+[node name="owner_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province" unique_id=1543648828]
+layout_mode = 2
+text = "Owner: —"
+
+[node name="defacto_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province" unique_id=1543648829]
+layout_mode = 2
+text = "De facto: —"
+
+[node name="dejure_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province" unique_id=1543648830]
+layout_mode = 2
+text = "De jure: —"
+
+[node name="population_prov_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province" unique_id=1543648831]
+layout_mode = 2
+text = "Population: —"
+
+[node name="income_prov_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province" unique_id=1543648832]
+layout_mode = 2
+text = "Predicted income: —"
+
+[node name="buildings_header" type="Label" parent="economy_menu/margin/vbox/tabs/province" unique_id=1543648833]
+layout_mode = 2
+text = "Buildings (Control / All)"
+
+[node name="buildings_grid" type="GridContainer" parent="economy_menu/margin/vbox/tabs/province" unique_id=1543648834]
+layout_mode = 2
+theme_override_constants/h_separation = 16
+theme_override_constants/v_separation = 4
+columns = 2
+
+[node name="villages_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648835]
+layout_mode = 2
+text = "Villages"
+
+[node name="villages_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648836]
+layout_mode = 2
+text = "— / —"
+
+[node name="towns_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648837]
+layout_mode = 2
+text = "Towns"
+
+[node name="towns_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648838]
+layout_mode = 2
+text = "— / —"
+
+[node name="castles_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648839]
+layout_mode = 2
+text = "Castles"
+
+[node name="castles_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648840]
+layout_mode = 2
+text = "— / —"
+
+[node name="economy_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648841]
+layout_mode = 2
+text = "Economy"
+
+[node name="economy_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648842]
+layout_mode = 2
+text = "— / —"
 
 [node name="war_menu" type="PanelContainer" parent="." unique_id=1949477651]
 visible = false

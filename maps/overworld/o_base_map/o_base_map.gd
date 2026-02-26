@@ -10,6 +10,7 @@ var my_pl_id = 0
 var players = {}
 
 @onready var provinces = $provinces
+@onready var camera: Camera2D = $Camera2D
 
 @onready var gui_node = $BasebottomGUI
 
@@ -21,6 +22,7 @@ func dummy_player_data():
 func _ready() -> void:
 	dummy_player_data()
 	update_player_data.rpc(players)
+	assign_players_home_provinces()
 	set_players_turn()
 
 @rpc("any_peer", "call_local", "reliable")
@@ -71,6 +73,7 @@ func switch_to_player(r_player_id):
 	my_pl_id = r_player_id
 	# recalculate everything
 	update_visuals_and_stats()
+	
 
 @rpc("authority", "call_local", "reliable")
 func check_if_end_turn():
@@ -87,6 +90,7 @@ func end_turn():
 
 @rpc("authority", "call_local", "reliable")
 func calculate_new_turn_game_data():
+	assign_players_home_provinces()
 	#calculate and then display the new data
 	add_resources()
 	update_visuals_and_stats()
@@ -135,6 +139,10 @@ func update_gui():
 	gui_node.update_season(season)
 	gui_node.update_pname(players[my_pl_id].name_)
 	gui_node.update_money(players[my_pl_id].game_data["marks"])
+	update_menus()
+
+func update_menus():
+	gui_node.update_economy_menu(self)
 
 func update_stats():
 	recalculate_all_settlements_growth()
@@ -158,10 +166,8 @@ func update_players_population() -> void:
 	for prov in provinces.get_children():
 		var has_by_player: Dictionary = prov.resources["population"]["has"]
 		for player_id in has_by_player:
-			if player_id is String and player_id == "all":
-				continue
 			if players.has(player_id):
-				players[player_id].game_data["people"] = players[player_id].game_data.get("people", 0) + int(has_by_player[player_id])
+				players[player_id].game_data["people"] +=  int(has_by_player[player_id])
 
 func recalculate_all_settlements_marks() -> void:
 	for prov in provinces.get_children():
@@ -173,11 +179,100 @@ func add_marks_to_players() -> void:
 	for prov in provinces.get_children():
 		var will_by_player: Dictionary = prov.resources["marks"]["will"]
 		for player_id in will_by_player:
-			if player_id is String and player_id == "all":
-				continue
 			if players.has(player_id):
 				players[player_id].game_data["marks"] += int(will_by_player[player_id])
 
 
 func add_resources():
 	add_marks_to_players()
+
+
+func _provinces_for_player(player_id: int) -> Array:
+	var owned := []
+	var other_interest := []
+	for prov in provinces.get_children():
+		if prov.player_owner == player_id:
+			owned.append(prov)
+		elif prov.defacto == player_id or prov.dejure == player_id:
+			other_interest.append(prov)
+	owned.append_array(other_interest)
+	return owned
+
+
+func get_player_overview_data(player_id: int) -> Dictionary:
+	if not players.has(player_id):
+		return {}
+	var pl = players[player_id]
+	var prov_list = _provinces_for_player(player_id)
+	var population := 0
+	for prov in prov_list:
+		population += prov.resources["population"]["has"]["all"]
+	return {
+		"num_provinces": prov_list.size(),
+		"marks": pl.game_data.get("marks", 0),
+		"population": population
+	}
+
+
+func get_all_provinces_list_data(player_id: int) -> Array:
+	var owned := []
+	var other := []
+	for prov in provinces.get_children():
+		var entry = {
+			"id": prov.name,
+			"name": prov.p_name,
+			"population": prov.resources["population"]["has"]["all"],
+			"predicted_income": prov.resources["marks"]["will"]["all"],
+			"owned": prov.player_owner == player_id
+		}
+		if prov.player_owner == player_id:
+			owned.append(entry)
+		elif prov.defacto == player_id or prov.dejure == player_id:
+			other.append(entry)
+	owned.append_array(other)
+	return owned
+
+
+func _get_province_by_id(province_id: String) -> Node:
+	for prov in provinces.get_children():
+		if prov.name == province_id:
+			return prov
+	return null
+
+
+func get_province_data(province_id: String) -> Dictionary:
+	var prov = _get_province_by_id(province_id)
+	if prov == null:
+		return {}
+	return prov.get_display_data(players)
+
+
+func assign_players_home_provinces() -> void:
+	var prov_list: Array = provinces.get_children()
+	prov_list.sort_custom(func(a, b): return a.name < b.name)
+	var assigned := {}
+	for prov in prov_list:
+		var pid = prov.player_owner
+		if not players.has(pid) or assigned.has(pid):
+			continue
+		players[pid].game_data["home_province_id"] = prov.name
+		assigned[pid] = true
+	# Override with any province marked as home_province for that player
+	for prov in prov_list:
+		if prov.home_province and players.has(prov.player_owner):
+			players[prov.player_owner].game_data["home_province_id"] = prov.name
+
+
+func center_camera_on_current_player_home() -> void:
+	if not players.has(my_pl_id):
+		return
+	var home_id: String = players[my_pl_id].game_data.get("home_province_id", "")
+	if home_id.is_empty():
+		return
+	var prov = _get_province_by_id(home_id)
+	if prov == null:
+		return
+	for s in prov.settlements.get_children():
+		if s.get("type_") != null and s.type_ == GlobalStuff.BUILDING_TYPE.TOWN:
+			camera.position = s.global_position
+			return

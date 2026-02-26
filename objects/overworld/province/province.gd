@@ -4,20 +4,30 @@ enum PROVINCE_STATUS { STABLE, DISPUTED, OCCUPIED, CONQUERED }
 
 var resources
 
-var p_name = "noname"
+@export var p_name = "noname"
 @export var player_owner = 1
+@export var home_province = false
 var dejure
 var defacto
 
+var status_ = PROVINCE_STATUS.STABLE
+
 @onready var settlements = $settlements
 @onready var fields = $fields
+@onready var economy = $economy
+@onready var defense = $defense
 
 func _ready() -> void:
 	create_de_resorce_dict()
 	dejure = player_owner
 	defacto = player_owner
+	status_ = get_status()
 	allocate_fields_to_settlements()
 	sync_player_owner_to_children(self)
+
+func get_status() -> PROVINCE_STATUS:
+	# Placeholder: rules will be added later
+	return PROVINCE_STATUS.STABLE
 
 func sync_player_owner_to_children(node: Node) -> void:
 	for child in node.get_children():
@@ -144,3 +154,76 @@ func recalculate_marks_will_by_player() -> void:
 		total += will_by_player[pid]
 	will_by_player["all"] = total
 	resources["marks"]["will"] = will_by_player
+
+
+func _count_buildings_in_node(node: Node, control_player_id: int) -> Dictionary:
+	var control := 0
+	var all_count := 0
+	for child in node.get_children():
+		all_count += 1
+		if child.get("player_owner") != null and child.player_owner == control_player_id:
+			control += 1
+	return {"control": control, "all": all_count}
+
+
+func get_building_counts() -> Dictionary:
+	var ctrl = defacto
+	var villages := _count_by_type(settlements, GlobalStuff.BUILDING_TYPE.VILLAGE, ctrl)
+	var towns := _count_by_type(settlements, GlobalStuff.BUILDING_TYPE.TOWN, ctrl)
+	# defense/economy: count all children (castles may not have type_ set yet)
+	var castles := _count_buildings_in_node(defense, ctrl)
+	var economy_buildings := _count_buildings_in_node(economy, ctrl)
+	return {
+		"villages": villages,
+		"towns": towns,
+		"castles": castles,
+		"economy": economy_buildings
+	}
+
+
+func _count_by_type(node: Node, btype: int, control_player_id: int) -> Dictionary:
+	var control := 0
+	var all_count := 0
+	for child in node.get_children():
+		if child.get("type_") != null and child.type_ == btype:
+			if child.get("player_owner") != null:
+				all_count += 1
+			if child.player_owner == control_player_id:
+				control += 1
+	return {"control": control, "all": all_count}
+
+
+func get_status_name() -> String:
+	match status_:
+		PROVINCE_STATUS.STABLE: return "Stable"
+		PROVINCE_STATUS.DISPUTED: return "Disputed"
+		PROVINCE_STATUS.OCCUPIED: return "Occupied"
+		PROVINCE_STATUS.CONQUERED: return "Conquered"
+		_: return "Unknown"
+
+func get_display_data(players_dict: Dictionary) -> Dictionary:
+	var owner_name := ""
+	var defacto_name := ""
+	var dejure_name := ""
+	if players_dict.has(player_owner):
+		owner_name = players_dict[player_owner].name_
+	if players_dict.has(defacto):
+		defacto_name = players_dict[defacto].name_
+	if players_dict.has(dejure):
+		dejure_name = players_dict[dejure].name_
+	var counts = get_building_counts()
+	return {
+		"name": p_name,
+		"status": status_,
+		"status_name": get_status_name(),
+		"owner_name": owner_name,
+		"defacto_name": defacto_name,
+		"dejure_name": dejure_name,
+		"population_has": resources["population"]["has"].get("all", 0),
+		"population_will": resources["population"]["will"].get("all", 0),
+		"marks_will": resources["marks"]["will"].get("all", 0),
+		"villages": counts["villages"],
+		"towns": counts["towns"],
+		"castles": counts["castles"],
+		"economy": counts["economy"]
+	}
