@@ -15,6 +15,7 @@ var fields = []
 var population
 var base_pop_growth = 0.05
 var predicted_growth
+var predicted_marks = 0
 
 func _ready() -> void:
 	update_for_stage()
@@ -27,7 +28,11 @@ func update_for_stage():
 
 func change_sprite():
 	var textures := {
+		STAGES.EMPTY: preload("res://sprites/overworld/objects/province/village/village.png"),
 		STAGES.SMALL: preload("res://sprites/overworld/objects/province/village/village.png"),
+		STAGES.MEDIUM: preload("res://sprites/overworld/objects/province/village/village.png"),
+		STAGES.BIG: preload("res://sprites/overworld/objects/province/village/village.png"),
+		STAGES.RAZED: preload("res://sprites/overworld/objects/province/village/village.png")
 	}
 	
 	if stage == STAGES.EMPTY:
@@ -39,6 +44,11 @@ func change_sprite():
 func get_start_data():
 	get_pop()
 	calculate_predicted_growth()
+	calculate_predicted_marks()
+
+
+func calculate_predicted_marks() -> void:
+	predicted_marks = int(ceil(population * 0.10))
 
 
 func calculate_predicted_growth() -> void:

@@ -14,8 +14,8 @@ var players = {}
 @onready var gui_node = $BasebottomGUI
 
 func dummy_player_data():
-	players[0] = GlobalStuff.PlayerData.new(0, GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL, 1, 0, "Richard", {"marks": 100})
-	players[1] = GlobalStuff.PlayerData.new(1, GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL, 1, 1, "William", {"marks": 2300})
+	players[0] = GlobalStuff.PlayerData.new(0, GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL, 1, 0, "Richard", {"marks": 100, "people": 0})
+	players[1] = GlobalStuff.PlayerData.new(1, GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL, 1, 1, "William", {"marks": 2300, "people": 0})
 
 
 func _ready() -> void:
@@ -88,7 +88,7 @@ func end_turn():
 @rpc("authority", "call_local", "reliable")
 func calculate_new_turn_game_data():
 	#calculate and then display the new data
-	#update_data()
+	add_resources()
 	update_visuals_and_stats()
 	
 func set_players_turn():
@@ -125,7 +125,7 @@ func bump_season_i_turn():
 	if new_season > 3:
 		new_season = 0
 	
-	season = new_season
+	season = new_season as SEASONS
 
 func update_visuals_and_stats():
 	update_stats()
@@ -138,6 +138,8 @@ func update_gui():
 
 func update_stats():
 	recalculate_all_settlements_growth()
+	recalculate_all_settlements_marks()
+	update_players_population()
 
 
 func recalculate_all_settlements_growth() -> void:
@@ -148,7 +150,34 @@ func add_population():
 	recalculate_all_settlements_growth()
 	for prov in provinces.get_children():
 		prov.apply_predicted_growth_to_settlements()
+	update_players_population()
 
-func add_player_momo():
+func update_players_population() -> void:
+	for pid in players:
+		players[pid].game_data["people"] = 0
 	for prov in provinces.get_children():
-		pass
+		var has_by_player: Dictionary = prov.resources["population"]["has"]
+		for player_id in has_by_player:
+			if player_id is String and player_id == "all":
+				continue
+			if players.has(player_id):
+				players[player_id].game_data["people"] = players[player_id].game_data.get("people", 0) + int(has_by_player[player_id])
+
+func recalculate_all_settlements_marks() -> void:
+	for prov in provinces.get_children():
+		prov.recalculate_marks_will_by_player()
+
+
+func add_marks_to_players() -> void:
+	recalculate_all_settlements_marks()
+	for prov in provinces.get_children():
+		var will_by_player: Dictionary = prov.resources["marks"]["will"]
+		for player_id in will_by_player:
+			if player_id is String and player_id == "all":
+				continue
+			if players.has(player_id):
+				players[player_id].game_data["marks"] += int(will_by_player[player_id])
+
+
+func add_resources():
+	add_marks_to_players()

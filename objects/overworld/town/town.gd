@@ -13,6 +13,7 @@ var fields = []
 var population
 var base_pop_growth = 0.05
 var predicted_growth
+var predicted_marks = 0
 
 func _ready() -> void:
 	get_start_data()
@@ -21,6 +22,11 @@ func _ready() -> void:
 func get_start_data():
 	get_pop()
 	calculate_predicted_growth()
+	calculate_predicted_marks()
+
+
+func calculate_predicted_marks() -> void:
+	predicted_marks = int(ceil(population * 0.10))
 
 
 func calculate_predicted_growth() -> void:

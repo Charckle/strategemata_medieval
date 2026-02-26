@@ -33,8 +33,8 @@ func create_de_resorce_dict():
 			"will": 0
 		},
 		"population": {
-			"has": 0,
-			"will": 0
+			"has": {},  # player_id -> total; "all" -> sum
+			"will": {}  # player_id -> predicted total; "all" -> sum
 		},
 		"wood": {
 			"will": 0
@@ -50,7 +50,7 @@ func create_de_resorce_dict():
 			"will": 0
 		},
 		"marks": {
-			"will": 0
+			"will": {}  # player_id -> amount; "all" -> sum of all players
 		}
 	}
 	resources = _resource
@@ -100,13 +100,25 @@ func recalculate_settlements_growth() -> void:
 
 func update_population_in_resources() -> void:
 	var settlement_list: Array = settlements.get_children()
+	var has_by_player: Dictionary = {}
+	var will_by_player: Dictionary = {}
+	for s in settlement_list:
+		if s.get("player_owner") == null:
+			continue
+		var pid = s.player_owner
+		var pop = s.population if s.get("population") != null else 0
+		var pred = s.predicted_growth if s.get("predicted_growth") != null else 0
+		has_by_player[pid] = has_by_player.get(pid, 0) + pop
+		will_by_player[pid] = will_by_player.get(pid, 0) + pop + pred
 	var has_total := 0
 	var will_total := 0
-	for settlement in settlement_list:
-		has_total += settlement.population
-		will_total += settlement.population + settlement.predicted_growth
-	resources["population"]["has"] = has_total
-	resources["population"]["will"] = will_total
+	for pid in has_by_player:
+		has_total += has_by_player[pid]
+		will_total += will_by_player[pid]
+	has_by_player["all"] = has_total
+	will_by_player["all"] = will_total
+	resources["population"]["has"] = has_by_player
+	resources["population"]["will"] = will_by_player
 
 
 func apply_predicted_growth_to_settlements() -> void:
@@ -114,3 +126,21 @@ func apply_predicted_growth_to_settlements() -> void:
 	for settlement in settlement_list:
 		settlement.population += settlement.predicted_growth
 	update_population_in_resources()
+
+
+func recalculate_marks_will_by_player() -> void:
+	var settlement_list: Array = settlements.get_children()
+	for s in settlement_list:
+		if s.has_method("calculate_predicted_marks"):
+			s.calculate_predicted_marks()
+	var will_by_player: Dictionary = {}
+	for s in settlement_list:
+		if s.get("player_owner") == null or s.get("predicted_marks") == null:
+			continue
+		var pid = s.player_owner
+		will_by_player[pid] = will_by_player.get(pid, 0) + s.predicted_marks
+	var total := 0
+	for pid in will_by_player:
+		total += will_by_player[pid]
+	will_by_player["all"] = total
+	resources["marks"]["will"] = will_by_player
