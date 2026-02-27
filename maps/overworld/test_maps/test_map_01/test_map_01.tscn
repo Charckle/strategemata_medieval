@@ -7,6 +7,7 @@
 [ext_resource type="PackedScene" uid="uid://cqq66khc4ubqw" path="res://objects/overworld/village/village.tscn" id="5_xgxji"]
 [ext_resource type="PackedScene" uid="uid://dioakqgy71pqq" path="res://objects/overworld/field/field.tscn" id="6_pud0s"]
 [ext_resource type="PackedScene" uid="uid://xb32olvqv02n" path="res://objects/overworld/castle/castle.tscn" id="7_qq3c3"]
+[ext_resource type="PackedScene" uid="uid://40852rkknpec" path="res://objects/overworld/army/army_map_unit/armiy_figure.tscn" id="8_pud0s"]
 
 [node name="OBaseMap" unique_id=1673006526 instance=ExtResource("1_epja8")]
 
@@ -151,6 +152,9 @@ position = Vector2(672, 528)
 
 [node name="Castle" parent="provinces/Province2/defense" parent_id_path=PackedInt32Array(851865952, 1932121289) index="0" unique_id=1781354393 instance=ExtResource("7_qq3c3")]
 position = Vector2(608, 384)
+
+[node name="ArmiyFigure" parent="armies" parent_id_path=PackedInt32Array(1470001019) index="0" unique_id=567632873 instance=ExtResource("8_pud0s")]
+position = Vector2(320, 320)
 
 [editable path="provinces/Province"]
 [editable path="provinces/Province2"]

@@ -22,8 +22,7 @@ func _ready() -> void:
 
 
 func setup_building() -> void:
-	if has_node("Flag"):
-		$Flag.setup_flag()
+	$Flag.setup_flag()
 
 
 func get_start_data():

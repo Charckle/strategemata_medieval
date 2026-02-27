@@ -11,6 +11,8 @@ script = ExtResource("1_i7m4o")
 
 [node name="provinces" type="Node2D" parent="." unique_id=1550993670]
 
+[node name="armies" type="Node2D" parent="." unique_id=1470001019]
+
 [node name="BasebottomGUI" parent="." unique_id=956857993 instance=ExtResource("1_pughb")]
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=860185085]

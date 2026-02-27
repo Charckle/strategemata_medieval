@@ -1,0 +1,28 @@
+[gd_scene format=3 uid="uid://40852rkknpec"]
+
+[ext_resource type="PackedScene" uid="uid://bumabll72sky" path="res://objects/overworld/othr/flag/flag.tscn" id="1_2cagq"]
+[ext_resource type="Script" uid="uid://b2uhrpqjk4ffu" path="res://objects/overworld/army/army_map_unit/armiy_figure.gd" id="1_dc735"]
+[ext_resource type="Texture2D" uid="uid://c885rvo22k4ub" path="res://sprites/overworld/map_tiles/summer/grass_01.png" id="1_ft7hr"]
+[ext_resource type="Texture2D" uid="uid://cy55lp0uxujli" path="res://sprites/overworld/objects/othr/army/army_figure.png" id="2_2cagq"]
+
+[sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_ft7hr"]
+points = PackedVector2Array(32, 0, 0, 16, 32, 32, 64, 16)
+
+[node name="ArmiyFigure" type="Node2D" unique_id=567632873]
+script = ExtResource("1_dc735")
+
+[node name="Flag" parent="." unique_id=1083155820 instance=ExtResource("1_2cagq")]
+position = Vector2(36, 2)
+
+[node name="ground" type="Sprite2D" parent="." unique_id=2077454502]
+position = Vector2(32, 16)
+texture = ExtResource("1_ft7hr")
+
+[node name="figure" type="Sprite2D" parent="." unique_id=2030019386]
+position = Vector2(30, 4)
+texture = ExtResource("2_2cagq")
+
+[node name="Area2D" type="Area2D" parent="." unique_id=394389457]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Area2D" unique_id=930789971]
+shape = SubResource("ConvexPolygonShape2D_ft7hr")

@@ -10,6 +10,7 @@ var my_pl_id = 0
 var players = {}
 
 @onready var provinces = $provinces
+@onready var armies = $armies
 @onready var camera: Camera2D = $Camera2D
 
 @onready var gui_node = $BasebottomGUI
@@ -29,9 +30,17 @@ func _ready() -> void:
 	set_players_turn()
 
 
-func initialize_map() -> void:
-	for prov in provinces.get_children():
-		prov.set_flags()
+func initialize_map() -> void:	
+	for child in provinces.get_children():
+		child.base_map = self
+		child.sync_player_owner_to_children()
+		child.set_flags()
+	
+	for child in armies.get_children():
+		child.base_map = self
+		child.set_flags()
+
+
 
 @rpc("any_peer", "call_local", "reliable")
 func player_ended_turn(player_id):
