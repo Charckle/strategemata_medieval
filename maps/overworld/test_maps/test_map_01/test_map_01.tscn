@@ -6,6 +6,7 @@
 [ext_resource type="PackedScene" uid="uid://bpe0y7utvewqk" path="res://objects/overworld/town/town.tscn" id="4_enhbj"]
 [ext_resource type="PackedScene" uid="uid://cqq66khc4ubqw" path="res://objects/overworld/village/village.tscn" id="5_xgxji"]
 [ext_resource type="PackedScene" uid="uid://dioakqgy71pqq" path="res://objects/overworld/field/field.tscn" id="6_pud0s"]
+[ext_resource type="PackedScene" uid="uid://eaj3p4kvbv8x" path="res://objects/overworld/economy/basic_building/basic_building.tscn" id="7_a34qs"]
 [ext_resource type="PackedScene" uid="uid://xb32olvqv02n" path="res://objects/overworld/castle/castle.tscn" id="7_qq3c3"]
 [ext_resource type="PackedScene" uid="uid://40852rkknpec" path="res://objects/overworld/army/army_map_unit/armiy_figure.tscn" id="8_pud0s"]
 
@@ -81,6 +82,9 @@ position = Vector2(512, 256)
 
 [node name="Field15" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="14" unique_id=550218542 instance=ExtResource("6_pud0s")]
 position = Vector2(480, 240)
+
+[node name="BasicEconomyBuilding" parent="provinces/Province/economy" parent_id_path=PackedInt32Array(496899077, 967963434) index="0" unique_id=1538586528 instance=ExtResource("7_a34qs")]
+position = Vector2(352, 336)
 
 [node name="Castle" parent="provinces/Province/defense" parent_id_path=PackedInt32Array(496899077, 1932121289) index="0" unique_id=938396409 instance=ExtResource("7_qq3c3")]
 position = Vector2(384, 272)

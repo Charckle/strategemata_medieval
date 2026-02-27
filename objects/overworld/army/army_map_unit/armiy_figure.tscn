@@ -15,6 +15,7 @@ script = ExtResource("1_dc735")
 position = Vector2(36, 2)
 
 [node name="ground" type="Sprite2D" parent="." unique_id=2077454502]
+visible = false
 position = Vector2(32, 16)
 texture = ExtResource("1_ft7hr")
 

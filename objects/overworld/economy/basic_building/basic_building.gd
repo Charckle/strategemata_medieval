@@ -13,6 +13,7 @@ enum STAGES { EMPTY, SMALL, MEDIUM, BIG, RAZED }
 
 @export var player_owner = 1
 
+var base_map
 
 func _ready() -> void:
 	update_for_stage()

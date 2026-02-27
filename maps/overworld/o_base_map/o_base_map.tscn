@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://oyfhsh61o6ta" path="res://maps/overworld/o_base_map/o_base_map.gd" id="1_i7m4o"]
 [ext_resource type="PackedScene" uid="uid://cqsfl6wcfmb6j" path="res://menus/gui/base_bottom/basebottomGUI.tscn" id="1_pughb"]
+[ext_resource type="Script" uid="uid://b22ouhcqa77e" path="res://maps/overworld/o_base_map/tile_coords_debug.gd" id="2_0n9kl"]
 [ext_resource type="Script" uid="uid://7qwk2ti8nt2h" path="res://maps/overworld/o_base_map/camera_pan.gd" id="2_camera"]
 
 [node name="OBaseMap" type="Node2D" unique_id=1673006526]
@@ -12,6 +13,12 @@ script = ExtResource("1_i7m4o")
 [node name="provinces" type="Node2D" parent="." unique_id=1550993670]
 
 [node name="armies" type="Node2D" parent="." unique_id=1470001019]
+
+[node name="PathLine" type="Line2D" parent="." unique_id=405438521]
+width = 2.0
+
+[node name="TileCoordsDebug" type="Node2D" parent="." unique_id=943890162]
+script = ExtResource("2_0n9kl")
 
 [node name="BasebottomGUI" parent="." unique_id=956857993 instance=ExtResource("1_pughb")]
 
