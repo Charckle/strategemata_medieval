@@ -22,9 +22,7 @@ func setup_selection_input() -> void:
 	if _selection_input_connected or base_map == null:
 		return
 	var area := get_node_or_null("Area2D")
-	if area == null:
-		return
-	area.input_pickable = true
+	
 	if not area.input_event.is_connected(_on_area_input_event):
 		area.input_event.connect(_on_area_input_event)
 	_selection_input_connected = true

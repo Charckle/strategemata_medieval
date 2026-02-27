@@ -4,6 +4,7 @@
 [ext_resource type="PackedScene" uid="uid://cqsfl6wcfmb6j" path="res://menus/gui/base_bottom/basebottomGUI.tscn" id="1_pughb"]
 [ext_resource type="Script" uid="uid://b22ouhcqa77e" path="res://maps/overworld/o_base_map/tile_coords_debug.gd" id="2_0n9kl"]
 [ext_resource type="Script" uid="uid://7qwk2ti8nt2h" path="res://maps/overworld/o_base_map/camera_pan.gd" id="2_camera"]
+[ext_resource type="Script" uid="uid://dtcjcihojfayb" path="res://maps/overworld/o_base_map/pathfinding.gd" id="5_b2dcw"]
 
 [node name="OBaseMap" type="Node2D" unique_id=1673006526]
 script = ExtResource("1_i7m4o")
@@ -24,3 +25,6 @@ script = ExtResource("2_0n9kl")
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=860185085]
 script = ExtResource("2_camera")
+
+[node name="pathfinding" type="Node" parent="." unique_id=356620741]
+script = ExtResource("5_b2dcw")
