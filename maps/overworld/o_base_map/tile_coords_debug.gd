@@ -1,6 +1,6 @@
 extends Node2D
 
-@export var enabled := true:
+@export var enabled := false:
 	set(value):
 		enabled = value
 		visible = value

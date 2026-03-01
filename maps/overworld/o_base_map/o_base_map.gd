@@ -45,8 +45,7 @@ func initialize_map() -> void:
 
 
 func select_army(army: Node2D) -> void:
-	if pathfinding != null and pathfinding.has_method("select_army"):
-		pathfinding.select_army(army)
+	pathfinding.select_army(army)
 
 
 @rpc("any_peer", "call_local", "reliable")

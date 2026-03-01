@@ -29,10 +29,9 @@ const MOVE_DIRS := [
 
 func initialize() -> void:
 	_setup_astar_graph()
-	for child in armies.get_children():
-		child.setup_selection_input()
 
 
+# to ni OK. čekira samo en layer če je walkable
 func _get_map_layer() -> TileMapLayer:
 	for child in tilemap.get_children():
 		if child is TileMapLayer and child.tile_set != null:
@@ -41,22 +40,19 @@ func _get_map_layer() -> TileMapLayer:
 
 
 func _setup_astar_graph() -> void:
+	# to ni ok, čekiramo samo en layer za walkable!!!!
 	map_layer = _get_map_layer()
-	if map_layer == null:
-		return
+	
 	astar_graph = AStar2D.new()
-	walkable_cells.clear()
-	cell_to_point_id.clear()
-	point_id_to_cell.clear()
 
+	# set walkable tiles
 	for cell in map_layer.get_used_cells():
 		var tile_data = map_layer.get_cell_tile_data(cell)
 		if tile_data == null:
 			continue
-		var walkable_data = tile_data.get_custom_data("walkable")
-		var is_walkable := true
-		if walkable_data != null:
-			is_walkable = bool(walkable_data)
+		
+		var is_walkable = tile_data.get_custom_data("walkable")
+		
 		if is_walkable:
 			walkable_cells[cell] = true
 
@@ -67,7 +63,7 @@ func _setup_astar_graph() -> void:
 		point_id_to_cell[next_id] = cell
 		astar_graph.add_point(next_id, map_layer.map_to_local(cell))
 		next_id += 1
-
+	
 	for cell_variant in walkable_cells.keys():
 		var cell: Vector2i = cell_variant
 		var from_id: int = cell_to_point_id[cell]
@@ -127,12 +123,9 @@ func _get_army_center_global(army: Node2D) -> Vector2:
 
 
 func select_army(army: Node2D) -> void:
-	if selected_army != null and selected_army != army and selected_army.has_method("set_selected"):
-		selected_army.set_selected(false)
 	selected_army = army
 	clear_path_preview()
-	if army != null and army.has_method("set_selected"):
-		army.set_selected(true)
+	army.set_selected(true)
 
 
 func clear_path_preview() -> void:
@@ -144,12 +137,12 @@ func clear_path_preview() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
-			if selected_army != null and selected_army.has_method("set_selected"):
+			if selected_army != null:
 				selected_army.set_selected(false)
 			selected_army = null
 			clear_path_preview()
 			return
-		if event.button_index == MOUSE_BUTTON_LEFT and selected_army != null and astar_graph != null:
+		if event.button_index == MOUSE_BUTTON_LEFT and selected_army != null:
 			var cell := get_cell_at_mouse()
 			if not _is_walkable_cell(cell):
 				return
@@ -161,11 +154,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _try_show_path(target_cell: Vector2i) -> void:
 	var from_cell := get_army_cell(selected_army)
-	if not _is_walkable_cell(from_cell):
-		return
 	var path_ids: Array[Vector2i] = _find_path_cells(from_cell, target_cell)
+	
 	print("Army path from %s to %s: %s" % [from_cell, target_cell, path_ids])
 	current_path.clear()
+	
 	for id in path_ids:
 		current_path.append(id)
 	if current_path.is_empty():
@@ -173,18 +166,18 @@ func _try_show_path(target_cell: Vector2i) -> void:
 		return
 	path_target_cell = target_cell
 	path_line.clear_points()
+	
 	for cell in current_path:
 		path_line.add_point(base_map.to_local(_get_cell_center_global(cell)))
 
 
 func execute_move() -> void:
-	if selected_army == null or current_path.is_empty() or map_layer == null:
+	if selected_army == null or current_path.is_empty():
 		clear_path_preview()
 		return
 	var end_cell: Vector2i = current_path[current_path.size() - 1]
 	var army = selected_army
 	army.global_position = _get_cell_center_global(end_cell) - ARMY_CENTER_OFFSET
-	if army.has_method("set_selected"):
-		army.set_selected(false)
+	army.set_selected(false)
 	clear_path_preview()
 	selected_army = null

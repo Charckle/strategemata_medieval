@@ -4,7 +4,6 @@ extends Node2D
 
 var base_map
 
-var _selection_input_connected := false
 var _outline_material: ShaderMaterial
 
 const OUTLINE_SHADER := preload("res://objects/overworld/army/army_map_unit/selection_outline.gdshader")
@@ -16,16 +15,6 @@ func setup_building() -> void:
 
 func set_flags():
 	$Flag.setup_flag()
-
-
-func setup_selection_input() -> void:
-	if _selection_input_connected or base_map == null:
-		return
-	var area := get_node_or_null("Area2D")
-	
-	if not area.input_event.is_connected(_on_area_input_event):
-		area.input_event.connect(_on_area_input_event)
-	_selection_input_connected = true
 
 
 func _on_area_input_event(_viewport: Node, event: InputEvent, _shape_idx: int) -> void:
