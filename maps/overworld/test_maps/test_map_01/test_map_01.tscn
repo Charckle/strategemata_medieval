@@ -54,19 +54,19 @@ position = Vector2(448, 64)
 position = Vector2(544, 80)
 
 [node name="Field6" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="5" unique_id=107063502 instance=ExtResource("6_pud0s")]
-position = Vector2(320, 144)
+position = Vector2(320, 128)
 
 [node name="Field7" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="6" unique_id=1194900012 instance=ExtResource("6_pud0s")]
-position = Vector2(352, 128)
+position = Vector2(352, 112)
 
 [node name="Field8" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="7" unique_id=1306937863 instance=ExtResource("6_pud0s")]
-position = Vector2(384, 144)
+position = Vector2(384, 128)
 
 [node name="Field9" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="8" unique_id=1659957253 instance=ExtResource("6_pud0s")]
-position = Vector2(352, 160)
+position = Vector2(352, 144)
 
 [node name="Field10" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="9" unique_id=726228889 instance=ExtResource("6_pud0s")]
-position = Vector2(224, 256)
+position = Vector2(224, 208)
 
 [node name="Field11" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="10" unique_id=1715788368 instance=ExtResource("6_pud0s")]
 position = Vector2(160, 176)
@@ -78,16 +78,16 @@ position = Vector2(608, 176)
 position = Vector2(576, 160)
 
 [node name="Field14" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="13" unique_id=483955300 instance=ExtResource("6_pud0s")]
-position = Vector2(512, 256)
+position = Vector2(608, 208)
 
 [node name="Field15" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="14" unique_id=550218542 instance=ExtResource("6_pud0s")]
-position = Vector2(480, 240)
+position = Vector2(576, 192)
 
 [node name="BasicEconomyBuilding" parent="provinces/Province/economy" parent_id_path=PackedInt32Array(496899077, 967963434) index="0" unique_id=1538586528 instance=ExtResource("7_a34qs")]
 position = Vector2(352, 336)
 
 [node name="Castle" parent="provinces/Province/defense" parent_id_path=PackedInt32Array(496899077, 1932121289) index="0" unique_id=938396409 instance=ExtResource("7_qq3c3")]
-position = Vector2(384, 272)
+position = Vector2(384, 208)
 
 [node name="Province2" parent="provinces" parent_id_path=PackedInt32Array(1550993670) index="1" unique_id=851865952 instance=ExtResource("3_yormb")]
 p_name = "Gondor"
@@ -158,7 +158,7 @@ position = Vector2(672, 528)
 position = Vector2(608, 384)
 
 [node name="ArmiyFigure" parent="armies" parent_id_path=PackedInt32Array(1470001019) index="0" unique_id=567632873 instance=ExtResource("8_pud0s")]
-position = Vector2(320, 320)
+position = Vector2(416, 464)
 
 [editable path="provinces/Province"]
 [editable path="provinces/Province2"]

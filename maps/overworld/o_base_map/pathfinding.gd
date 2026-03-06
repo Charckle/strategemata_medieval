@@ -56,6 +56,10 @@ func _setup_astar_graph() -> void:
 		if is_walkable:
 			walkable_cells[cell] = true
 
+	var overlay = base_map.get_node_or_null("WalkableOverlay")
+	if overlay and overlay.has_method("refresh"):
+		overlay.refresh()
+
 	var next_id := 0
 	for cell_variant in walkable_cells.keys():
 		var cell: Vector2i = cell_variant
@@ -76,6 +80,10 @@ func _setup_astar_graph() -> void:
 			if not astar_graph.are_points_connected(from_id, to_id):
 				astar_graph.connect_points(from_id, to_id, true)
 
+
+
+func get_walkable_cells() -> Dictionary:
+	return walkable_cells
 
 
 func _is_walkable_cell(cell: Vector2i) -> bool:
