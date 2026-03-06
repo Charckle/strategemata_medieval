@@ -10,6 +10,11 @@ enum GROWN_STAGES { EMPTY, WINTER, SPRING, SUMMER, AUTUMN }
 
 var owner_building
 
+# Returns global positions of tile centers this object blocks (for pathfinding).
+func get_pathfinding_blocked_tile_centers() -> Array:
+	# 1 tile: center at position + (32, 16) for 64x32 isometric
+	return [global_position + Vector2(32, 16)]
+
 func _ready() -> void:
 	update_for_growth()
 	

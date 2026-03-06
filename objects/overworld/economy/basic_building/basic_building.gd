@@ -15,6 +15,9 @@ enum STAGES { EMPTY, SMALL, MEDIUM, BIG, RAZED }
 
 var base_map
 
+func get_pathfinding_blocked_tile_centers() -> Array:
+	return [global_position + Vector2(32, 16)]
+
 func _ready() -> void:
 	update_for_stage()
 	

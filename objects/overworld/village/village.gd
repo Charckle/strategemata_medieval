@@ -14,6 +14,9 @@ var fields = []
 
 var base_map: Node = null
 
+func get_pathfinding_blocked_tile_centers() -> Array:
+	return [global_position + Vector2(32, 16)]
+
 var population
 var base_pop_growth = 0.05
 var predicted_growth

@@ -48,6 +48,18 @@ func select_army(army: Node2D) -> void:
 	pathfinding.select_army(army)
 
 
+func get_objects_with_pathfinding_blocked_tiles() -> Array:
+	var result: Array = []
+	for prov in provinces.get_children():
+		for key in ["settlements", "fields", "economy", "defense"]:
+			var container = prov.get_node_or_null(key)
+			if container:
+				for node in container.get_children():
+					if node.has_method("get_pathfinding_blocked_tile_centers"):
+						result.append(node)
+	return result
+
+
 @rpc("any_peer", "call_local", "reliable")
 func player_ended_turn(player_id):
 	if !multiplayer.is_server():

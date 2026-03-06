@@ -56,6 +56,14 @@ func _setup_astar_graph() -> void:
 		if is_walkable:
 			walkable_cells[cell] = true
 
+	# remove cells covered by objects (they return list of global tile-center positions)
+	var blocked_objects: Array = base_map.get_objects_with_pathfinding_blocked_tiles()
+	for node in blocked_objects:
+		var positions: Array = node.get_pathfinding_blocked_tile_centers()
+		for pos in positions:
+			var cell: Vector2i = map_layer.local_to_map(map_layer.to_local(pos))
+			walkable_cells.erase(cell)
+
 	var overlay = base_map.get_node_or_null("WalkableOverlay")
 	if overlay and overlay.has_method("refresh"):
 		overlay.refresh()
