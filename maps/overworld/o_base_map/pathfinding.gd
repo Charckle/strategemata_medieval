@@ -99,9 +99,10 @@ func _is_walkable_cell(cell: Vector2i) -> bool:
 
 
 func _find_path_cells(from_cell: Vector2i, target_cell: Vector2i) -> Array[Vector2i]:
-	if astar_graph == null:
-		return []
-	if not _is_walkable_cell(from_cell) or not _is_walkable_cell(target_cell):
+	# check if its a building
+	# check if its an army
+	
+	if not _is_walkable_cell(target_cell):
 		return []
 	var from_id: int = cell_to_point_id[from_cell]
 	var to_id: int = cell_to_point_id[target_cell]
@@ -109,6 +110,7 @@ func _find_path_cells(from_cell: Vector2i, target_cell: Vector2i) -> Array[Vecto
 	var cell_path: Array[Vector2i] = []
 	for id in id_path:
 		cell_path.append(point_id_to_cell[id])
+	
 	return cell_path
 
 
@@ -171,10 +173,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _try_show_path(target_cell: Vector2i) -> void:
 	var from_cell := get_army_cell(selected_army)
 	var path_ids: Array[Vector2i] = _find_path_cells(from_cell, target_cell)
-	
-	print("Army path from %s to %s: %s" % [from_cell, target_cell, path_ids])
 	current_path.clear()
-	
 	for id in path_ids:
 		current_path.append(id)
 	if current_path.is_empty():
@@ -182,7 +181,6 @@ func _try_show_path(target_cell: Vector2i) -> void:
 		return
 	path_target_cell = target_cell
 	path_line.clear_points()
-	
 	for cell in current_path:
 		path_line.add_point(base_map.to_local(_get_cell_center_global(cell)))
 
