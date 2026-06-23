@@ -24,10 +24,10 @@ player_owner = 0
 home_province = true
 
 [node name="Town" parent="provinces/Province/settlements" parent_id_path=PackedInt32Array(496899077, 1960527604) index="0" unique_id=772232724 instance=ExtResource("4_enhbj")]
-position = Vector2(224, 288)
+position = Vector2(-192, 336)
 
 [node name="Village" parent="provinces/Province/settlements" parent_id_path=PackedInt32Array(496899077, 1960527604) index="1" unique_id=474199087 instance=ExtResource("5_xgxji")]
-position = Vector2(160, 240)
+position = Vector2(-192, 256)
 
 [node name="Village2" parent="provinces/Province/settlements" parent_id_path=PackedInt32Array(496899077, 1960527604) index="2" unique_id=35438846 instance=ExtResource("5_xgxji")]
 position = Vector2(544, 144)
@@ -66,7 +66,7 @@ position = Vector2(384, 128)
 position = Vector2(352, 144)
 
 [node name="Field10" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="9" unique_id=726228889 instance=ExtResource("6_pud0s")]
-position = Vector2(224, 208)
+position = Vector2(-256, 480)
 
 [node name="Field11" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="10" unique_id=1715788368 instance=ExtResource("6_pud0s")]
 position = Vector2(160, 176)
@@ -158,7 +158,7 @@ position = Vector2(672, 528)
 position = Vector2(608, 384)
 
 [node name="ArmiyFigure" parent="armies" parent_id_path=PackedInt32Array(1470001019) index="0" unique_id=567632873 instance=ExtResource("8_pud0s")]
-position = Vector2(416, 464)
+position = Vector2(-288, 400)
 
 [node name="TileCoordsDebug" parent="." index="4" unique_id=943890162]
 enabled = true

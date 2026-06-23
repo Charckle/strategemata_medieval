@@ -18,15 +18,14 @@ var path_target_building: Node = null
 var current_path: Array[Vector2i] = []
 
 const ARMY_CENTER_OFFSET := Vector2(32, 16)
-const MOVE_DIRS := [
+# Isometric cell space: the only true neighbors are the 4 cardinal cell
+# directions (tiles sharing a diamond edge). A (1,1)-style step touches only at
+# a vertex and is NOT adjacent, so movement is strictly edge-based.
+const EDGE_DIRS := [
 	Vector2i(1, 0),
 	Vector2i(-1, 0),
 	Vector2i(0, 1),
 	Vector2i(0, -1),
-	Vector2i(1, 1),
-	Vector2i(1, -1),
-	Vector2i(-1, 1),
-	Vector2i(-1, -1),
 ]
 
 
@@ -88,7 +87,8 @@ func _setup_astar_graph() -> void:
 	for cell_variant in walkable_cells.keys():
 		var cell: Vector2i = cell_variant
 		var from_id: int = cell_to_point_id[cell]
-		for dir_variant in MOVE_DIRS:
+		# Only edge-adjacent (cardinal) tiles are neighbors.
+		for dir_variant in EDGE_DIRS:
 			var dir: Vector2i = dir_variant
 			var to_cell: Vector2i = cell + dir
 			if not walkable_cells.has(to_cell):
@@ -108,11 +108,12 @@ func _is_walkable_cell(cell: Vector2i) -> bool:
 
 
 # walkable tiles that ring a building's footprint (its "approach"/entrance tiles)
+# Only edge-adjacent tiles count as "next to" the building.
 func get_approach_cells(node: Node) -> Array[Vector2i]:
 	var footprint: Array = object_to_footprint.get(node, [])
 	var result: Array[Vector2i] = []
 	for cell in footprint:
-		for dir in MOVE_DIRS:
+		for dir in EDGE_DIRS:
 			var n: Vector2i = cell + dir
 			if walkable_cells.has(n) and not (n in footprint) and not (n in result):
 				result.append(n)
