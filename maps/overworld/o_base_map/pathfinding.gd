@@ -9,9 +9,12 @@ var astar_graph: AStar2D
 var walkable_cells: Dictionary = {}
 var cell_to_point_id: Dictionary = {}
 var point_id_to_cell: Dictionary = {}
+var blocked_cell_to_object: Dictionary = {}   # Vector2i -> Node
+var object_to_footprint: Dictionary = {}      # Node -> Array[Vector2i]
 var map_layer: TileMapLayer
 var selected_army: Node2D = null
 var path_target_cell: Vector2i = Vector2i(0x7FFFFFFF, 0x7FFFFFFF)  # invalid sentinel
+var path_target_building: Node = null
 var current_path: Array[Vector2i] = []
 
 const ARMY_CENTER_OFFSET := Vector2(32, 16)
@@ -57,12 +60,18 @@ func _setup_astar_graph() -> void:
 			walkable_cells[cell] = true
 
 	# remove cells covered by objects (they return list of global tile-center positions)
+	blocked_cell_to_object.clear()
+	object_to_footprint.clear()
 	var blocked_objects: Array = base_map.get_objects_with_pathfinding_blocked_tiles()
 	for node in blocked_objects:
 		var positions: Array = node.get_pathfinding_blocked_tile_centers()
+		var footprint: Array[Vector2i] = []
 		for pos in positions:
 			var cell: Vector2i = map_layer.local_to_map(map_layer.to_local(pos))
 			walkable_cells.erase(cell)
+			blocked_cell_to_object[cell] = node
+			footprint.append(cell)
+		object_to_footprint[node] = footprint
 
 	var overlay = base_map.get_node_or_null("WalkableOverlay")
 	if overlay and overlay.has_method("refresh"):
@@ -96,6 +105,18 @@ func get_walkable_cells() -> Dictionary:
 
 func _is_walkable_cell(cell: Vector2i) -> bool:
 	return walkable_cells.has(cell)
+
+
+# walkable tiles that ring a building's footprint (its "approach"/entrance tiles)
+func get_approach_cells(node: Node) -> Array[Vector2i]:
+	var footprint: Array = object_to_footprint.get(node, [])
+	var result: Array[Vector2i] = []
+	for cell in footprint:
+		for dir in MOVE_DIRS:
+			var n: Vector2i = cell + dir
+			if walkable_cells.has(n) and not (n in footprint) and not (n in result):
+				result.append(n)
+	return result
 
 
 func _find_path_cells(from_cell: Vector2i, target_cell: Vector2i) -> Array[Vector2i]:
@@ -150,6 +171,7 @@ func clear_path_preview() -> void:
 	path_line.clear_points()
 	current_path.clear()
 	path_target_cell = Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+	path_target_building = null
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -163,6 +185,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT and selected_army != null:
 			var cell := get_cell_at_mouse()
 			if not _is_walkable_cell(cell):
+				# clicking a building: target a tile next to it
+				var building = blocked_cell_to_object.get(cell, null)
+				if building != null:
+					if building == path_target_building and current_path.size() > 0:
+						execute_move()
+					else:
+						_try_show_path_to_building(building)
 				return
 			if cell == path_target_cell and current_path.size() > 0:
 				execute_move()
@@ -172,14 +201,34 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _try_show_path(target_cell: Vector2i) -> void:
 	var from_cell := get_army_cell(selected_army)
-	var path_ids: Array[Vector2i] = _find_path_cells(from_cell, target_cell)
-	current_path.clear()
-	for id in path_ids:
-		current_path.append(id)
-	if current_path.is_empty():
+	var path_cells: Array[Vector2i] = _find_path_cells(from_cell, target_cell)
+	if path_cells.is_empty():
 		clear_path_preview()
 		return
+	_render_path_preview(path_cells)
 	path_target_cell = target_cell
+
+
+func _try_show_path_to_building(building: Node) -> void:
+	var from_cell := get_army_cell(selected_army)
+	var best_path: Array[Vector2i] = []
+	for target_cell in get_approach_cells(building):
+		var path_cells: Array[Vector2i] = _find_path_cells(from_cell, target_cell)
+		if path_cells.is_empty():
+			continue
+		if best_path.is_empty() or path_cells.size() < best_path.size():
+			best_path = path_cells
+	if best_path.is_empty():
+		clear_path_preview()
+		return
+	_render_path_preview(best_path)
+	path_target_building = building
+
+
+func _render_path_preview(path_cells: Array[Vector2i]) -> void:
+	clear_path_preview()
+	for cell in path_cells:
+		current_path.append(cell)
 	path_line.clear_points()
 	for cell in current_path:
 		path_line.add_point(base_map.to_local(_get_cell_center_global(cell)))
