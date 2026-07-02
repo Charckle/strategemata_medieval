@@ -27,6 +27,9 @@ extends CanvasLayer
 
 var selected_province_id: String = ""
 
+var _info_popup: PopupPanel = null
+var _info_popup_label: Label = null
+
 func _ready() -> void:
 	$Panel/map_btn.pressed.connect(_on_map_btn_pressed)
 	$Panel/economy_btn.pressed.connect(_on_economy_btn_pressed)
@@ -69,6 +72,24 @@ func _bring_to_front(menu: Control) -> void:
 
 func _on_end_turn_btn_pressed() -> void:
 	parent_n.player_ended_turn.rpc_id(1, parent_n.my_pl_id)
+
+# Small transient popup shown near the cursor; closes when clicking away.
+func show_info_popup(text: String) -> void:
+	if _info_popup == null:
+		_info_popup = PopupPanel.new()
+		var margin := MarginContainer.new()
+		margin.add_theme_constant_override("margin_left", 10)
+		margin.add_theme_constant_override("margin_right", 10)
+		margin.add_theme_constant_override("margin_top", 6)
+		margin.add_theme_constant_override("margin_bottom", 6)
+		_info_popup_label = Label.new()
+		margin.add_child(_info_popup_label)
+		_info_popup.add_child(margin)
+		add_child(_info_popup)
+	_info_popup_label.text = text
+	var mouse_pos := get_viewport().get_mouse_position()
+	_info_popup.popup(Rect2i(Vector2i(mouse_pos) + Vector2i(12, 12), Vector2i.ZERO))
+
 
 func update_season(season_id):
 	$top_panel/MarginContainer/HBoxContainer/season_lbl.text = GlobalStuff.get_season_name(season_id)

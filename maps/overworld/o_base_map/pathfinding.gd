@@ -13,9 +13,17 @@ var blocked_cell_to_object: Dictionary = {}   # Vector2i -> Node
 var object_to_footprint: Dictionary = {}      # Node -> Array[Vector2i]
 var map_layer: TileMapLayer
 var selected_army: Node2D = null
-var path_target_cell: Vector2i = Vector2i(0x7FFFFFFF, 0x7FFFFFFF)  # invalid sentinel
-var path_target_building: Node = null
 var current_path: Array[Vector2i] = []
+# Cell -> army Node currently standing on it (rebuilt after every move).
+var occupancy: Dictionary = {}
+
+# Preview visuals (created at runtime).
+var rest_line: Line2D = null            # out-of-range portion of the previewed path
+var reachable_overlay: Node2D = null    # reachable tiles + stop marker
+
+const REACHABLE_OVERLAY_SCRIPT := preload("res://maps/overworld/o_base_map/reachable_overlay.gd")
+const PATH_REACHABLE_COLOR := Color(0.2, 0.85, 0.35, 0.9)
+const PATH_REST_COLOR := Color(0.6, 0.6, 0.6, 0.6)
 
 const ARMY_CENTER_OFFSET := Vector2(32, 16)
 # Isometric cell space: the only true neighbors are the 4 cardinal cell
@@ -31,6 +39,38 @@ const EDGE_DIRS := [
 
 func initialize() -> void:
 	_setup_astar_graph()
+	_setup_preview_nodes()
+	rebuild_occupancy()
+
+
+func _setup_preview_nodes() -> void:
+	path_line.default_color = PATH_REACHABLE_COLOR
+
+	rest_line = Line2D.new()
+	rest_line.name = "PathLineRest"
+	rest_line.width = path_line.width
+	rest_line.default_color = PATH_REST_COLOR
+	base_map.add_child(rest_line)
+
+	reachable_overlay = Node2D.new()
+	reachable_overlay.name = "ReachableOverlay"
+	reachable_overlay.set_script(REACHABLE_OVERLAY_SCRIPT)
+	base_map.add_child(reachable_overlay)
+	reachable_overlay.pathfinding = self
+
+
+func rebuild_occupancy() -> void:
+	occupancy.clear()
+	for army in armies.get_children():
+		occupancy[get_army_cell(army)] = army
+
+
+func cell_center_global(cell: Vector2i) -> Vector2:
+	return _get_cell_center_global(cell)
+
+
+func place_army_at_cell(army: Node2D, cell: Vector2i) -> void:
+	army.global_position = _get_cell_center_global(cell) - ARMY_CENTER_OFFSET
 
 
 # to ni OK. čekira samo en layer če je walkable
@@ -120,6 +160,46 @@ func get_approach_cells(node: Node) -> Array[Vector2i]:
 	return result
 
 
+# Cells reachable from a start cell within max_steps edge-moves (BFS).
+# Note: does not treat armies as blockers yet (interaction logic pending).
+func get_reachable_cells(from_cell: Vector2i, max_steps: int) -> Dictionary:
+	var result: Dictionary = {from_cell: 0}
+	var frontier: Array[Vector2i] = [from_cell]
+	var dist := 0
+	while not frontier.is_empty() and dist < max_steps:
+		dist += 1
+		var next_frontier: Array[Vector2i] = []
+		for cell in frontier:
+			for dir in EDGE_DIRS:
+				var n: Vector2i = cell + dir
+				if walkable_cells.has(n) and not result.has(n):
+					result[n] = dist
+					next_frontier.append(n)
+		frontier = next_frontier
+	return result
+
+
+# Walkable, unoccupied tiles edge-adjacent to a single cell (its "approach").
+func _approach_cells_of_cell(cell: Vector2i) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	for dir in EDGE_DIRS:
+		var n: Vector2i = cell + dir
+		if walkable_cells.has(n) and not occupancy.has(n) and not (n in result):
+			result.append(n)
+	return result
+
+
+func _best_path_to_cells(from_cell: Vector2i, target_cells: Array[Vector2i]) -> Array[Vector2i]:
+	var best_path: Array[Vector2i] = []
+	for target_cell in target_cells:
+		var path_cells: Array[Vector2i] = _find_path_cells(from_cell, target_cell)
+		if path_cells.is_empty():
+			continue
+		if best_path.is_empty() or path_cells.size() < best_path.size():
+			best_path = path_cells
+	return best_path
+
+
 func _find_path_cells(from_cell: Vector2i, target_cell: Vector2i) -> Array[Vector2i]:
 	# check if its a building
 	# check if its an army
@@ -163,85 +243,105 @@ func _get_army_center_global(army: Node2D) -> Vector2:
 
 
 func select_army(army: Node2D) -> void:
+	if selected_army != null and selected_army != army:
+		selected_army.set_selected(false)
 	selected_army = army
 	clear_path_preview()
 	army.set_selected(true)
+	_update_reachable_overlay()
+	_update_hover_preview()
+
+
+func deselect_army() -> void:
+	if selected_army != null:
+		selected_army.set_selected(false)
+	selected_army = null
+	clear_path_preview()
+	if reachable_overlay != null:
+		reachable_overlay.clear_all()
 
 
 func clear_path_preview() -> void:
 	path_line.clear_points()
+	if rest_line != null:
+		rest_line.clear_points()
+	if reachable_overlay != null:
+		reachable_overlay.clear_stop()
 	current_path.clear()
-	path_target_cell = Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
-	path_target_building = null
+
+
+func _update_reachable_overlay() -> void:
+	if reachable_overlay == null or selected_army == null:
+		return
+	var from_cell := get_army_cell(selected_army)
+	reachable_overlay.set_reachable(get_reachable_cells(from_cell, selected_army.movement_left))
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if selected_army == null:
+		return
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
-			if selected_army != null:
-				selected_army.set_selected(false)
-			selected_army = null
-			clear_path_preview()
-			return
-		if event.button_index == MOUSE_BUTTON_LEFT and selected_army != null:
-			var cell := get_cell_at_mouse()
-			if not _is_walkable_cell(cell):
-				# clicking a building: target a tile next to it
-				var building = blocked_cell_to_object.get(cell, null)
-				if building != null:
-					if building == path_target_building and current_path.size() > 0:
-						execute_move()
-					else:
-						_try_show_path_to_building(building)
-				return
-			if cell == path_target_cell and current_path.size() > 0:
-				execute_move()
-			else:
-				_try_show_path(cell)
+			deselect_army()
+		elif event.button_index == MOUSE_BUTTON_LEFT:
+			_confirm_move()
+	elif event is InputEventMouseMotion:
+		_update_hover_preview()
 
 
-func _try_show_path(target_cell: Vector2i) -> void:
-	var from_cell := get_army_cell(selected_army)
-	var path_cells: Array[Vector2i] = _find_path_cells(from_cell, target_cell)
-	if path_cells.is_empty():
-		clear_path_preview()
+# Resolve the path to whatever is under the cursor: a free tile, a building's
+# approach tile, or an occupied (army) tile's approach tile.
+func _resolve_target_path(from_cell: Vector2i, cell: Vector2i) -> Array[Vector2i]:
+	if _is_walkable_cell(cell) and not occupancy.has(cell):
+		return _find_path_cells(from_cell, cell)
+	if occupancy.has(cell) and occupancy[cell] != selected_army:
+		return _best_path_to_cells(from_cell, _approach_cells_of_cell(cell))
+	var building = blocked_cell_to_object.get(cell, null)
+	if building != null:
+		return _best_path_to_cells(from_cell, get_approach_cells(building))
+	return []
+
+
+func _update_hover_preview() -> void:
+	if selected_army == null:
 		return
+	var from_cell := get_army_cell(selected_army)
+	var cell := get_cell_at_mouse()
+	var path_cells := _resolve_target_path(from_cell, cell)
 	_render_path_preview(path_cells)
-	path_target_cell = target_cell
-
-
-func _try_show_path_to_building(building: Node) -> void:
-	var from_cell := get_army_cell(selected_army)
-	var best_path: Array[Vector2i] = []
-	for target_cell in get_approach_cells(building):
-		var path_cells: Array[Vector2i] = _find_path_cells(from_cell, target_cell)
-		if path_cells.is_empty():
-			continue
-		if best_path.is_empty() or path_cells.size() < best_path.size():
-			best_path = path_cells
-	if best_path.is_empty():
-		clear_path_preview()
-		return
-	_render_path_preview(best_path)
-	path_target_building = building
 
 
 func _render_path_preview(path_cells: Array[Vector2i]) -> void:
 	clear_path_preview()
-	for cell in path_cells:
-		current_path.append(cell)
-	path_line.clear_points()
-	for cell in current_path:
-		path_line.add_point(base_map.to_local(_get_cell_center_global(cell)))
-
-
-func execute_move() -> void:
-	if selected_army == null or current_path.is_empty():
-		clear_path_preview()
+	if path_cells.is_empty():
 		return
-	var end_cell: Vector2i = current_path[current_path.size() - 1]
-	var army = selected_army
-	army.global_position = _get_cell_center_global(end_cell) - ARMY_CENTER_OFFSET
-	army.set_selected(false)
-	clear_path_preview()
-	selected_army = null
+	current_path = path_cells
+	var reachable_steps: int = min(selected_army.movement_left, path_cells.size() - 1)
+
+	for i in range(0, reachable_steps + 1):
+		path_line.add_point(base_map.to_local(_get_cell_center_global(path_cells[i])))
+	# Out-of-range remainder, dimmed (shows where the army would continue later).
+	if reachable_steps < path_cells.size() - 1:
+		for i in range(reachable_steps, path_cells.size()):
+			rest_line.add_point(base_map.to_local(_get_cell_center_global(path_cells[i])))
+
+	if reachable_overlay != null:
+		reachable_overlay.set_stop_cell(path_cells[reachable_steps])
+
+
+func _confirm_move() -> void:
+	if selected_army == null or current_path.size() < 2:
+		return
+	var reachable_steps: int = min(selected_army.movement_left, current_path.size() - 1)
+	if reachable_steps <= 0:
+		return  # no movement points left this turn
+	var end_cell: Vector2i = current_path[reachable_steps]
+	var army_name := String(selected_army.name)
+	deselect_army()
+	base_map.request_army_move.rpc_id(1, army_name, end_cell.x, end_cell.y, reachable_steps)
+
+
+# Placeholder for future army-vs-army interaction (attack / merge / trade / ...).
+# Wired for later: occupancy + adjacency pathing already resolve to the target.
+func open_army_interaction(_mover: Node2D, _target: Node2D) -> void:
+	pass

@@ -44,8 +44,52 @@ func initialize_map() -> void:
 	pathfinding.initialize()
 
 
-func select_army(army: Node2D) -> void:
-	pathfinding.select_army(army)
+func on_army_clicked(army: Node2D) -> void:
+	if army.player_owner == my_pl_id:
+		pathfinding.select_army(army)
+	else:
+		show_army_owner_popup(army)
+
+
+func show_army_owner_popup(army: Node2D) -> void:
+	var owner_name := "Unknown"
+	if players.has(army.player_owner):
+		owner_name = str(players[army.player_owner].name_)
+	gui_node.show_info_popup("Army of %s" % owner_name)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_army_move(army_name: String, cell_x: int, cell_y: int, steps: int) -> void:
+	if !multiplayer.is_server():
+		return
+	var army = armies.get_node_or_null(army_name)
+	if army == null:
+		return
+	steps = clampi(steps, 0, army.movement_left)
+	if steps <= 0:
+		return
+	apply_army_move.rpc(army_name, cell_x, cell_y, steps)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_army_move(army_name: String, cell_x: int, cell_y: int, steps: int) -> void:
+	var army = armies.get_node_or_null(army_name)
+	if army == null:
+		return
+	pathfinding.place_army_at_cell(army, Vector2i(cell_x, cell_y))
+	army.movement_left -= steps
+	pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
+
+
+func reset_all_army_movement() -> void:
+	for army in armies.get_children():
+		army.reset_movement()
+
+
+func update_all_army_visuals() -> void:
+	for army in armies.get_children():
+		army.set_greyed(army.player_owner == my_pl_id and army.movement_left <= 0)
 
 
 func get_objects_with_pathfinding_blocked_tiles() -> Array:
@@ -106,6 +150,7 @@ func update_player_data(player_data_):
 @rpc("authority", "call_local", "reliable")
 func switch_to_player(r_player_id):
 	my_pl_id = r_player_id
+	pathfinding.deselect_army()
 	# recalculate everything
 	update_visuals_and_stats()
 	center_camera_on_current_player_home()
@@ -126,6 +171,7 @@ func end_turn():
 @rpc("authority", "call_local", "reliable")
 func calculate_new_turn_game_data():
 	assign_players_home_provinces()
+	reset_all_army_movement()
 	#calculate and then display the new data
 	add_resources()
 	update_visuals_and_stats()
@@ -169,6 +215,7 @@ func bump_season_i_turn():
 func update_visuals_and_stats():
 	update_stats()
 	update_gui()
+	update_all_army_visuals()
 	
 func update_gui():
 	gui_node.update_season(season)
