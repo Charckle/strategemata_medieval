@@ -4,7 +4,7 @@ enum PROVINCE_STATUS { STABLE, DISPUTED, OCCUPIED, CONQUERED }
 
 var resources
 
-@export var p_name = "noname"
+@export var p_name = "Gondor"
 @export var player_owner = 1
 @export var home_province = false
 var dejure
@@ -16,9 +16,17 @@ var status_ = PROVINCE_STATUS.STABLE
 @onready var fields = $fields
 @onready var economy = $economy
 @onready var defense = $defense
+@onready var map_labels = $map_labels
+@onready var _name_label: Label = $map_labels/name_label
+@onready var _status_label: Label = $map_labels/status_label
+@onready var _owner_label: Label = $map_labels/owner_label
 
 # Reference to the overworld map (OBaseMap); set from parent hierarchy if not set.
 @onready var base_map
+
+const MAP_LABEL_LINE_HEIGHT := 18.0
+
+var _label_center := Vector2.ZERO
 
 func _ready() -> void:
 	create_de_resorce_dict()
@@ -26,7 +34,7 @@ func _ready() -> void:
 	defacto = player_owner
 	status_ = get_status()
 	allocate_fields_to_settlements()
-	
+
 
 func set_flags():
 	for settlement in settlements.get_children():
@@ -43,6 +51,102 @@ func sync_player_owner_to_children() -> void:
 				child.player_owner = player_owner
 			if child.base_map == null and base_map != null:
 				child.base_map = base_map
+
+
+func set_ownership(new_dejure: int, new_defacto: int) -> void:
+	dejure = new_dejure
+	defacto = new_defacto
+	player_owner = new_dejure
+	status_ = get_status()
+	sync_player_owner_to_children()
+	refresh_map_label()
+
+
+func setup_map_label() -> void:
+	_label_center = get_geographic_center()
+	map_labels.position = _label_center
+	refresh_map_label()
+
+
+func get_geographic_center() -> Vector2:
+	var sum := Vector2.ZERO
+	var count := 0
+	for container in [settlements, fields, economy, defense]:
+		for child in container.get_children():
+			sum += child.position
+			count += 1
+	if count > 0:
+		return sum / float(count)
+	return Vector2.ZERO
+
+
+func get_label_world_position() -> Vector2:
+	return global_position + _label_center
+
+
+func refresh_map_label() -> void:
+	if base_map == null:
+		return
+	var players_dict: Dictionary = base_map.players if base_map.get("players") else {}
+	_name_label.text = p_name
+	if status_ == PROVINCE_STATUS.STABLE:
+		_status_label.visible = false
+		_status_label.text = ""
+	else:
+		_status_label.visible = true
+		_status_label.text = get_status_name()
+		_status_label.modulate = _get_status_color()
+	_owner_label.text = _format_owner_line(players_dict)
+	_layout_map_labels()
+
+
+func set_map_label_alpha(alpha: float) -> void:
+	var color = map_labels.modulate
+	color.a = alpha
+	map_labels.modulate = color
+	map_labels.visible = alpha > 0.001
+
+
+func set_map_label_scale(scale_factor: float) -> void:
+	map_labels.scale = Vector2.ONE * scale_factor
+
+
+func _format_owner_line(players_dict: Dictionary) -> String:
+	var dejure_name := _player_name(players_dict, dejure)
+	var defacto_name := _player_name(players_dict, defacto)
+	if dejure == defacto:
+		return dejure_name
+	return "%s · %s" % [dejure_name, defacto_name]
+
+
+func _player_name(players_dict: Dictionary, player_id: int) -> String:
+	if players_dict.has(player_id):
+		return str(players_dict[player_id].name_)
+	return "Unknown"
+
+
+func _get_status_color() -> Color:
+	match status_:
+		PROVINCE_STATUS.DISPUTED:
+			return Color(1.0, 0.85, 0.2)
+		PROVINCE_STATUS.OCCUPIED:
+			return Color(1.0, 0.55, 0.2)
+		PROVINCE_STATUS.CONQUERED:
+			return Color(1.0, 0.3, 0.3)
+		_:
+			return Color.WHITE
+
+
+func _layout_map_labels() -> void:
+	var lines: Array[Label] = [_name_label]
+	if _status_label.visible:
+		lines.append(_status_label)
+	lines.append(_owner_label)
+	var total_h := MAP_LABEL_LINE_HEIGHT * lines.size()
+	var y := -total_h / 2.0 + MAP_LABEL_LINE_HEIGHT / 2.0
+	for lbl in lines:
+		lbl.position = Vector2(0.0, y)
+		y += MAP_LABEL_LINE_HEIGHT
 
 
 func create_de_resorce_dict():

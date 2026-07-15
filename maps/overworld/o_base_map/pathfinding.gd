@@ -200,6 +200,18 @@ func _best_path_to_cells(from_cell: Vector2i, target_cells: Array[Vector2i]) -> 
 	return best_path
 
 
+# Returns true if a path exists between two cells in the AStar graph.
+# Safely returns false when either cell is not in the graph at all.
+func has_path_from(from_cell: Vector2i, target_cell: Vector2i) -> bool:
+	if not cell_to_point_id.has(from_cell) or not cell_to_point_id.has(target_cell):
+		return false
+	if from_cell == target_cell:
+		return true
+	var from_id: int = cell_to_point_id[from_cell]
+	var to_id: int = cell_to_point_id[target_cell]
+	return astar_graph.get_id_path(from_id, to_id).size() > 0
+
+
 func _find_path_cells(from_cell: Vector2i, target_cell: Vector2i) -> Array[Vector2i]:
 	# check if its a building
 	# check if its an army
@@ -283,8 +295,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			deselect_army()
+			get_viewport().set_input_as_handled()
 		elif event.button_index == MOUSE_BUTTON_LEFT:
-			_confirm_move()
+			if _confirm_move():
+				get_viewport().set_input_as_handled()
 	elif event is InputEventMouseMotion:
 		_update_hover_preview()
 
@@ -329,16 +343,45 @@ func _render_path_preview(path_cells: Array[Vector2i]) -> void:
 		reachable_overlay.set_stop_cell(path_cells[reachable_steps])
 
 
-func _confirm_move() -> void:
+func _confirm_move() -> bool:
 	if selected_army == null or current_path.size() < 2:
-		return
+		return false
+
+	# If the cursor is hovering a building cell, treat the click as a building
+	# interaction rather than a move. The building's Area2D input_event fires
+	# before _unhandled_input, so normally it would beat us here — but if the
+	# building has no Area2D covering the hovered cell we fall through. Either
+	# way, when the final stop of the current path lands on a building's
+	# approach, we forward to on_building_clicked on the building itself.
+	var mouse_cell := get_cell_at_mouse()
+	var building_under_cursor = blocked_cell_to_object.get(mouse_cell, null)
+	if building_under_cursor != null and building_under_cursor.has_method("get_garrison_capacity"):
+		# Let on_building_clicked handle it (checks movement, opens garrison menu).
+		var consumed = base_map.on_building_clicked(building_under_cursor)
+		if consumed:
+			return true
+
 	var reachable_steps: int = min(selected_army.movement_left, current_path.size() - 1)
 	if reachable_steps <= 0:
-		return  # no movement points left this turn
+		return false  # no movement points left this turn
 	var end_cell: Vector2i = current_path[reachable_steps]
 	var army_name := String(selected_army.name)
 	deselect_army()
 	base_map.request_army_move.rpc_id(1, army_name, end_cell.x, end_cell.y, reachable_steps)
+	# Army teleports under the cursor on call_local; suppress the follow-up
+	# Area2D click on this same frame so the Army Menu does not reopen.
+	base_map.suppress_army_click_this_frame()
+	return true
+
+
+# Returns the nearest walkable, unoccupied cell adjacent to `from_cell`, or
+# Vector2i(0x7FFFFFFF, 0x7FFFFFFF) if none exists.
+func get_free_adjacent_cell(from_cell: Vector2i) -> Vector2i:
+	for dir in EDGE_DIRS:
+		var n: Vector2i = from_cell + dir
+		if walkable_cells.has(n) and not occupancy.has(n):
+			return n
+	return Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
 
 
 # Placeholder for future army-vs-army interaction (attack / merge / trade / ...).

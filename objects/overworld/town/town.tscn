@@ -4,6 +4,7 @@
 [ext_resource type="Script" uid="uid://bcxski0n682ps" path="res://objects/overworld/town/town.gd" id="1_i1a14"]
 [ext_resource type="Texture2D" uid="uid://g2nnfmojh5o3" path="res://sprites/overworld/objects/province/town/town.png" id="2_ak4yw"]
 [ext_resource type="PackedScene" uid="uid://bumabll72sky" path="res://objects/overworld/othr/flag/flag.tscn" id="4_rat6a"]
+[ext_resource type="Script" uid="uid://c8bldclick2xyzq" path="res://objects/overworld/othr/building_clickable.gd" id="5_clk"]
 
 [sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_ak4yw"]
 points = PackedVector2Array(64, 0, 0, 32, 64, 64, 128, 32)
@@ -20,6 +21,7 @@ position = Vector2(64, 29)
 texture = ExtResource("2_ak4yw")
 
 [node name="Area2D" type="Area2D" parent="." unique_id=1918224659]
+script = ExtResource("5_clk")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Area2D" unique_id=842418210]
 shape = SubResource("ConvexPolygonShape2D_ak4yw")

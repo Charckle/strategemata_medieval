@@ -405,9 +405,18 @@ visible = false
 layout_mode = 2
 metadata/_tab_index = 2
 
-[node name="Label" type="Label" parent="settings_menu/margin/vbox/tabs/Gameplay" unique_id=1147833269]
+[node name="show_province_names_row" type="HBoxContainer" parent="settings_menu/margin/vbox/tabs/Gameplay" unique_id=1765294012]
 layout_mode = 2
-text = "Gameplay settings content"
+
+[node name="label" type="Label" parent="settings_menu/margin/vbox/tabs/Gameplay/show_province_names_row" unique_id=1765294013]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Show province names on map"
+
+[node name="show_province_names_chk" type="CheckBox" parent="settings_menu/margin/vbox/tabs/Gameplay/show_province_names_row" unique_id=1765294014]
+layout_mode = 2
+button_pressed = true
+text = "Enabled"
 
 [node name="top_panel" type="Panel" parent="." unique_id=982718473]
 anchors_preset = 10

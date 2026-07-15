@@ -25,6 +25,7 @@ GlobalSet="*res://global_scripts/global_set.gd"
 SettingsLoad="*res://global_scripts/settings_load.gd"
 ContinueGame="*res://global_scripts/continue_game.gd"
 GlobalStuff="*uid://bgmnfgvljrhlp"
+GlobalUnits="*res://global_scripts/global_units.gd"
 
 [display]
 

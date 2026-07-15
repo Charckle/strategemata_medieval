@@ -12,7 +12,16 @@ var fields = []
 
 @export var player_owner = 1
 
+# Max men this building can garrison (single flat pool). Starts empty.
+const GARRISON_CAPACITY := 100
+
+# Designer-authored starting garrison (Array of stack specs); see GlobalUnits.units_from_spec.
+@export var start_garrison: Array = []
+
 var base_map: Node = null
+
+func get_garrison_capacity(_spot: int = GlobalUnits.SPOT.FLAT) -> int:
+	return GARRISON_CAPACITY
 
 func get_pathfinding_blocked_tile_centers() -> Array:
 	return [global_position + Vector2(32, 16)]
@@ -73,3 +82,13 @@ func get_pop():
 	}
 	
 	population = pop[stage]
+
+
+func get_stage_name() -> String:
+	match stage:
+		STAGES.EMPTY: return "Empty"
+		STAGES.SMALL: return "Small"
+		STAGES.MEDIUM: return "Medium"
+		STAGES.BIG: return "Big"
+		STAGES.RAZED: return "Razed"
+	return ""

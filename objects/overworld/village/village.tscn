@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://cutkmgw2xtx6a" path="res://objects/overworld/village/village.gd" id="1_1lfvh"]
 [ext_resource type="Texture2D" uid="uid://dg7hnbwwy1n47" path="res://sprites/overworld/objects/province/village/village_ground.png" id="1_ixt21"]
 [ext_resource type="Texture2D" uid="uid://bt6jc1n6v1xry" path="res://sprites/overworld/objects/province/village/village.png" id="2_6it72"]
+[ext_resource type="Script" uid="uid://c8bldclick2xyzq" path="res://objects/overworld/othr/building_clickable.gd" id="3_clk"]
 
 [sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_1lfvh"]
 points = PackedVector2Array(32, 0, 0, 16, 32, 32, 64, 16)
@@ -20,6 +21,7 @@ position = Vector2(32, 12)
 texture = ExtResource("2_6it72")
 
 [node name="Area2D" type="Area2D" parent="." unique_id=1808410074]
+script = ExtResource("3_clk")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Area2D" unique_id=1417823941]
 shape = SubResource("ConvexPolygonShape2D_1lfvh")
