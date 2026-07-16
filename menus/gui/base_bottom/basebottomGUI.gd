@@ -116,6 +116,29 @@ var _building_popup_deploy: Button = null
 var _building_popup_node: Node = null
 var _building_popup_pinned := false
 
+# Field crop popup.
+var _field_popup: PanelContainer = null
+var _field_popup_title: Label = null
+var _field_popup_body: Label = null
+var _field_popup_btns: HBoxContainer = null
+var _field_popup_field: Node = null
+var _field_popup_base = null
+
+# Province fields / labor UI.
+var _prov_fields_lbl: Label = null
+var _prov_labor_lbl: Label = null
+var _prov_labor_box: VBoxContainer = null
+var _prov_labor_sliders: Dictionary = {} # category -> HSlider
+var _prov_labor_updating := false
+
+# Economy building popup (build / demolish).
+var _econ_popup: PanelContainer = null
+var _econ_popup_title: Label = null
+var _econ_popup_body: Label = null
+var _econ_popup_btns: VBoxContainer = null
+var _econ_popup_building: Node = null
+var _econ_popup_base = null
+
 # Battle preview / result UI (built at runtime).
 var _bt_panel: PanelContainer = null
 var _bt_body: VBoxContainer = null
@@ -375,10 +398,232 @@ func _on_building_popup_close_pressed() -> void:
 	hide_building_popup()
 
 
+func _ensure_field_popup() -> void:
+	if _field_popup != null:
+		return
+	_field_popup = PanelContainer.new()
+	_field_popup.top_level = true
+	_field_popup.z_index = 130
+	_field_popup.mouse_filter = Control.MOUSE_FILTER_STOP
+	_field_popup.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var header := HBoxContainer.new()
+	_field_popup_title = Label.new()
+	_field_popup_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_field_popup_title.add_theme_font_size_override("font_size", 16)
+	_field_popup_title.text = "Field"
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.pressed.connect(hide_field_popup)
+	header.add_child(_field_popup_title)
+	header.add_child(close_btn)
+	_field_popup_body = Label.new()
+	_field_popup_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_field_popup_btns = HBoxContainer.new()
+	_field_popup_btns.add_theme_constant_override("separation", 6)
+	for crop_i in [0, 1, 2]:
+		var btn := Button.new()
+		match crop_i:
+			0: btn.text = "Idle"
+			1: btn.text = "Grain"
+			2: btn.text = "Horses"
+		btn.pressed.connect(_on_field_crop_pressed.bind(crop_i))
+		_field_popup_btns.add_child(btn)
+	vbox.add_child(header)
+	vbox.add_child(HSeparator.new())
+	vbox.add_child(_field_popup_body)
+	vbox.add_child(_field_popup_btns)
+	margin.add_child(vbox)
+	_field_popup.add_child(margin)
+	add_child(_field_popup)
+
+
+func show_field_popup(base_map: Node, field: Node) -> void:
+	_ensure_field_popup()
+	hide_building_popup()
+	_field_popup_base = base_map
+	_field_popup_field = field
+	_rebuild_field_popup()
+	_field_popup.visible = true
+	_field_popup.reset_size()
+	var mouse_pos := get_viewport().get_mouse_position()
+	var pos := mouse_pos + Vector2(14, 0)
+	var vp := get_viewport().get_visible_rect().size
+	var sz := _field_popup.size
+	pos.x = clampf(pos.x, 0.0, maxf(0.0, vp.x - sz.x))
+	pos.y = clampf(pos.y, 0.0, maxf(0.0, vp.y - sz.y))
+	_field_popup.position = pos
+
+
+func hide_field_popup() -> void:
+	if _field_popup != null:
+		_field_popup.visible = false
+	_field_popup_field = null
+	_field_popup_base = null
+
+
+func refresh_field_popup_if(base_map: Node, field: Node) -> void:
+	if _field_popup == null or not _field_popup.visible:
+		return
+	if _field_popup_field != field:
+		return
+	_field_popup_base = base_map
+	_rebuild_field_popup()
+
+
+func _rebuild_field_popup() -> void:
+	if _field_popup_base == null or _field_popup_field == null:
+		return
+	var body := ""
+	if _field_popup_base.has_method("_building_display_body"):
+		body = _field_popup_base._building_display_body(_field_popup_field)
+	_field_popup_body.text = body
+	var can_edit := false
+	if _field_popup_field.has_method("get_controller_id"):
+		can_edit = int(_field_popup_field.get_controller_id()) == int(_field_popup_base.my_pl_id)
+	_field_popup_btns.visible = can_edit
+	for i in _field_popup_btns.get_child_count():
+		var btn: Button = _field_popup_btns.get_child(i)
+		btn.disabled = not can_edit
+
+
+func _on_field_crop_pressed(crop: int) -> void:
+	if _field_popup_base == null or _field_popup_field == null:
+		return
+	if _field_popup_base.has_method("do_set_field_crop"):
+		_field_popup_base.do_set_field_crop(_field_popup_field, crop)
+
+
+func _ensure_economy_building_popup() -> void:
+	if _econ_popup != null:
+		return
+	_econ_popup = PanelContainer.new()
+	_econ_popup.top_level = true
+	_econ_popup.z_index = 130
+	_econ_popup.mouse_filter = Control.MOUSE_FILTER_STOP
+	_econ_popup.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var header := HBoxContainer.new()
+	_econ_popup_title = Label.new()
+	_econ_popup_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_econ_popup_title.add_theme_font_size_override("font_size", 16)
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.pressed.connect(hide_economy_building_popup)
+	header.add_child(_econ_popup_title)
+	header.add_child(close_btn)
+	_econ_popup_body = Label.new()
+	_econ_popup_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_econ_popup_btns = VBoxContainer.new()
+	_econ_popup_btns.add_theme_constant_override("separation", 6)
+	vbox.add_child(header)
+	vbox.add_child(HSeparator.new())
+	vbox.add_child(_econ_popup_body)
+	vbox.add_child(_econ_popup_btns)
+	margin.add_child(vbox)
+	_econ_popup.add_child(margin)
+	add_child(_econ_popup)
+
+
+func show_economy_building_popup(base_map: Node, building: Node) -> void:
+	_ensure_economy_building_popup()
+	hide_building_popup()
+	hide_field_popup()
+	_econ_popup_base = base_map
+	_econ_popup_building = building
+	_rebuild_economy_building_popup()
+	_econ_popup.visible = true
+	_econ_popup.reset_size()
+	var mouse_pos := get_viewport().get_mouse_position()
+	var pos := mouse_pos + Vector2(14, 0)
+	var vp := get_viewport().get_visible_rect().size
+	var sz := _econ_popup.size
+	pos.x = clampf(pos.x, 0.0, maxf(0.0, vp.x - sz.x))
+	pos.y = clampf(pos.y, 0.0, maxf(0.0, vp.y - sz.y))
+	_econ_popup.position = pos
+
+
+func hide_economy_building_popup() -> void:
+	if _econ_popup != null:
+		_econ_popup.visible = false
+	_econ_popup_building = null
+	_econ_popup_base = null
+
+
+func refresh_economy_building_popup_if(base_map: Node, building: Node) -> void:
+	if _econ_popup == null or not _econ_popup.visible:
+		return
+	if _econ_popup_building != building:
+		return
+	_econ_popup_base = base_map
+	_rebuild_economy_building_popup()
+
+
+func _rebuild_economy_building_popup() -> void:
+	if _econ_popup_base == null or _econ_popup_building == null:
+		return
+	var b := _econ_popup_building
+	_econ_popup_title.text = _econ_popup_base._building_display_name(b) if _econ_popup_base.has_method("_building_display_name") else "Economy"
+	_econ_popup_body.text = _econ_popup_base._building_display_body(b) if _econ_popup_base.has_method("_building_display_body") else ""
+	for c in _econ_popup_btns.get_children():
+		_econ_popup_btns.remove_child(c)
+		c.queue_free()
+	var pid := int(_econ_popup_base.my_pl_id)
+	var prov = _econ_popup_base.find_province_for_building(b) if _econ_popup_base.has_method("find_province_for_building") else null
+	var is_dejure = prov != null and prov.has_method("has_dejure") and prov.has_dejure(pid)
+	var marks := 0
+	if _econ_popup_base.players.has(pid):
+		marks = int(_econ_popup_base.players[pid].game_data.get("marks", 0))
+	if b.has_method("is_built") and b.is_built():
+		if is_dejure:
+			var dem := Button.new()
+			dem.text = "Demolish"
+			dem.pressed.connect(_on_econ_demolish_pressed)
+			_econ_popup_btns.add_child(dem)
+	else:
+		if is_dejure and b.has_method("allowed_build_subtypes"):
+			for sub in b.allowed_build_subtypes():
+				var cost := int(b.build_cost_for(sub))
+				var btn := Button.new()
+				var name_ := str(b.subtype_display_name(int(sub))) if b.has_method("subtype_display_name") else "Build"
+				btn.text = "%s (%d marks)" % [name_, cost]
+				btn.disabled = marks < cost
+				btn.pressed.connect(_on_econ_build_pressed.bind(int(sub)))
+				_econ_popup_btns.add_child(btn)
+		elif not is_dejure:
+			var hint := Label.new()
+			hint.text = "Only de jure can build here"
+			_econ_popup_btns.add_child(hint)
+
+
+func _on_econ_build_pressed(subtype: int) -> void:
+	if _econ_popup_base == null or _econ_popup_building == null:
+		return
+	if _econ_popup_base.has_method("do_build_economy"):
+		_econ_popup_base.do_build_economy(_econ_popup_building, subtype)
+
+
+func _on_econ_demolish_pressed() -> void:
+	if _econ_popup_base == null or _econ_popup_building == null:
+		return
+	if _econ_popup_base.has_method("do_demolish_economy"):
+		_econ_popup_base.do_demolish_economy(_econ_popup_building)
+
+
 # --- Close everything (called on player switch / end-turn) ------------------
 
 func close_all_popups() -> void:
 	hide_building_popup()
+	hide_field_popup()
+	hide_economy_building_popup()
 	if _info_popup != null:
 		_info_popup.hide()
 	_close_army_menu()
@@ -1490,16 +1735,25 @@ func update_economy_menu(base_map: Node) -> void:
 	var list_data = base_map.get_all_provinces_list_data(pid)
 	for child in provinces_list_container.get_children():
 		child.queue_free()
-	var separator_added := false
+	var holdings_sep := false
+	var other_sep := false
 	for entry in list_data:
-		if not entry.get("owned", true) and not separator_added:
-			separator_added = true
+		if entry.get("holding", false) and not holdings_sep:
+			holdings_sep = true
 			var sep = HSeparator.new()
 			provinces_list_container.add_child(sep)
 			var lbl = Label.new()
-			lbl.text = "De jure / De facto only"
+			lbl.text = "Occupied holdings"
 			lbl.add_theme_font_size_override("font_size", 12)
 			provinces_list_container.add_child(lbl)
+		elif not entry.get("owned", true) and not entry.get("holding", false) and not other_sep:
+			other_sep = true
+			var sep2 = HSeparator.new()
+			provinces_list_container.add_child(sep2)
+			var lbl2 = Label.new()
+			lbl2.text = "De jure / De facto only"
+			lbl2.add_theme_font_size_override("font_size", 12)
+			provinces_list_container.add_child(lbl2)
 		var btn = Button.new()
 		btn.text = "%s — Pop: %s  Income: %s" % [
 			entry.get("name", "—"),
@@ -1524,6 +1778,18 @@ func _on_province_list_clicked(province_id: String) -> void:
 func _ensure_province_levy_widgets() -> void:
 	if _prov_happiness_lbl != null or province_tab_root == null:
 		return
+	province_tab_root.add_child(HSeparator.new())
+	_prov_fields_lbl = Label.new()
+	_prov_fields_lbl.text = "Fields: —"
+	_prov_fields_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	province_tab_root.add_child(_prov_fields_lbl)
+	_prov_labor_lbl = Label.new()
+	_prov_labor_lbl.text = "Labor: —"
+	_prov_labor_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	province_tab_root.add_child(_prov_labor_lbl)
+	_prov_labor_box = VBoxContainer.new()
+	_prov_labor_box.add_theme_constant_override("separation", 4)
+	province_tab_root.add_child(_prov_labor_box)
 	province_tab_root.add_child(HSeparator.new())
 	_prov_happiness_lbl = Label.new()
 	_prov_happiness_lbl.text = "Happiness: —"
@@ -1552,6 +1818,92 @@ func _ensure_province_levy_widgets() -> void:
 	province_tab_root.add_child(row)
 
 
+func _on_prov_labor_category_changed(category: String, value: float) -> void:
+	if _prov_labor_updating:
+		return
+	if selected_province_id == "" or not is_instance_valid(parent_n):
+		return
+	if parent_n.has_method("do_set_holding_labor_category"):
+		parent_n.do_set_holding_labor_category(selected_province_id, category, int(value))
+
+
+func _labor_category_label(cat: String) -> String:
+	match cat:
+		"grain": return "Grain fields"
+		"horses": return "Horse pastures"
+		"wood": return "Woodcutters"
+		"stone": return "Stone quarries"
+		"iron": return "Iron mines"
+		"silver": return "Silver mines"
+	return cat.capitalize()
+
+
+func _rebuild_labor_sliders(holding: Dictionary) -> void:
+	if _prov_labor_box == null:
+		return
+	for c in _prov_labor_box.get_children():
+		_prov_labor_box.remove_child(c)
+		c.queue_free()
+	_prov_labor_sliders.clear()
+	var pop := int(holding.get("population", 0))
+	var labor: Dictionary = holding.get("labor", {})
+	var caps: Dictionary = holding.get("labor_caps", {})
+	var show_cats: Array = []
+	if bool(holding.get("has_grain_work", false)) or int(holding.get("planted_grain", 0)) > 0 \
+			or int(holding.get("grain_fields", 0)) > 0:
+		show_cats.append("grain")
+	if bool(holding.get("has_horse_work", false)):
+		show_cats.append("horses")
+	if bool(holding.get("has_wood", false)) or int(caps.get("wood", 0)) > 0:
+		show_cats.append("wood")
+	if bool(holding.get("has_stone", false)) or int(caps.get("stone", 0)) > 0:
+		show_cats.append("stone")
+	if bool(holding.get("has_iron", false)) or int(caps.get("iron", 0)) > 0:
+		show_cats.append("iron")
+	if bool(holding.get("has_silver", false)) or int(caps.get("silver", 0)) > 0:
+		show_cats.append("silver")
+	_prov_labor_updating = true
+	for cat in show_cats:
+		_add_labor_slider_row(str(cat), labor, caps, pop)
+	_prov_labor_updating = false
+
+
+func _add_labor_slider_row(cat: String, labor: Dictionary, caps: Dictionary, pop: int) -> void:
+	var cur := int(labor.get(cat, 0))
+	var cap := int(caps.get(cat, 0))
+	var others := 0
+	for other_cat in GlobalUnits.LABOR_CATEGORIES:
+		if str(other_cat) == cat:
+			continue
+		others += int(labor.get(other_cat, 0))
+	var max_v := maxi(0, mini(pop - others, cap))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	var lbl := Label.new()
+	if max_v <= 0 and cap > 0:
+		lbl.text = "%s %d/%d (no free people)" % [_labor_category_label(cat), cur, cap]
+	else:
+		lbl.text = "%s %d/%d" % [_labor_category_label(cat), cur, max_v]
+	lbl.custom_minimum_size.x = 180
+	var slider := HSlider.new()
+	slider.min_value = 0
+	slider.max_value = maxi(max_v, 0)
+	slider.step = 1
+	slider.value = clampi(cur, 0, max_v)
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.editable = max_v > 0
+	_connect_labor_slider(slider, cat)
+	row.add_child(lbl)
+	row.add_child(slider)
+	_prov_labor_box.add_child(row)
+	_prov_labor_sliders[cat] = slider
+
+
+func _connect_labor_slider(slider: HSlider, cat: String) -> void:
+	# Separate function so `cat` is captured per slider (not loop-shared).
+	slider.value_changed.connect(func(v: float): _on_prov_labor_category_changed(cat, v))
+
+
 func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	_ensure_province_levy_widgets()
 	var data = base_map.get_province_data(province_id)
@@ -1574,6 +1926,10 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			_prov_shipments_lbl.text = ""
 			_prov_recruit_btn.visible = false
 			_prov_ship_btn.visible = false
+		if _prov_fields_lbl:
+			_prov_fields_lbl.text = "Fields: —"
+			_prov_labor_lbl.text = "Labor: —"
+			_rebuild_labor_sliders({})
 		return
 	province_tab_name.text = data.get("name", "—")
 	province_tab_status.text = "Status: %s" % data.get("status_name", "—")
@@ -1594,6 +1950,45 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	province_tab_castles.text = "%d / %d" % [c.get("control", 0), c.get("all", 0)]
 	var e = data.get("economy", {"control": 0, "all": 0})
 	province_tab_economy.text = "%d / %d" % [e.get("control", 0), e.get("all", 0)]
+
+	var holding: Dictionary = data.get("holding", {})
+	var has_holding := bool(data.get("viewer_has_holding", false))
+	if _prov_fields_lbl != null:
+		if has_holding and not holding.is_empty():
+			var preview: Dictionary = holding.get("economy_preview", {})
+			_prov_fields_lbl.text = (
+				"Fields: %d grain (%d sown), %d horse, %d idle | Stock G%d W%d S%d I%d | Horses %d | Grain pot %.0f"
+				% [
+					int(holding.get("grain_fields", 0)),
+					int(holding.get("planted_grain", 0)),
+					int(holding.get("horse_fields", 0)),
+					int(holding.get("idle_fields", 0)),
+					int(holding.get("grain_stock", 0)),
+					int(holding.get("wood_stock", 0)),
+					int(holding.get("stone_stock", 0)),
+					int(holding.get("iron_stock", 0)),
+					int(holding.get("horses", 0)),
+					float(holding.get("grain_potential", 0.0)),
+				]
+			)
+			var pop := int(holding.get("population", 0))
+			var assigned := int(holding.get("labor_assigned", 0))
+			var cov := float(holding.get("grain_coverage", 1.0)) * 100.0
+			_prov_labor_lbl.text = (
+				"Labor %d / %d · grain coverage %.0f%% · next season: wood %d stone %d iron %d marks %d"
+				% [
+					assigned, pop, cov,
+					int(preview.get("wood", 0)),
+					int(preview.get("stone", 0)),
+					int(preview.get("iron", 0)),
+					int(preview.get("marks", 0)),
+				]
+			)
+			_rebuild_labor_sliders(holding)
+		else:
+			_prov_fields_lbl.text = "Fields: (no settlement holding here)"
+			_prov_labor_lbl.text = "Labor: —"
+			_rebuild_labor_sliders({})
 
 	_prov_happiness_lbl.text = "Happiness: %.0f" % float(data.get("happiness", 100))
 	_prov_levy_lbl.text = "Levy this season: %d / remaining %d (cap 80%% of %d)" % [

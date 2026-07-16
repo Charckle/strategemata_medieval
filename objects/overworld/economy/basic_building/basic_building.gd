@@ -1,28 +1,31 @@
 extends Node2D
 
+## OPEN pads: woodcutter / blacksmith. DEPOSIT pads: only the matching mine/quarry.
+enum SLOT_KIND { OPEN, DEPOSIT }
+enum DEPOSIT_TYPE { NONE, STONE, IRON, SILVER }
 enum SUBTYPES { WOODCUTTER, IRONMINE, GOLDMINE, SILVERMINE, STONEQUARRY, BLACKSMITH }
-
-var type_ = GlobalStuff.BUILDING_TYPE.ECONOMY
-@export var subtype = SUBTYPES.WOODCUTTER
-
 enum STAGES { EMPTY, SMALL, MEDIUM, BIG, RAZED }
 
-@export var stage = STAGES.SMALL
+var type_ = GlobalStuff.BUILDING_TYPE.ECONOMY
 
-@onready var building_spr: Sprite2D = $building_spr
-
+@export var slot_kind: SLOT_KIND = SLOT_KIND.OPEN
+@export var deposit_type: DEPOSIT_TYPE = DEPOSIT_TYPE.NONE
+@export var subtype: SUBTYPES = SUBTYPES.WOODCUTTER
+@export var stage: STAGES = STAGES.EMPTY
 @export var player_owner = 1
 
-# Max men this building can garrison (single flat pool). Starts empty.
 const GARRISON_CAPACITY := 50
-
-# Designer-authored starting garrison (Array of stack specs); see GlobalUnits.units_from_spec.
 @export var start_garrison: Array = []
 
 var base_map
 
+@onready var building_spr: Sprite2D = $building_spr
+@onready var ground: Sprite2D = $ground
+
+
 func get_garrison_capacity(_spot: int = GlobalUnits.SPOT.FLAT) -> int:
 	return GARRISON_CAPACITY
+
 
 func setup_building() -> void:
 	set_flags()
@@ -51,42 +54,115 @@ func get_banner_pids() -> Array:
 func shows_ownership_triangle() -> bool:
 	return false
 
+
 func get_pathfinding_blocked_tile_centers() -> Array:
 	return [global_position + Vector2(32, 16)]
 
+
 func _ready() -> void:
 	update_for_stage()
-	
-	
-func update_for_stage():
+
+
+func is_built() -> bool:
+	var st := int(stage)
+	return st != int(STAGES.EMPTY) and st != int(STAGES.RAZED)
+
+
+func worker_cap() -> int:
+	if not is_built():
+		return 0
+	match int(stage):
+		1: return GlobalUnits.ECONOMY_WORKERS_SMALL # SMALL
+		2: return GlobalUnits.ECONOMY_WORKERS_MEDIUM
+		3: return GlobalUnits.ECONOMY_WORKERS_BIG
+		_: return GlobalUnits.ECONOMY_WORKERS_SMALL
+
+
+func labor_category() -> String:
+	if not is_built():
+		return ""
+	match int(subtype):
+		0: return "wood" # WOODCUTTER
+		1: return "iron" # IRONMINE
+		3: return "silver" # SILVERMINE
+		4: return "stone" # STONEQUARRY
+		5: return "blacksmith"
+		_: return ""
+
+
+func allowed_build_subtypes() -> Array:
+	if is_built():
+		return []
+	if slot_kind == SLOT_KIND.OPEN:
+		return [SUBTYPES.WOODCUTTER, SUBTYPES.BLACKSMITH]
+	match deposit_type:
+		DEPOSIT_TYPE.STONE: return [SUBTYPES.STONEQUARRY]
+		DEPOSIT_TYPE.IRON: return [SUBTYPES.IRONMINE]
+		DEPOSIT_TYPE.SILVER: return [SUBTYPES.SILVERMINE]
+		_: return []
+
+
+func build_cost_for(sub: int) -> int:
+	match sub as SUBTYPES:
+		SUBTYPES.WOODCUTTER: return GlobalUnits.ECONOMY_COST_WOODCUTTER
+		SUBTYPES.BLACKSMITH: return GlobalUnits.ECONOMY_COST_BLACKSMITH
+		SUBTYPES.STONEQUARRY, SUBTYPES.IRONMINE, SUBTYPES.SILVERMINE:
+			return GlobalUnits.ECONOMY_COST_MINE
+		_: return 0
+
+
+func can_build(sub: int) -> bool:
+	return allowed_build_subtypes().has(sub as SUBTYPES)
+
+
+func apply_build(sub: int, owner_id: int) -> void:
+	subtype = sub as SUBTYPES
+	stage = STAGES.SMALL
+	player_owner = owner_id
+	update_for_stage()
+	set_flags()
+
+
+func apply_demolish() -> void:
+	stage = STAGES.EMPTY
+	update_for_stage()
+	set_flags()
+
+
+func update_for_stage() -> void:
 	change_sprite()
 
 
-func change_sprite():
-	var textures := {
-		SUBTYPES.WOODCUTTER: 
-			{
-			STAGES.SMALL: preload("uid://c43brywdf0lxo"),
-			},
-		SUBTYPES.STONEQUARRY: 
-			{
-			STAGES.SMALL: preload("uid://ft668a4yuq1k"),
-			}
-	}
-	
+func change_sprite() -> void:
+	if ground != null:
+		ground.visible = true
 	if stage == STAGES.EMPTY:
-		building_spr.visible = false
+		if building_spr != null:
+			building_spr.visible = false
+		return
+	if building_spr == null:
 		return
 	building_spr.visible = true
+	var textures := {
+		SUBTYPES.WOODCUTTER: {STAGES.SMALL: preload("uid://c43brywdf0lxo")},
+		SUBTYPES.STONEQUARRY: {STAGES.SMALL: preload("uid://ft668a4yuq1k")},
+	}
 	var subtype_tex: Dictionary = textures.get(subtype, {})
-	# RAZED/MEDIUM/BIG fall back to SMALL art until dedicated sprites exist.
 	var tex = subtype_tex.get(stage, subtype_tex.get(STAGES.SMALL, null))
 	if tex != null:
 		building_spr.texture = tex
+	else:
+		building_spr.texture = preload("uid://c43brywdf0lxo")
 
 
 func get_subtype_name() -> String:
-	match subtype:
+	if stage == STAGES.EMPTY:
+		return _empty_pad_name()
+	return subtype_display_name(int(subtype))
+
+
+static func subtype_display_name(sub: int) -> String:
+	match sub:
 		SUBTYPES.WOODCUTTER: return "Woodcutter"
 		SUBTYPES.IRONMINE: return "Iron Mine"
 		SUBTYPES.GOLDMINE: return "Gold Mine"
@@ -94,6 +170,16 @@ func get_subtype_name() -> String:
 		SUBTYPES.STONEQUARRY: return "Stone Quarry"
 		SUBTYPES.BLACKSMITH: return "Blacksmith"
 	return "Economy Building"
+
+
+func _empty_pad_name() -> String:
+	if slot_kind == SLOT_KIND.OPEN:
+		return "Empty plot"
+	match deposit_type:
+		DEPOSIT_TYPE.STONE: return "Stone deposit"
+		DEPOSIT_TYPE.IRON: return "Iron deposit"
+		DEPOSIT_TYPE.SILVER: return "Silver deposit"
+		_: return "Empty deposit"
 
 
 func get_stage_name() -> String:
@@ -104,3 +190,13 @@ func get_stage_name() -> String:
 		STAGES.BIG: return "Big"
 		STAGES.RAZED: return "Razed"
 	return ""
+
+
+func get_slot_description() -> String:
+	if slot_kind == SLOT_KIND.OPEN:
+		return "Open plot (woodcutter or blacksmith)"
+	match deposit_type:
+		DEPOSIT_TYPE.STONE: return "Stone deposit (quarry only)"
+		DEPOSIT_TYPE.IRON: return "Iron deposit (mine only)"
+		DEPOSIT_TYPE.SILVER: return "Silver deposit (mine only)"
+	return "Deposit"

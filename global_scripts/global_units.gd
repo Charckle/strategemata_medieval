@@ -93,6 +93,7 @@ const WEAPON_PRICE_UNIT := {
 }
 
 # Province material stockpile keys (resources[key]["has"]).
+# Note: grain "has"/"will" are per-player Dictionaries ({pid: n, "all": n}).
 const MATERIAL_KEYS := ["grain", "wood", "stone", "iron"]
 
 # Placeholder merchant prices (marks each); tweak later.
@@ -102,6 +103,33 @@ const MATERIAL_MARK_PRICES := {
 	"stone": 4,
 	"iron": 5,
 }
+
+# --- Fields / agriculture ---------------------------------------------------
+# Plant winter (costs GRAIN_SEED_PER_FIELD from holding stock). Labor scales with
+# planted fields. Harvest when leaving autumn. Horses: pasture + stock + labor → foals.
+const GRAIN_SEED_PER_FIELD := 5
+const GRAIN_YIELD_PER_FIELD := 80
+const PEOPLE_PER_GRAIN_FIELD := 8
+const PEOPLE_PER_HORSE_FIELD := 5
+const FOAL_MIN := 1
+const FOAL_MAX := 3
+const STARTING_GRAIN := 40
+
+# Labor category keys shared by fields + economy (blacksmith production later).
+const LABOR_CATEGORIES := ["grain", "horses", "wood", "stone", "iron", "silver"]
+
+# --- Economy buildings ------------------------------------------------------
+const ECONOMY_COST_WOODCUTTER := 100
+const ECONOMY_COST_BLACKSMITH := 250
+const ECONOMY_COST_MINE := 500
+const ECONOMY_WORKERS_SMALL := 50
+const ECONOMY_WORKERS_MEDIUM := 150
+const ECONOMY_WORKERS_BIG := 300
+# Output per assigned worker per season.
+const ECONOMY_WOOD_PER_WORKER := 1
+const ECONOMY_STONE_PER_WORKER := 1
+const ECONOMY_IRON_PER_WORKER := 1
+const ECONOMY_SILVER_MARKS_PER_WORKER := 2
 
 const WOUND_RECOVER_SEASONS := 2
 const HOSTAGE_RECOVER_SEASONS := 2
@@ -172,22 +200,53 @@ func material_mark_price_discounted(key: String, competition: bool) -> int:
 	return int(floor(float(base) * (1.0 - MERCHANT_COMPETITION_DISCOUNT)))
 
 
-## Ensure province.resources[key] has a numeric "has" field.
+## Holding materials use per-player Dictionaries ({pid: n, "all": n}).
+func is_holding_material(key: String) -> bool:
+	return key in MATERIAL_KEYS
+
+
+## Ensure province.resources[key] has a per-player "has"/"will" dict.
 func ensure_material_has(resources: Dictionary, key: String) -> void:
 	if not resources.has(key) or not (resources[key] is Dictionary):
-		resources[key] = {"has": 0, "will": 0}
+		resources[key] = {"has": empty_per_player_amount(), "will": empty_per_player_amount()}
 		return
 	if not resources[key].has("has"):
-		resources[key]["has"] = 0
+		resources[key]["has"] = empty_per_player_amount()
+	elif resources[key]["has"] is int:
+		var n := int(resources[key]["has"])
+		resources[key]["has"] = {"all": n}
+	if not resources[key].has("will"):
+		resources[key]["will"] = empty_per_player_amount()
+	elif resources[key]["will"] is int:
+		resources[key]["will"] = {"all": int(resources[key]["will"])}
 
 
-func add_materials(resources: Dictionary, add: Dictionary) -> void:
+## Add materials into a holding (player_id). Marks are not materials.
+func add_materials(resources: Dictionary, add: Dictionary, player_id: int = -1) -> void:
 	for k in MATERIAL_KEYS:
 		var amt := int(add.get(k, 0))
 		if amt == 0:
 			continue
 		ensure_material_has(resources, k)
-		resources[k]["has"] = int(resources[k]["has"]) + amt
+		var has: Dictionary = resources[k]["has"]
+		if player_id >= 0:
+			has[player_id] = int(has.get(player_id, 0)) + amt
+		else:
+			has["all"] = int(has.get("all", 0)) + amt
+		recompute_per_player_all(has)
+
+
+func recompute_per_player_all(bucket: Dictionary) -> void:
+	var total := 0
+	for k in bucket.keys():
+		if str(k) == "all":
+			continue
+		total += int(bucket[k])
+	bucket["all"] = total
+
+
+func empty_per_player_amount() -> Dictionary:
+	return {"all": 0}
 
 
 func weapon_cost_for_type(type_: int) -> Dictionary:
