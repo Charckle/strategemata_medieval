@@ -48,6 +48,33 @@ func get_castle_type_name() -> String:
 func get_stage_name() -> String:
 	return get_castle_type_name()
 
+func setup_building() -> void:
+	set_flags()
+
+
+func set_flags() -> void:
+	var flag := get_node_or_null("Flag")
+	if flag != null:
+		flag.setup_flag()
+
+
+func get_garrison_units() -> Array:
+	if base_map == null:
+		return []
+	return base_map.get_all_building_garrison(self)
+
+
+func get_owner_set() -> Array:
+	return GlobalUnits.owners_in(get_garrison_units())
+
+
+func get_banner_pids() -> Array:
+	return get_owner_set()
+
+
+func shows_ownership_triangle() -> bool:
+	return false
+
 func get_pathfinding_blocked_tile_centers() -> Array:
 	return [
 		global_position + Vector2(32, 32),

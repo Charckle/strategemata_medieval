@@ -4,11 +4,18 @@
 [ext_resource type="Script" uid="uid://b1s2p2mvablma" path="res://menus/gui/base_bottom/draggable_menu.gd" id="2_draggable"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
-bg_color = Color(0.12, 0.12, 0.18, 0.95)
-corner_radius_top_left = 8
-corner_radius_top_right = 8
-corner_radius_bottom_right = 8
-corner_radius_bottom_left = 8
+bg_color = Color(0.18, 0.12, 0.07, 0.96)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.05, 0.03, 0.015, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+shadow_color = Color(0, 0, 0, 0.45)
+shadow_size = 4
 
 [node name="BasebottomGUI" type="CanvasLayer" unique_id=956857993]
 script = ExtResource("1_main")
@@ -19,43 +26,50 @@ anchor_left = 0.5
 anchor_top = 1.0
 anchor_right = 0.5
 anchor_bottom = 1.0
-offset_left = -160.0
+offset_left = -192.0
 offset_top = -48.0
-offset_right = 160.0
+offset_right = 192.0
 grow_horizontal = 2
 grow_vertical = 0
 
-[node name="map_btn" type="Button" parent="Panel" unique_id=1967978685]
+[node name="msg_btn" type="Button" parent="Panel" unique_id=1967978690]
 layout_mode = 0
 offset_right = 64.0
+offset_bottom = 48.0
+text = "MSG"
+
+[node name="map_btn" type="Button" parent="Panel" unique_id=1967978685]
+layout_mode = 0
+offset_left = 64.0
+offset_right = 128.0
 offset_bottom = 48.0
 text = "MAP"
 
 [node name="economy_btn" type="Button" parent="Panel" unique_id=1959207728]
 layout_mode = 0
-offset_left = 64.0
-offset_right = 128.0
+offset_left = 128.0
+offset_right = 192.0
 offset_bottom = 48.0
 text = "ECO"
 
 [node name="war_btn" type="Button" parent="Panel" unique_id=109808777]
 layout_mode = 0
-offset_left = 128.0
-offset_right = 192.0
+offset_left = 192.0
+offset_right = 256.0
 offset_bottom = 48.0
 text = "WAR"
 
 [node name="settings_btn" type="Button" parent="Panel" unique_id=2075683938]
 layout_mode = 0
-offset_left = 192.0
-offset_right = 256.0
+offset_left = 256.0
+offset_right = 320.0
 offset_bottom = 48.0
 text = "SET"
 
 [node name="end_turn_btn" type="Button" parent="Panel" unique_id=1715892699]
 layout_mode = 0
-offset_left = 256.0
-offset_right = 320.0
+offset_left = 320.0
+offset_right = 384.0
 offset_bottom = 48.0
 text = "END"
 
@@ -327,11 +341,17 @@ text = "Military content"
 [node name="Alliances" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=1449656036]
 visible = false
 layout_mode = 2
+theme_override_constants/separation = 4
 metadata/_tab_index = 1
 
-[node name="Label" type="Label" parent="war_menu/margin/vbox/tabs/Alliances" unique_id=1370428403]
+[node name="ScrollContainer" type="ScrollContainer" parent="war_menu/margin/vbox/tabs/Alliances" unique_id=1449656037]
 layout_mode = 2
-text = "Alliances content"
+size_flags_vertical = 3
+
+[node name="alliances_list" type="VBoxContainer" parent="war_menu/margin/vbox/tabs/Alliances/ScrollContainer" unique_id=1449656038]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
 
 [node name="Wars" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=128505888]
 visible = false
@@ -341,6 +361,66 @@ metadata/_tab_index = 2
 [node name="Label" type="Label" parent="war_menu/margin/vbox/tabs/Wars" unique_id=2127039925]
 layout_mode = 2
 text = "Active wars content"
+
+[node name="msg_menu" type="PanelContainer" parent="." unique_id=1003245200]
+visible = false
+offset_left = 420.0
+offset_top = 160.0
+offset_right = 860.0
+offset_bottom = 560.0
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+script = ExtResource("2_draggable")
+menu_title = "Messages"
+
+[node name="margin" type="MarginContainer" parent="msg_menu" unique_id=1003245201]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="vbox" type="VBoxContainer" parent="msg_menu/margin" unique_id=1003245202]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="header" type="HBoxContainer" parent="msg_menu/margin/vbox" unique_id=1003245203]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="title" type="Label" parent="msg_menu/margin/vbox/header" unique_id=1003245204]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Messages"
+
+[node name="close_btn" type="Button" parent="msg_menu/margin/vbox/header" unique_id=1003245205]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+text = "X"
+
+[node name="tabs" type="TabContainer" parent="msg_menu/margin/vbox" unique_id=1003245206]
+layout_mode = 2
+size_flags_vertical = 3
+tabs_visible = false
+current_tab = 0
+
+[node name="Inbox" type="VBoxContainer" parent="msg_menu/margin/vbox/tabs" unique_id=1003245207]
+layout_mode = 2
+theme_override_constants/separation = 4
+metadata/_tab_index = 0
+
+[node name="ScrollContainer" type="ScrollContainer" parent="msg_menu/margin/vbox/tabs/Inbox" unique_id=1003245208]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="msg_list" type="VBoxContainer" parent="msg_menu/margin/vbox/tabs/Inbox/ScrollContainer" unique_id=1003245209]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="empty_lbl" type="Label" parent="msg_menu/margin/vbox/tabs/Inbox" unique_id=1003245210]
+layout_mode = 2
+text = "No messages yet."
 
 [node name="settings_menu" type="PanelContainer" parent="." unique_id=1003244573]
 visible = false

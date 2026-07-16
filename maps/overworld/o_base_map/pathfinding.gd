@@ -161,7 +161,7 @@ func get_approach_cells(node: Node) -> Array[Vector2i]:
 
 
 # Cells reachable from a start cell within max_steps edge-moves (BFS).
-# Note: does not treat armies as blockers yet (interaction logic pending).
+# Other armies block entry — you path to their approach tiles and interact.
 func get_reachable_cells(from_cell: Vector2i, max_steps: int) -> Dictionary:
 	var result: Dictionary = {from_cell: 0}
 	var frontier: Array[Vector2i] = [from_cell]
@@ -172,20 +172,28 @@ func get_reachable_cells(from_cell: Vector2i, max_steps: int) -> Dictionary:
 		for cell in frontier:
 			for dir in EDGE_DIRS:
 				var n: Vector2i = cell + dir
-				if walkable_cells.has(n) and not result.has(n):
-					result[n] = dist
-					next_frontier.append(n)
+				if not walkable_cells.has(n) or result.has(n):
+					continue
+				# Occupied by another army: cannot enter.
+				if occupancy.has(n) and n != from_cell:
+					continue
+				result[n] = dist
+				next_frontier.append(n)
 		frontier = next_frontier
 	return result
 
 
 # Walkable, unoccupied tiles edge-adjacent to a single cell (its "approach").
-func _approach_cells_of_cell(cell: Vector2i) -> Array[Vector2i]:
+# `ignore_army` (if set) may stand on an approach tile — its cell still counts.
+func _approach_cells_of_cell(cell: Vector2i, ignore_army: Node2D = null) -> Array[Vector2i]:
 	var result: Array[Vector2i] = []
 	for dir in EDGE_DIRS:
 		var n: Vector2i = cell + dir
-		if walkable_cells.has(n) and not occupancy.has(n) and not (n in result):
-			result.append(n)
+		if not walkable_cells.has(n) or n in result:
+			continue
+		if occupancy.has(n) and occupancy[n] != ignore_army:
+			continue
+		result.append(n)
 	return result
 
 
@@ -200,6 +208,12 @@ func _best_path_to_cells(from_cell: Vector2i, target_cells: Array[Vector2i]) -> 
 	return best_path
 
 
+# True when two cells share an edge (cardinal neighbors in iso cell space).
+func _cells_edge_adjacent(a: Vector2i, b: Vector2i) -> bool:
+	var d: Vector2i = a - b
+	return (absi(d.x) + absi(d.y)) == 1
+
+
 # Returns true if a path exists between two cells in the AStar graph.
 # Safely returns false when either cell is not in the graph at all.
 func has_path_from(from_cell: Vector2i, target_cell: Vector2i) -> bool:
@@ -212,19 +226,47 @@ func has_path_from(from_cell: Vector2i, target_cell: Vector2i) -> bool:
 	return astar_graph.get_id_path(from_id, to_id).size() > 0
 
 
+# Path that never steps onto another army's cell. Uses BFS so occupancy is
+# respected (AStar is static and does not know about armies).
 func _find_path_cells(from_cell: Vector2i, target_cell: Vector2i) -> Array[Vector2i]:
-	# check if its a building
-	# check if its an army
-	
-	if not _is_walkable_cell(target_cell):
+	if not _is_walkable_cell(from_cell) or not _is_walkable_cell(target_cell):
 		return []
-	var from_id: int = cell_to_point_id[from_cell]
-	var to_id: int = cell_to_point_id[target_cell]
-	var id_path: PackedInt64Array = astar_graph.get_id_path(from_id, to_id)
+	# Cannot path onto an occupied tile (approach tiles are always free).
+	if occupancy.has(target_cell) and target_cell != from_cell:
+		return []
+	if from_cell == target_cell:
+		return [from_cell]
+
+	var came_from: Dictionary = {}
+	var frontier: Array[Vector2i] = [from_cell]
+	came_from[from_cell] = from_cell  # sentinel: start maps to itself
+	var found := false
+	while not frontier.is_empty():
+		var current: Vector2i = frontier.pop_front()
+		if current == target_cell:
+			found = true
+			break
+		for dir_variant in EDGE_DIRS:
+			var dir: Vector2i = dir_variant
+			var n: Vector2i = current + dir
+			if came_from.has(n):
+				continue
+			if not walkable_cells.has(n):
+				continue
+			if occupancy.has(n) and n != from_cell:
+				continue
+			came_from[n] = current
+			frontier.append(n)
+
+	if not found:
+		return []
 	var cell_path: Array[Vector2i] = []
-	for id in id_path:
-		cell_path.append(point_id_to_cell[id])
-	
+	var c: Vector2i = target_cell
+	while true:
+		cell_path.push_front(c)
+		if c == from_cell:
+			break
+		c = came_from[c]
 	return cell_path
 
 
@@ -306,10 +348,13 @@ func _unhandled_input(event: InputEvent) -> void:
 # Resolve the path to whatever is under the cursor: a free tile, a building's
 # approach tile, or an occupied (army) tile's approach tile.
 func _resolve_target_path(from_cell: Vector2i, cell: Vector2i) -> Array[Vector2i]:
+	# Hovering the selected army's own tile — stay put.
+	if cell == from_cell or occupancy.get(cell) == selected_army:
+		return [from_cell]
 	if _is_walkable_cell(cell) and not occupancy.has(cell):
 		return _find_path_cells(from_cell, cell)
 	if occupancy.has(cell) and occupancy[cell] != selected_army:
-		return _best_path_to_cells(from_cell, _approach_cells_of_cell(cell))
+		return _best_path_to_cells(from_cell, _approach_cells_of_cell(cell, selected_army))
 	var building = blocked_cell_to_object.get(cell, null)
 	if building != null:
 		return _best_path_to_cells(from_cell, get_approach_cells(building))
@@ -344,29 +389,114 @@ func _render_path_preview(path_cells: Array[Vector2i]) -> void:
 
 
 func _confirm_move() -> bool:
-	if selected_army == null or current_path.size() < 2:
+	if selected_army == null:
 		return false
 
-	# If the cursor is hovering a building cell, treat the click as a building
-	# interaction rather than a move. The building's Area2D input_event fires
-	# before _unhandled_input, so normally it would beat us here — but if the
-	# building has no Area2D covering the hovered cell we fall through. Either
-	# way, when the final stop of the current path lands on a building's
-	# approach, we forward to on_building_clicked on the building itself.
 	var mouse_cell := get_cell_at_mouse()
+	var army_cell := get_army_cell(selected_army)
+
+	# Same tile as the selected army → open its menu (not a zero-length move).
+	if mouse_cell == army_cell or occupancy.get(mouse_cell) == selected_army:
+		base_map.open_selected_army_menu(selected_army)
+		return true
+
+	# Another army under the cursor: interact if adjacent, otherwise approach.
+	if occupancy.has(mouse_cell) and occupancy[mouse_cell] != selected_army:
+		var target_army: Node2D = occupancy[mouse_cell]
+		if _cells_edge_adjacent(army_cell, mouse_cell):
+			open_army_interaction(selected_army, target_army)
+			return true
+		return confirm_move_to_army(target_army)
+
+	# If the cursor is on a garrisonable building, prefer building interaction.
+	# When already adjacent the path is often length < 2, so handle that before
+	# the empty-path early-out.
 	var building_under_cursor = blocked_cell_to_object.get(mouse_cell, null)
 	if building_under_cursor != null and building_under_cursor.has_method("get_garrison_capacity"):
-		# Let on_building_clicked handle it (checks movement, opens garrison menu).
-		var consumed = base_map.on_building_clicked(building_under_cursor)
-		if consumed:
-			return true
+		if army_cell in get_approach_cells(building_under_cursor):
+			var consumed = base_map.on_building_clicked(building_under_cursor)
+			if consumed:
+				return true
+		else:
+			return confirm_move_to_building(building_under_cursor)
 
-	var reachable_steps: int = min(selected_army.movement_left, current_path.size() - 1)
+	# Destination resolves to staying put (nearest tile is the army's own cell).
+	if current_path.size() == 1 and current_path[0] == army_cell:
+		base_map.open_selected_army_menu(selected_army)
+		return true
+	if current_path.size() < 2:
+		return false
+
+	return _execute_move_along_path(null, null)
+
+
+# Move toward a garrisonable building's approach cells. When the army can reach
+# an approach tile with MP left, queues opening the garrison transfer menu.
+func confirm_move_to_building(building: Node) -> bool:
+	if selected_army == null or building == null:
+		return false
+	var from_cell := get_army_cell(selected_army)
+	var path_cells := _best_path_to_cells(from_cell, get_approach_cells(building))
+	if path_cells.size() < 2:
+		return false
+	_render_path_preview(path_cells)
+	return _execute_move_along_path(building, null)
+
+
+# Move toward another army's approach cells. When arrival leaves MP, queues
+# merge/attack interaction (same pattern as garrison).
+func confirm_move_to_army(target: Node2D) -> bool:
+	if selected_army == null or target == null:
+		return false
+	var from_cell := get_army_cell(selected_army)
+	var target_cell := get_army_cell(target)
+	var path_cells := _best_path_to_cells(from_cell, _approach_cells_of_cell(target_cell, selected_army))
+	if path_cells.size() < 2:
+		return false
+	_render_path_preview(path_cells)
+	return _execute_move_along_path(null, target)
+
+
+func _execute_move_along_path(garrison_building: Node, target_army: Node2D) -> bool:
+	if selected_army == null or current_path.size() < 2:
+		return false
+	var reachable_steps: int = mini(selected_army.movement_left, current_path.size() - 1)
 	if reachable_steps <= 0:
 		return false  # no movement points left this turn
+
+	# Never end on a tile occupied by another army (path should already avoid
+	# this; clamp as a safety net).
+	var army := selected_army
+	while reachable_steps > 0:
+		var candidate: Vector2i = current_path[reachable_steps]
+		if occupancy.has(candidate) and occupancy[candidate] != army:
+			reachable_steps -= 1
+			continue
+		break
+	if reachable_steps <= 0:
+		return false
+
 	var end_cell: Vector2i = current_path[reachable_steps]
-	var army_name := String(selected_army.name)
+	var army_name := String(army.name)
+	var remaining_mp = army.movement_left - reachable_steps
+
+	# Moving onto a building's approach with MP left to spend: open the garrison
+	# transfer UI once the move applies (avoids a second click that only shows
+	# an empty building info card).
+	if garrison_building != null and garrison_building.has_method("get_garrison_capacity") \
+			and end_cell in get_approach_cells(garrison_building) and remaining_mp > 0:
+		base_map.set_pending_garrison(army_name, army.force_id, garrison_building)
+
+	# Same for army targets: arrive on approach with MP left → merge/attack UI.
+	if target_army != null and remaining_mp > 0:
+		var target_cell := get_army_cell(target_army)
+		if _cells_edge_adjacent(end_cell, target_cell):
+			base_map.set_pending_army_interaction(army_name, target_army)
+
 	deselect_army()
+	# Pathfinding and the building Area2D can both receive this click. After we
+	# deselect, a second pass would open the empty building info card — block it.
+	base_map.suppress_building_click_this_frame()
 	base_map.request_army_move.rpc_id(1, army_name, end_cell.x, end_cell.y, reachable_steps)
 	# Army teleports under the cursor on call_local; suppress the follow-up
 	# Area2D click on this same frame so the Army Menu does not reopen.
@@ -384,7 +514,77 @@ func get_free_adjacent_cell(from_cell: Vector2i) -> Vector2i:
 	return Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
 
 
-# Placeholder for future army-vs-army interaction (attack / merge / trade / ...).
-# Wired for later: occupancy + adjacency pathing already resolve to the target.
-func open_army_interaction(_mover: Node2D, _target: Node2D) -> void:
-	pass
+# True when the two armies share an edge (can interact: merge / attack).
+func are_armies_adjacent(a: Node2D, b: Node2D) -> bool:
+	return _cells_edge_adjacent(get_army_cell(a), get_army_cell(b))
+
+
+func open_army_interaction(mover: Node2D, target: Node2D) -> void:
+	deselect_army()
+	base_map._on_army_interaction(mover, target)
+
+
+func _alloc_astar_point_id() -> int:
+	var best := -1
+	for id in point_id_to_cell.keys():
+		best = maxi(best, int(id))
+	return best + 1
+
+
+## Remove a currently walkable cell from the graph and mark it blocked by obj.
+func block_cell_for_object(cell: Vector2i, obj: Node) -> bool:
+	if not walkable_cells.has(cell):
+		return false
+	if occupancy.has(cell):
+		return false
+	walkable_cells.erase(cell)
+	blocked_cell_to_object[cell] = obj
+	var footprint: Array[Vector2i] = []
+	if object_to_footprint.has(obj):
+		footprint = object_to_footprint[obj]
+	if cell not in footprint:
+		footprint.append(cell)
+	object_to_footprint[obj] = footprint
+	var point_id: int = int(cell_to_point_id.get(cell, -1))
+	if point_id >= 0 and astar_graph != null and astar_graph.has_point(point_id):
+		astar_graph.remove_point(point_id)
+	cell_to_point_id.erase(cell)
+	point_id_to_cell.erase(point_id)
+	var overlay = base_map.get_node_or_null("WalkableOverlay")
+	if overlay and overlay.has_method("refresh"):
+		overlay.refresh()
+	return true
+
+
+## Restore cells previously blocked by obj (if still walkable terrain and free).
+func unblock_object(obj: Node) -> void:
+	var footprint: Array = object_to_footprint.get(obj, [])
+	object_to_footprint.erase(obj)
+	if map_layer == null or astar_graph == null:
+		return
+	for cell_variant in footprint:
+		var cell: Vector2i = cell_variant
+		if blocked_cell_to_object.get(cell) == obj:
+			blocked_cell_to_object.erase(cell)
+		if blocked_cell_to_object.has(cell):
+			continue
+		var tile_data = map_layer.get_cell_tile_data(cell)
+		if tile_data == null or not tile_data.get_custom_data("walkable"):
+			continue
+		if walkable_cells.has(cell):
+			continue
+		walkable_cells[cell] = true
+		var new_id := _alloc_astar_point_id()
+		cell_to_point_id[cell] = new_id
+		point_id_to_cell[new_id] = cell
+		astar_graph.add_point(new_id, map_layer.map_to_local(cell))
+		for dir in EDGE_DIRS:
+			var n: Vector2i = cell + dir
+			if not walkable_cells.has(n) or not cell_to_point_id.has(n):
+				continue
+			var to_id: int = int(cell_to_point_id[n])
+			if not astar_graph.are_points_connected(new_id, to_id):
+				astar_graph.connect_points(new_id, to_id, true)
+	var overlay = base_map.get_node_or_null("WalkableOverlay")
+	if overlay and overlay.has_method("refresh"):
+		overlay.refresh()

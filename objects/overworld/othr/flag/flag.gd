@@ -6,6 +6,8 @@ const DEFAULT_GRAY := Vector3i(128, 128, 128)
 const BANNER_STEP := 4
 # Y coordinate of the top of the triangle flag in Flag-local space.
 const TRIANGLE_TOP_Y := -27.0
+# When only wavy banners are shown (no triangle), stack from this Y.
+const BANNER_ONLY_BASE_Y := -12.0
 # Y coordinate of the pole's foot in Flag-local space (stays fixed).
 const POLE_BOTTOM_Y := -1.0
 # Original pole height in pixels (matches pole.png which is 2×26).
@@ -26,53 +28,102 @@ const BANNER_PHASE_GAP  := 1.2   # phase offset between stacked banners
 
 @onready var settlement = get_parent()
 @onready var flag_sprite = $flag_spr
+@onready var pole_spr = $pole_spr
 
 # Tracked banners: Array of { node: Line2D, base_y: float, phase: float }
 var _banner_data: Array = []
 
 
+func _ready() -> void:
+	# Non-town buildings only show flags when garrisoned; hide until setup_flag runs.
+	if settlement != null and settlement.has_method("shows_ownership_triangle") \
+			and not settlement.shows_ownership_triangle():
+		visible = false
+		flag_sprite.visible = false
+
+
 func setup_flag() -> void:
-	var player_id: int = settlement.player_owner
 	var map_node = settlement.get("base_map")
-	if map_node == null or not map_node.get("players"):
-		flag_sprite._set_flag_color_rgb(DEFAULT_GRAY.x, DEFAULT_GRAY.y, DEFAULT_GRAY.z)
-		_reset_banners_and_pole([])
+	var players_dict: Dictionary = {}
+	if map_node != null and map_node.get("players"):
+		players_dict = map_node.players
+
+	var show_triangle := _shows_ownership_triangle()
+	var banner_pids := _collect_banner_pids(players_dict)
+
+	if not show_triangle:
+		flag_sprite.visible = false
+		if banner_pids.is_empty():
+			visible = false
+			_reset_banners_and_pole([], true)
+			return
+		visible = true
+		pole_spr.visible = true
+		_setup_banners(banner_pids, players_dict, false)
 		return
-	var players_dict: Dictionary = map_node.players
-	if not players_dict.has(player_id):
+
+	visible = true
+	flag_sprite.visible = true
+	pole_spr.visible = true
+
+	var player_id: int = settlement.player_owner
+	if players_dict.is_empty() or not players_dict.has(player_id):
 		flag_sprite._set_flag_color_rgb(DEFAULT_GRAY.x, DEFAULT_GRAY.y, DEFAULT_GRAY.z)
-		_reset_banners_and_pole([])
+		_reset_banners_and_pole([], true)
 		return
-	var pl = players_dict[player_id]
-	var c: Dictionary = pl.color
-	var r: int = c.get("red", DEFAULT_GRAY.x)
-	var g: int = c.get("green", DEFAULT_GRAY.y)
-	var b: int = c.get("blue", DEFAULT_GRAY.z)
-	flag_sprite._set_flag_color_rgb(r, g, b)
 
-	if settlement.has_method("get_owner_set") and settlement.has_method("get_controller"):
-		_setup_banners(settlement.get_owner_set(), settlement.get_controller(), players_dict)
-	else:
-		_reset_banners_and_pole([])
+	var c: Dictionary = players_dict[player_id].color
+	flag_sprite._set_flag_color_rgb(
+		c.get("red", DEFAULT_GRAY.x),
+		c.get("green", DEFAULT_GRAY.y),
+		c.get("blue", DEFAULT_GRAY.z)
+	)
+	_setup_banners(banner_pids, players_dict, true)
 
 
-func _setup_banners(owners: Array, controller: int, players_dict: Dictionary) -> void:
-	var extras: Array = []
-	for pid in owners:
-		if pid != controller and players_dict.has(pid):
-			extras.append(pid)
-	extras.sort()
-	_reset_banners_and_pole(extras)
+func _shows_ownership_triangle() -> bool:
+	if settlement.has_method("shows_ownership_triangle"):
+		return settlement.shows_ownership_triangle()
+	return true
 
-	for i in extras.size():
-		var pid: int = extras[i]
-		var col: Dictionary = players_dict[pid].color
+
+func _collect_banner_pids(players_dict: Dictionary) -> Array:
+	var raw: Array = []
+	if settlement.has_method("get_banner_pids"):
+		raw = settlement.get_banner_pids()
+	elif settlement.has_method("get_owner_set") and settlement.has_method("get_controller"):
+		var controller: int = settlement.get_controller()
+		for pid in settlement.get_owner_set():
+			if int(pid) != controller:
+				raw.append(int(pid))
+	var out: Array = []
+	for pid in raw:
+		var id := int(pid)
+		if players_dict.is_empty() or players_dict.has(id):
+			if not out.has(id):
+				out.append(id)
+	out.sort()
+	return out
+
+
+func _setup_banners(pids: Array, players_dict: Dictionary, stack_from_triangle: bool) -> void:
+	_reset_banners_and_pole(pids, stack_from_triangle)
+	var anchor: float = TRIANGLE_TOP_Y - 2.0 if stack_from_triangle else BANNER_ONLY_BASE_Y
+	for i in pids.size():
+		var pid: int = pids[i]
 		var color := Color(
-			col.get("red",   DEFAULT_GRAY.x) / 255.0,
-			col.get("green", DEFAULT_GRAY.y) / 255.0,
-			col.get("blue",  DEFAULT_GRAY.z) / 255.0
+			DEFAULT_GRAY.x / 255.0,
+			DEFAULT_GRAY.y / 255.0,
+			DEFAULT_GRAY.z / 255.0
 		)
-		var base_y := TRIANGLE_TOP_Y - 2.0 - i * BANNER_STEP
+		if players_dict.has(pid):
+			var col: Dictionary = players_dict[pid].color
+			color = Color(
+				col.get("red",   DEFAULT_GRAY.x) / 255.0,
+				col.get("green", DEFAULT_GRAY.y) / 255.0,
+				col.get("blue",  DEFAULT_GRAY.z) / 255.0
+			)
+		var base_y := anchor - i * BANNER_STEP
 		var banner := _make_banner_line(color, base_y)
 		_banner_data.append({ "node": banner, "base_y": base_y, "phase": i * BANNER_PHASE_GAP })
 		add_child(banner)
@@ -92,17 +143,22 @@ func _process(_delta: float) -> void:
 			line.set_point_position(i, Vector2(x, y))
 
 
-func _reset_banners_and_pole(extras: Array) -> void:
+func _reset_banners_and_pole(extras: Array, stack_from_triangle: bool = true) -> void:
 	_banner_data.clear()
 	for ch in get_children():
 		if ch.is_in_group("army_banner"):
 			ch.queue_free()
 
-	var pole := $pole_spr
-	var top_y: float = TRIANGLE_TOP_Y - 2.0 - max(0, extras.size() - 1) * BANNER_STEP - 1.0
-	var new_h: float = POLE_BOTTOM_Y - top_y if extras.size() > 0 else POLE_ORIGINAL_H
-	pole.scale.y = new_h / POLE_ORIGINAL_H
-	pole.position.y = POLE_BOTTOM_Y - new_h / 2.0
+	if extras.is_empty():
+		pole_spr.scale.y = 1.0
+		pole_spr.position.y = POLE_BOTTOM_Y - POLE_ORIGINAL_H / 2.0
+		return
+
+	var anchor: float = TRIANGLE_TOP_Y - 2.0 if stack_from_triangle else BANNER_ONLY_BASE_Y
+	var top_y: float = anchor - max(0, extras.size() - 1) * BANNER_STEP - 1.0
+	var new_h: float = POLE_BOTTOM_Y - top_y
+	pole_spr.scale.y = new_h / POLE_ORIGINAL_H
+	pole_spr.position.y = POLE_BOTTOM_Y - new_h / 2.0
 
 
 func _make_banner_line(color: Color, base_y: float) -> Line2D:

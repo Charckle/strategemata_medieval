@@ -18,6 +18,8 @@ script = ExtResource("1_i7m4o")
 
 [node name="armies" type="Node2D" parent="." unique_id=1470001019]
 
+[node name="merchants" type="Node2D" parent="."]
+
 [node name="PathLine" type="Line2D" parent="." unique_id=405438521]
 width = 2.0
 

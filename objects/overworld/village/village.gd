@@ -37,7 +37,31 @@ func _ready() -> void:
 
 
 func setup_building() -> void:
-	pass  # No flag yet; will get other visuals later
+	set_flags()
+
+
+func set_flags() -> void:
+	var flag := get_node_or_null("Flag")
+	if flag != null:
+		flag.setup_flag()
+
+
+func get_garrison_units() -> Array:
+	if base_map == null:
+		return []
+	return base_map.get_all_building_garrison(self)
+
+
+func get_owner_set() -> Array:
+	return GlobalUnits.owners_in(get_garrison_units())
+
+
+func get_banner_pids() -> Array:
+	return get_owner_set()
+
+
+func shows_ownership_triangle() -> bool:
+	return false
 
 
 func update_for_stage():
@@ -66,10 +90,16 @@ func get_start_data():
 
 
 func calculate_predicted_marks() -> void:
+	if stage == STAGES.RAZED:
+		predicted_marks = 0
+		return
 	predicted_marks = int(ceil(population * 0.10))
 
 
 func calculate_predicted_growth() -> void:
+	if stage == STAGES.RAZED:
+		predicted_growth = 0
+		return
 	predicted_growth = population * base_pop_growth
 
 func get_pop():

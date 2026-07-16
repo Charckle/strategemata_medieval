@@ -5,11 +5,18 @@
 [ext_resource type="Script" path="res://menus/main_menu/settings_pan.gd" id="3_settings"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
-bg_color = Color(0.12, 0.12, 0.18, 0.95)
-corner_radius_top_left = 8
-corner_radius_top_right = 8
-corner_radius_bottom_right = 8
-corner_radius_bottom_left = 8
+bg_color = Color(0.18, 0.12, 0.07, 0.96)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.05, 0.03, 0.015, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+shadow_color = Color(0, 0, 0, 0.45)
+shadow_size = 4
 
 [node name="MainMenu" type="Control"]
 layout_mode = 3
@@ -27,7 +34,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0.08, 0.1, 0.14, 1)
+color = Color(0.06, 0.04, 0.025, 1)
 
 [node name="center" type="CenterContainer" parent="."]
 layout_mode = 1

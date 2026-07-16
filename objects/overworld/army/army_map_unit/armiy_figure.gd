@@ -8,7 +8,7 @@ extends Node2D
 
 # Display/controller player id (mirrors forces[force_id].controller).
 @export var player_owner = 0
-# Movement points refilled to this value at the start of each turn.
+# Base movement points before knights/wound modifiers (see effective_max_mp).
 @export var movement_points := 10
 
 # Designer-authored starting roster (Array of stack specs); see GlobalUnits.units_from_spec.
@@ -54,6 +54,8 @@ func refresh_from_force() -> void:
 		player_owner = controller
 	if base_map != null and base_map.get("players"):
 		set_flags()
+	# Roster changes (wounds, merges) can lower max MP mid-turn.
+	clamp_movement_to_max()
 
 
 func get_controller() -> int:
@@ -72,6 +74,21 @@ func get_owner_set() -> Array:
 	return GlobalUnits.owners_in(get_units())
 
 
+func shows_ownership_triangle() -> bool:
+	return true
+
+
+# Wavy banners for every fighting-force owner except the army controller
+# (triangle already shows them). Hostages / wounded / captured do not fly flags.
+func get_banner_pids() -> Array:
+	var controller := get_controller()
+	var out: Array = []
+	for pid in GlobalUnits.owners_in(GlobalUnits.fighting_units(get_units())):
+		if int(pid) != controller:
+			out.append(int(pid))
+	return out
+
+
 # Only the army controller can move/disband the force as a whole.
 func is_controllable_by(pid: int) -> bool:
 	return get_controller() == pid
@@ -81,8 +98,17 @@ func has_units_of(pid: int) -> bool:
 	return GlobalUnits.men_of_owner(get_units(), pid) > 0
 
 
+func effective_max_mp() -> int:
+	return GlobalUnits.effective_movement_points(get_units(), movement_points)
+
+
 func reset_movement() -> void:
-	movement_left = movement_points
+	movement_left = effective_max_mp()
+
+
+## Cap leftover MP after roster changes (merge/battle); does not refill.
+func clamp_movement_to_max() -> void:
+	movement_left = mini(movement_left, effective_max_mp())
 
 
 func set_greyed(state: bool) -> void:
@@ -96,13 +122,9 @@ func _on_area_input_event(_viewport: Node, event: InputEvent, _shape_idx: int) -
 	if base_map == null:
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		# While this army is selected for movement, do not consume the click —
-		# pathfinding._unhandled_input needs it to confirm the move.
-		var pf = base_map.get("pathfinding")
-		if pf != null and pf.selected_army == self:
-			return
 		if base_map.has_method("should_suppress_army_click") and base_map.should_suppress_army_click():
 			return
+		# Clicking the selected army (same spot) opens its menu instead of moving.
 		base_map.on_army_clicked(self)
 		get_viewport().set_input_as_handled()
 

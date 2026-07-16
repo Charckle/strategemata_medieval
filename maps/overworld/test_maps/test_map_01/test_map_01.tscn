@@ -89,9 +89,6 @@ position = Vector2(-352, 240)
 [node name="Field15" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="14" unique_id=550218542 instance=ExtResource("6_pud0s")]
 position = Vector2(-320, 576)
 
-[node name="BasicEconomyBuilding" parent="provinces/Province/economy" parent_id_path=PackedInt32Array(496899077, 967963434) index="0" unique_id=1538586528 instance=ExtResource("7_a34qs")]
-position = Vector2(-768, 672)
-
 [node name="Castle" parent="provinces/Province/defense" parent_id_path=PackedInt32Array(496899077, 1932121289) index="0" unique_id=938396409 instance=ExtResource("7_qq3c3")]
 position = Vector2(-384, 272)
 start_inside = [{
@@ -130,10 +127,10 @@ position = Vector2(-352, 560)
 position = Vector2(-512, 384)
 
 [node name="Field2" parent="provinces/Province2/fields" parent_id_path=PackedInt32Array(851865952, 380677438) index="1" unique_id=1461645453 instance=ExtResource("6_pud0s")]
-position = Vector2(-160, 144)
+position = Vector2(-416, 624)
 
 [node name="Field3" parent="provinces/Province2/fields" parent_id_path=PackedInt32Array(851865952, 380677438) index="2" unique_id=1634555198 instance=ExtResource("6_pud0s")]
-position = Vector2(-128, 160)
+position = Vector2(-352, 592)
 
 [node name="Field4" parent="provinces/Province2/fields" parent_id_path=PackedInt32Array(851865952, 380677438) index="3" unique_id=1654868071 instance=ExtResource("6_pud0s")]
 position = Vector2(-576, 672)
@@ -148,7 +145,7 @@ position = Vector2(-544, 656)
 position = Vector2(-832, 672)
 
 [node name="Field5" parent="provinces/Province2/fields" parent_id_path=PackedInt32Array(851865952, 380677438) index="7" unique_id=1585046499 instance=ExtResource("6_pud0s")]
-position = Vector2(-128, 128)
+position = Vector2(-384, 608)
 
 [node name="Field6" parent="provinces/Province2/fields" parent_id_path=PackedInt32Array(851865952, 380677438) index="8" unique_id=1579396159 instance=ExtResource("6_pud0s")]
 position = Vector2(-864, 592)
@@ -170,6 +167,10 @@ position = Vector2(-576, 512)
 
 [node name="Field15" parent="provinces/Province2/fields" parent_id_path=PackedInt32Array(851865952, 380677438) index="14" unique_id=1534930484 instance=ExtResource("6_pud0s")]
 position = Vector2(-640, 512)
+
+[node name="BasicEconomyBuilding" parent="provinces/Province2/economy" parent_id_path=PackedInt32Array(851865952, 967963434) index="0" unique_id=1538586528 instance=ExtResource("7_a34qs")]
+position = Vector2(-768, 672)
+player_owner = 2
 
 [node name="Castle" parent="provinces/Province2/defense" parent_id_path=PackedInt32Array(851865952, 1932121289) index="0" unique_id=1781354393 instance=ExtResource("7_qq3c3")]
 position = Vector2(-736, 544)
@@ -193,11 +194,16 @@ start_units = [{
 "owner": 0,
 "source": 1,
 "type": 6
-}, {
-"count": 20,
+}]
+
+[node name="ArmiyFigureEnemy" parent="armies" parent_id_path=PackedInt32Array(1470001019) index="1" unique_id=567632874 instance=ExtResource("8_pud0s")]
+position = Vector2(-224, 400)
+player_owner = 1
+start_units = [{
+"count": 50,
 "owner": 1,
 "source": 0,
-"type": 3
+"type": 0
 }]
 
 [node name="WalkableOverlay" parent="." index="5" unique_id=901285694]

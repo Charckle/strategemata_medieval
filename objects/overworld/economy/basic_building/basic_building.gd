@@ -24,6 +24,33 @@ var base_map
 func get_garrison_capacity(_spot: int = GlobalUnits.SPOT.FLAT) -> int:
 	return GARRISON_CAPACITY
 
+func setup_building() -> void:
+	set_flags()
+
+
+func set_flags() -> void:
+	var flag := get_node_or_null("Flag")
+	if flag != null:
+		flag.setup_flag()
+
+
+func get_garrison_units() -> Array:
+	if base_map == null:
+		return []
+	return base_map.get_all_building_garrison(self)
+
+
+func get_owner_set() -> Array:
+	return GlobalUnits.owners_in(get_garrison_units())
+
+
+func get_banner_pids() -> Array:
+	return get_owner_set()
+
+
+func shows_ownership_triangle() -> bool:
+	return false
+
 func get_pathfinding_blocked_tile_centers() -> Array:
 	return [global_position + Vector2(32, 16)]
 
@@ -49,8 +76,13 @@ func change_sprite():
 	
 	if stage == STAGES.EMPTY:
 		building_spr.visible = false
-	else:
-		building_spr.texture = textures[subtype][stage]
+		return
+	building_spr.visible = true
+	var subtype_tex: Dictionary = textures.get(subtype, {})
+	# RAZED/MEDIUM/BIG fall back to SMALL art until dedicated sprites exist.
+	var tex = subtype_tex.get(stage, subtype_tex.get(STAGES.SMALL, null))
+	if tex != null:
+		building_spr.texture = tex
 
 
 func get_subtype_name() -> String:
