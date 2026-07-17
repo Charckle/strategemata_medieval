@@ -71,6 +71,11 @@ func get_seat_building() -> Node:
 	return _find_building_of_type(settlements, GlobalStuff.BUILDING_TYPE.TOWN)
 
 
+## First town in settlements (provinces are authored with one town).
+func get_town() -> Node:
+	return _find_building_of_type(settlements, GlobalStuff.BUILDING_TYPE.TOWN)
+
+
 func _find_building_of_type(container: Node, btype: int) -> Node:
 	if container == null:
 		return null
@@ -418,6 +423,44 @@ func add_weapons_for(player_id: int, add: Dictionary) -> void:
 	GlobalUnits.add_weapons(get_weapons(), rest)
 	if horses != 0:
 		add_player_horses(player_id, horses)
+
+
+## Caravan cargo affordability for `player_id` (weapons + materials).
+func can_afford_caravan_cargo(player_id: int, cargo: Dictionary) -> bool:
+	var need_w := GlobalUnits.empty_weapon_stock()
+	for k in GlobalUnits.WEAPON_KEYS:
+		need_w[k] = maxi(0, int(cargo.get(k, 0)))
+	if not can_afford_weapons_for(player_id, need_w):
+		return false
+	for k in GlobalUnits.MATERIAL_KEYS:
+		if get_player_material(player_id, k) < maxi(0, int(cargo.get(k, 0))):
+			return false
+	return true
+
+
+func subtract_caravan_cargo(player_id: int, cargo: Dictionary) -> void:
+	var need_w := GlobalUnits.empty_weapon_stock()
+	for k in GlobalUnits.WEAPON_KEYS:
+		need_w[k] = maxi(0, int(cargo.get(k, 0)))
+	subtract_weapons_for(player_id, need_w)
+	for k in GlobalUnits.MATERIAL_KEYS:
+		var amt := maxi(0, int(cargo.get(k, 0)))
+		if amt > 0:
+			add_player_material(player_id, k, -amt)
+
+
+## Deliver caravan cargo to whoever holds the town (`receiver_id`).
+func add_caravan_cargo_for(receiver_id: int, cargo: Dictionary) -> void:
+	if receiver_id < 0:
+		return
+	var add_w := GlobalUnits.empty_weapon_stock()
+	for k in GlobalUnits.WEAPON_KEYS:
+		add_w[k] = maxi(0, int(cargo.get(k, 0)))
+	add_weapons_for(receiver_id, add_w)
+	for k in GlobalUnits.MATERIAL_KEYS:
+		var amt := maxi(0, int(cargo.get(k, 0)))
+		if amt > 0:
+			add_player_material(receiver_id, k, amt)
 
 
 func get_labor_map(player_id: int) -> Dictionary:

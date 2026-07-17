@@ -53,11 +53,8 @@ var _next_event_id: int = 1
 var player_inboxes: Dictionary = {}
 var player_msg_unread: Dictionary = {}
 
-# In-transit weapon shipments between provinces.
-# { from_id, to_id, cargo: Dictionary, seasons_left: int, shipper: int }
-var weapon_shipments: Array = []
-
 const ARMY_FIGURE_SCENE := preload("res://objects/overworld/army/army_map_unit/armiy_figure.tscn")
+const CARAVAN_SCENE := preload("res://objects/overworld/othr/caravan/caravan.tscn")
 const MERCHANT_SCENE := preload("res://objects/overworld/othr/merchant/merchant.tscn")
 const MERCHANT_COUNT := 2
 const SELLSWORDS_SCENE := preload("res://objects/overworld/othr/sellswords/sellswords.tscn")
@@ -67,8 +64,10 @@ const SELLSWORDS_MAX_PER_PROVINCE := 2
 
 @onready var provinces = $provinces
 @onready var armies = $armies
+@onready var caravans = $caravans
 @onready var merchants = $merchants
 @onready var sellswords = $sellswords
+var _next_caravan_id: int = 1
 @onready var camera: Camera2D = $Camera2D
 @onready var pathfinding = $pathfinding
 @onready var province_labels = $ProvinceLabels
@@ -1091,6 +1090,19 @@ func open_selected_army_menu(army: Node2D) -> void:
 func _on_army_interaction(mover: Node2D, target: Node2D) -> void:
 	if mover == null or target == null or not is_instance_valid(mover) or not is_instance_valid(target):
 		return
+	# Army approaching a caravan: capture menu for enemies; own/ally → inspect.
+	if target.has_method("is_caravan") and target.is_caravan():
+		pathfinding.deselect_army()
+		if are_friendly_players(mover.get_controller(), target.get_controller()):
+			if target.is_controllable_by(my_pl_id) and is_instance_valid(gui_node) \
+					and gui_node.has_method("open_caravan_menu"):
+				gui_node.open_caravan_menu(self, target)
+			elif is_instance_valid(gui_node):
+				gui_node.show_info_popup("Friendly caravan")
+			return
+		if is_instance_valid(gui_node) and gui_node.has_method("open_caravan_capture_menu"):
+			gui_node.open_caravan_capture_menu(self, mover, target)
+		return
 	# Cannot transfer with yourself — treat as reopening the army menu.
 	if mover == target or mover.force_id == target.force_id:
 		open_selected_army_menu(mover)
@@ -1101,6 +1113,25 @@ func _on_army_interaction(mover: Node2D, target: Node2D) -> void:
 	else:
 		pathfinding.deselect_army()
 		gui_node.open_battle_menu(self, mover.force_id, target.force_id, null)
+
+
+func on_caravan_clicked(caravan: Node2D) -> void:
+	if is_mouse_over_gui():
+		return
+	var selected = pathfinding.selected_army if pathfinding != null else null
+	# Army selected: interact if adjacent, else approach (capture for enemies).
+	if selected != null and not (selected.has_method("is_caravan") and selected.is_caravan()):
+		if pathfinding.are_armies_adjacent(selected, caravan):
+			pathfinding.open_army_interaction(selected, caravan)
+		else:
+			pathfinding.confirm_move_to_army(caravan)
+		return
+	if caravan.is_controllable_by(my_pl_id):
+		if is_instance_valid(gui_node) and gui_node.has_method("open_caravan_menu"):
+			gui_node.open_caravan_menu(self, caravan)
+	else:
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Enemy caravan — move an army next to it to capture")
 
 
 # --- Diplomacy (alliances) --------------------------------------------------
@@ -2235,7 +2266,7 @@ func request_army_move(army_name: String, cell_x: int, cell_y: int, steps: int) 
 	steps = clampi(steps, 0, army.movement_left)
 	if steps <= 0:
 		return
-	# Two armies cannot share a cell — reject landing on another force.
+	# Never end on an occupied cell (friendly pass-through is mid-path only).
 	var dest := Vector2i(cell_x, cell_y)
 	if pathfinding.occupancy.has(dest) and pathfinding.occupancy[dest] != army:
 		return
@@ -3577,36 +3608,6 @@ func disband_refunds_weapons(force_id: String, player_id: int) -> bool:
 	return prov.has_dejure(player_id)
 
 
-func get_weapon_shipments_involving(province_id: String) -> Array:
-	var out: Array = []
-	for s in weapon_shipments:
-		if str(s.get("from_id", "")) == province_id or str(s.get("to_id", "")) == province_id:
-			out.append(s.duplicate(true))
-	return out
-
-
-func tick_weapon_shipments() -> void:
-	if weapon_shipments.is_empty():
-		return
-	var remaining: Array = []
-	for s in weapon_shipments:
-		var left := int(s.get("seasons_left", 0)) - 1
-		if left > 0:
-			s["seasons_left"] = left
-			remaining.append(s)
-			continue
-		var to_prov := _get_province_by_id(str(s.get("to_id", "")))
-		if to_prov != null:
-			var shipper := int(s.get("shipper", -1))
-			if shipper < 0:
-				shipper = int(to_prov.dejure) if to_prov.get("dejure") != null else -1
-			if to_prov.has_method("add_weapons_for") and shipper >= 0:
-				to_prov.add_weapons_for(shipper, s.get("cargo", {}))
-			elif to_prov.has_method("get_weapons"):
-				GlobalUnits.add_weapons(to_prov.get_weapons(), s.get("cargo", {}))
-	weapon_shipments = remaining
-
-
 func do_recruit_levy(province_id: String, composition: Array) -> void:
 	var prov := _get_province_by_id(province_id)
 	if prov == null or not prov.has_dejure(my_pl_id):
@@ -3733,51 +3734,332 @@ func apply_recruit_levy(
 		gui_node.update_economy_menu(self)
 
 
-func do_ship_weapons(from_id: String, to_id: String, cargo: Dictionary) -> void:
-	request_ship_weapons.rpc_id(1, from_id, to_id, cargo, my_pl_id)
+# --- Caravans ---------------------------------------------------------------
+
+func get_province_town(province_id: String) -> Node:
+	var prov := _get_province_by_id(province_id)
+	if prov == null or not prov.has_method("get_town"):
+		return null
+	return prov.get_town()
+
+
+func can_spawn_caravan_at(province_id: String) -> bool:
+	var town := get_province_town(province_id)
+	if town == null:
+		return false
+	return get_free_approach_cell_for(town) != Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+
+
+func get_caravan_spawn_blocked_reason(province_id: String) -> String:
+	var town := get_province_town(province_id)
+	if town == null:
+		return "No town in this province"
+	if get_free_approach_cell_for(town) == Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
+		return "No free tile next to the town (another army or caravan is blocking)"
+	return ""
+
+
+func list_caravans_for_player(player_id: int) -> Array:
+	var out: Array = []
+	if caravans == null:
+		return out
+	for c in caravans.get_children():
+		if int(c.player_owner) == player_id:
+			out.append(c)
+	return out
+
+
+func do_send_caravan(from_id: String, to_id: String, cargo: Dictionary) -> void:
+	var reason := get_caravan_spawn_blocked_reason(from_id)
+	if reason != "":
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup(reason)
+		return
+	request_send_caravan.rpc_id(1, from_id, to_id, cargo, my_pl_id)
 
 
 @rpc("any_peer", "call_local", "reliable")
-func request_ship_weapons(from_id: String, to_id: String, cargo: Dictionary, player_id: int) -> void:
+func request_send_caravan(from_id: String, to_id: String, cargo: Dictionary, player_id: int) -> void:
 	if not multiplayer.is_server():
 		return
 	if from_id == to_id:
+		return
+	if not players.has(player_id):
 		return
 	var from_prov := _get_province_by_id(from_id)
 	var to_prov := _get_province_by_id(to_id)
 	if from_prov == null or to_prov == null:
 		return
-	if not from_prov.has_dejure(player_id) or not to_prov.has_dejure(player_id):
+	if not from_prov.has_dejure(player_id):
 		return
-	var clean := GlobalUnits.empty_weapon_stock()
-	var any := false
-	for k in GlobalUnits.WEAPON_KEYS:
-		var amt := maxi(0, int(cargo.get(k, 0)))
-		clean[k] = amt
-		if amt > 0:
-			any = true
-	if not any:
+	var town = from_prov.get_town() if from_prov.has_method("get_town") else null
+	if town == null:
 		return
-	if not from_prov.can_afford_weapons_for(player_id, clean):
+	var approach := get_free_approach_cell_for(town)
+	if approach == Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
 		return
-	apply_ship_weapons.rpc(from_id, to_id, clean, player_id)
+	var clean := GlobalUnits.sanitize_caravan_cargo(cargo)
+	if not GlobalUnits.caravan_cargo_has_any(clean):
+		return
+	if not from_prov.can_afford_caravan_cargo(player_id, clean):
+		return
+	_next_caravan_id += 1
+	var new_id := "cv_%d" % _next_caravan_id
+	apply_send_caravan.rpc(new_id, from_id, to_id, clean, player_id, approach.x, approach.y)
 
 
 @rpc("authority", "call_local", "reliable")
-func apply_ship_weapons(from_id: String, to_id: String, cargo: Dictionary, player_id: int) -> void:
+func apply_send_caravan(
+	caravan_id: String,
+	from_id: String,
+	to_id: String,
+	cargo: Dictionary,
+	player_id: int,
+	cell_x: int,
+	cell_y: int
+) -> void:
 	var from_prov := _get_province_by_id(from_id)
 	if from_prov == null:
 		return
-	if not from_prov.can_afford_weapons_for(player_id, cargo):
+	var clean := GlobalUnits.sanitize_caravan_cargo(cargo)
+	if not from_prov.can_afford_caravan_cargo(player_id, clean):
 		return
-	from_prov.subtract_weapons_for(player_id, cargo)
-	weapon_shipments.append({
-		"from_id": from_id,
-		"to_id": to_id,
-		"cargo": cargo.duplicate(true),
-		"seasons_left": GlobalUnits.WEAPON_SHIP_SEASONS,
-		"shipper": player_id,
-	})
+	from_prov.subtract_caravan_cargo(player_id, clean)
+	_spawn_caravan(caravan_id, player_id, to_id, clean, Vector2i(cell_x, cell_y))
+	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
+		gui_node.update_economy_menu(self)
+
+
+func _spawn_caravan(
+	caravan_id: String,
+	owner_id: int,
+	dest_id: String,
+	cargo: Dictionary,
+	cell: Vector2i
+) -> void:
+	var fig = CARAVAN_SCENE.instantiate()
+	fig.name = caravan_id
+	caravans.add_child(fig)
+	fig.base_map = self
+	fig.caravan_id = caravan_id
+	fig.player_owner = owner_id
+	fig.dest_province_id = dest_id
+	fig.cargo = GlobalUnits.sanitize_caravan_cargo(cargo)
+	fig.movement_points = GlobalUnits.CARAVAN_MOVEMENT_POINTS
+	fig.reset_movement()
+	fig.set_flags()
+	pathfinding.place_caravan_at_cell(fig, cell)
+	pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
+
+
+func do_redirect_caravan(caravan_id: String, dest_id: String) -> void:
+	request_redirect_caravan.rpc_id(1, caravan_id, dest_id, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_redirect_caravan(caravan_id: String, dest_id: String, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
+	if c == null:
+		return
+	if int(c.player_owner) != player_id:
+		return
+	if _get_province_by_id(dest_id) == null:
+		return
+	apply_redirect_caravan.rpc(caravan_id, dest_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_redirect_caravan(caravan_id: String, dest_id: String) -> void:
+	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
+	if c == null:
+		return
+	c.dest_province_id = dest_id
+	c.path_fail_streak = 0
+	c.path_fail_notified = false
+	if is_instance_valid(gui_node) and gui_node.has_method("refresh_caravan_menu_if"):
+		gui_node.refresh_caravan_menu_if(self, c)
+
+
+func do_capture_caravan(caravan_id: String) -> void:
+	request_capture_caravan.rpc_id(1, caravan_id, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_capture_caravan(caravan_id: String, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
+	if c == null:
+		return
+	if int(c.player_owner) == player_id:
+		return
+	if are_friendly_players(int(c.player_owner), player_id):
+		return
+	# Must have a controllable army adjacent.
+	if not _player_has_army_adjacent_to(player_id, c):
+		return
+	apply_capture_caravan.rpc(caravan_id, player_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_capture_caravan(caravan_id: String, player_id: int) -> void:
+	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
+	if c == null:
+		return
+	c.player_owner = player_id
+	c.path_fail_streak = 0
+	c.path_fail_notified = false
+	c.set_flags()
+	update_all_army_visuals()
+	if player_id == my_pl_id and is_instance_valid(gui_node):
+		if gui_node.has_method("open_caravan_menu"):
+			gui_node.open_caravan_menu(self, c)
+		else:
+			gui_node.show_info_popup("Caravan captured")
+
+
+func do_destroy_caravan(caravan_id: String) -> void:
+	request_destroy_caravan.rpc_id(1, caravan_id, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_destroy_caravan(caravan_id: String, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
+	if c == null:
+		return
+	# Owner cannot scuttle; only an adjacent enemy army may destroy.
+	if int(c.player_owner) == player_id:
+		return
+	if are_friendly_players(int(c.player_owner), player_id):
+		return
+	if not _player_has_army_adjacent_to(player_id, c):
+		return
+	apply_destroy_caravan.rpc(caravan_id, player_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_destroy_caravan(caravan_id: String, player_id: int = -1) -> void:
+	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
+	if c == null:
+		return
+	c.queue_free()
+	call_deferred("_rebuild_occupancy_after_caravan_removed")
+	if player_id == my_pl_id and is_instance_valid(gui_node):
+		if gui_node.has_method("close_caravan_menus"):
+			gui_node.close_caravan_menus()
+		gui_node.show_info_popup("Caravan destroyed")
+
+
+func _rebuild_occupancy_after_caravan_removed() -> void:
+	if pathfinding != null:
+		pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
+
+
+func _player_has_army_adjacent_to(player_id: int, target: Node2D) -> bool:
+	if pathfinding == null or target == null:
+		return false
+	for army in armies.get_children():
+		if not army.is_controllable_by(player_id):
+			continue
+		if pathfinding.are_armies_adjacent(army, target):
+			return true
+	return false
+
+
+func tick_all_caravans() -> void:
+	if caravans == null:
+		return
+	# Snapshot ids — delivery removes nodes mid-loop.
+	var ids: Array = []
+	for c in caravans.get_children():
+		ids.append(String(c.name))
+	for cid in ids:
+		var c = caravans.get_node_or_null(cid)
+		if c == null:
+			continue
+		c.reset_movement()
+		_advance_caravan_one_season(c)
+	pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
+
+
+func _advance_caravan_one_season(c: Node2D) -> void:
+	var dest_town := get_province_town(str(c.dest_province_id))
+	if dest_town == null:
+		_note_caravan_path_fail(c)
+		return
+	var from_cell: Vector2i = pathfinding.get_army_cell(c)
+	var approach: Array[Vector2i] = pathfinding.get_approach_cells(dest_town)
+	if from_cell in approach:
+		_deliver_caravan(c)
+		return
+	if approach.is_empty():
+		_note_caravan_path_fail(c)
+		return
+	var path: Array[Vector2i] = pathfinding.find_path_for_mover(c, from_cell, approach)
+	if path.size() < 2:
+		_note_caravan_path_fail(c)
+		return
+	# Successful path found — clear fail streak (movement may still be 0 MP edge).
+	c.path_fail_streak = 0
+	var stop_i: int = pathfinding.farthest_affordable_index(path, c.movement_left)
+	while stop_i > 0:
+		if pathfinding.cell_blocked_for_stop(c, path[stop_i]):
+			stop_i -= 1
+			continue
+		break
+	if stop_i <= 0:
+		_note_caravan_path_fail(c)
+		return
+	var end_cell: Vector2i = path[stop_i]
+	var spent := 0
+	for i in range(1, stop_i + 1):
+		spent += pathfinding.enter_cost(path[i])
+	pathfinding.place_caravan_at_cell(c, end_cell)
+	c.movement_left = maxi(0, c.movement_left - spent)
+	if end_cell in approach:
+		_deliver_caravan(c)
+
+
+func _note_caravan_path_fail(c: Node2D) -> void:
+	c.path_fail_streak = int(c.path_fail_streak) + 1
+	if int(c.path_fail_streak) < GlobalUnits.CARAVAN_PATH_FAIL_NOTIFY:
+		return
+	if bool(c.path_fail_notified):
+		return
+	c.path_fail_notified = true
+	if int(c.player_owner) != my_pl_id:
+		return
+	if is_instance_valid(gui_node):
+		gui_node.show_info_popup(
+			"Your caravan is stuck — no path to its destination. Go check its location."
+		)
+
+
+func _deliver_caravan(c: Node2D) -> void:
+	var dest_id := str(c.dest_province_id)
+	var prov := _get_province_by_id(dest_id)
+	var town := get_province_town(dest_id)
+	if prov == null or town == null:
+		# Stay put until a town exists again.
+		return
+	var receiver := int(town.player_owner) if town.get("player_owner") != null else -1
+	if receiver < 0:
+		return
+	if prov.has_method("add_caravan_cargo_for"):
+		prov.add_caravan_cargo_for(receiver, c.cargo)
+	var owner_id := int(c.player_owner)
+	c.queue_free()
+	call_deferred("_rebuild_occupancy_after_caravan_removed")
+	if owner_id == my_pl_id and is_instance_valid(gui_node):
+		var pname := str(get_province_data(dest_id).get("name", dest_id))
+		gui_node.show_info_popup("Caravan arrived in %s" % pname)
 	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
 		gui_node.update_economy_menu(self)
 
@@ -3986,6 +4268,9 @@ func reset_all_army_movement() -> void:
 func update_all_army_visuals() -> void:
 	for army in armies.get_children():
 		army.set_greyed(army.is_controllable_by(my_pl_id) and army.movement_left <= 0)
+	if caravans != null:
+		for c in caravans.get_children():
+			c.set_greyed(c.is_controllable_by(my_pl_id) and c.movement_left <= 0)
 
 
 func get_objects_with_pathfinding_blocked_tiles() -> Array:
@@ -4081,7 +4366,7 @@ func calculate_new_turn_game_data():
 	assign_players_home_provinces()
 	reset_all_army_movement()
 	tick_all_force_seasons()
-	tick_weapon_shipments()
+	tick_all_caravans()
 	tick_razed_buildings()
 	clear_expired_raid_smoke()
 	tick_merchants()

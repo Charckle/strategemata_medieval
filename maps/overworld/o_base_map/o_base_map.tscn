@@ -18,6 +18,8 @@ script = ExtResource("1_i7m4o")
 
 [node name="armies" type="Node2D" parent="." unique_id=1470001019]
 
+[node name="caravans" type="Node2D" parent="."]
+
 [node name="merchants" type="Node2D" parent="."]
 
 [node name="sellswords" type="Node2D" parent="."]

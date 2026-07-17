@@ -53,7 +53,10 @@ const LEVY_MAX_FRACTION := 0.80
 const LEVY_HAPPINESS_FREE_FRACTION := 0.10
 # Happiness lost per percent levied above the free band (at 80% ≈ −35).
 const LEVY_HAPPINESS_PER_PERCENT := 0.5
-const WEAPON_SHIP_SEASONS := 2
+# Caravan movement points spent automatically each season.
+const CARAVAN_MOVEMENT_POINTS := 10
+# Notify owner once after this many consecutive seasons with no path.
+const CARAVAN_PATH_FAIL_NOTIFY := 3
 
 # Movement: all-knights armies get this multiplier on base MP.
 const KNIGHT_ONLY_MP_MULT := 1.5
@@ -285,6 +288,48 @@ func empty_material_stock() -> Dictionary:
 	for k in MATERIAL_KEYS:
 		out[k] = 0
 	return out
+
+
+## Flat cargo dict for caravans: weapon keys + material keys, all zeroed.
+func empty_caravan_cargo() -> Dictionary:
+	var out := empty_weapon_stock()
+	for k in MATERIAL_KEYS:
+		out[k] = 0
+	return out
+
+
+func sanitize_caravan_cargo(cargo: Dictionary) -> Dictionary:
+	var clean := empty_caravan_cargo()
+	for k in WEAPON_KEYS:
+		clean[k] = maxi(0, int(cargo.get(k, 0)))
+	for k in MATERIAL_KEYS:
+		clean[k] = maxi(0, int(cargo.get(k, 0)))
+	return clean
+
+
+func caravan_cargo_has_any(cargo: Dictionary) -> bool:
+	for k in WEAPON_KEYS:
+		if int(cargo.get(k, 0)) > 0:
+			return true
+	for k in MATERIAL_KEYS:
+		if int(cargo.get(k, 0)) > 0:
+			return true
+	return false
+
+
+func caravan_cargo_summary(cargo: Dictionary) -> String:
+	var bits: PackedStringArray = []
+	for k in WEAPON_KEYS:
+		var amt := int(cargo.get(k, 0))
+		if amt > 0:
+			bits.append("%d %s" % [amt, weapon_name(k)])
+	for k in MATERIAL_KEYS:
+		var amt := int(cargo.get(k, 0))
+		if amt > 0:
+			bits.append("%d %s" % [amt, material_name(k)])
+	if bits.is_empty():
+		return "(empty)"
+	return ", ".join(bits)
 
 
 func material_name(key: String) -> String:

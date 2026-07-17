@@ -9,10 +9,7 @@
 [ext_resource type="PackedScene" uid="uid://dioakqgy71pqq" path="res://objects/overworld/field/field.tscn" id="6_pud0s"]
 [ext_resource type="PackedScene" uid="uid://eaj3p4kvbv8x" path="res://objects/overworld/economy/basic_building/basic_building.tscn" id="7_a34qs"]
 [ext_resource type="PackedScene" uid="uid://xb32olvqv02n" path="res://objects/overworld/castle/castle.tscn" id="7_qq3c3"]
-[ext_resource type="Script" uid="uid://dua3hx3fphqt1" path="res://objects/overworld/field/field.gd" id="8_krb7g"]
 [ext_resource type="PackedScene" uid="uid://40852rkknpec" path="res://objects/overworld/army/army_map_unit/armiy_figure.tscn" id="8_pud0s"]
-[ext_resource type="Texture2D" uid="uid://bxrkdfvsesd0s" path="res://sprites/overworld/objects/province/field/field_autumn.png" id="9_bkjiy"]
-[ext_resource type="Script" uid="uid://di3ird3vker3o" path="res://objects/overworld/othr/building_clickable.gd" id="10_tyh5j"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_7bj00"]
 texture = ExtResource("3_a34qs")
@@ -124,9 +121,6 @@ custom_data_layer_1/name = ""
 custom_data_layer_1/type = 0
 sources/0 = SubResource("TileSetAtlasSource_7bj00")
 
-[sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_n7ljv"]
-points = PackedVector2Array(32, 0, 0, 16, 32, 32, 64, 16)
-
 [node name="OBaseMap2" unique_id=1673006526 instance=ExtResource("1_epja8")]
 
 [node name="base_layer" type="TileMapLayer" parent="tilemap" parent_id_path=PackedInt32Array(2009527472) index="0" unique_id=1573680321]
@@ -209,37 +203,6 @@ position = Vector2(-352, 240)
 
 [node name="Field15" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="14" unique_id=550218542 instance=ExtResource("6_pud0s")]
 position = Vector2(-320, 576)
-
-[node name="Field16" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="15" unique_id=1966924887 instance=ExtResource("6_pud0s")]
-position = Vector2(576, 384)
-script = ExtResource("8_krb7g")
-crop = 1
-
-[node name="field_sprite" parent="provinces/Province/fields/Field16" index="0" unique_id=371399114]
-position = Vector2(32, 14)
-texture = ExtResource("9_bkjiy")
-
-[node name="Area2D" parent="provinces/Province/fields/Field16" index="1" unique_id=31070806]
-script = ExtResource("10_tyh5j")
-
-[node name="Polygon2D" parent="provinces/Province/fields/Field16/Area2D" index="0" unique_id=911444680]
-position = Vector2(-64, 96)
-shape = SubResource("ConvexPolygonShape2D_n7ljv")
-
-[node name="Field17" parent="provinces/Province/fields" parent_id_path=PackedInt32Array(496899077, 380677438) index="16" unique_id=1064259357 instance=ExtResource("6_pud0s")]
-position = Vector2(576, 288)
-script = ExtResource("8_krb7g")
-crop = 1
-
-[node name="field_sprite" parent="provinces/Province/fields/Field17" index="0" unique_id=371399114]
-position = Vector2(32, 14)
-texture = ExtResource("9_bkjiy")
-
-[node name="Area2D" parent="provinces/Province/fields/Field17" index="1" unique_id=31070806]
-script = ExtResource("10_tyh5j")
-
-[node name="Polygon2D" parent="provinces/Province/fields/Field17/Area2D" index="0" unique_id=911444680]
-shape = SubResource("ConvexPolygonShape2D_n7ljv")
 
 [node name="EmptyPlot" parent="provinces/Province/economy" parent_id_path=PackedInt32Array(496899077, 967963434) index="0" unique_id=1538586601 instance=ExtResource("7_a34qs")]
 position = Vector2(-128, 448)
@@ -472,7 +435,5 @@ start_units = [{
 enabled = false
 
 [editable path="provinces/Province"]
-[editable path="provinces/Province/fields/Field16"]
-[editable path="provinces/Province/fields/Field17"]
 [editable path="provinces/Province2"]
 [editable path="provinces/Province3"]

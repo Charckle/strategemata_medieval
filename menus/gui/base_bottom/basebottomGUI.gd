@@ -32,6 +32,10 @@ extends CanvasLayer
 @onready var province_tab_castles := $economy_menu/margin/vbox/tabs/province/buildings_grid/castles_val
 @onready var province_tab_economy := $economy_menu/margin/vbox/tabs/province/buildings_grid/economy_val
 @onready var province_tab_root := $economy_menu/margin/vbox/tabs/province
+@onready var caravan_tab_root := $economy_menu/margin/vbox/tabs/caravan
+@onready var caravan_tab_info := $economy_menu/margin/vbox/tabs/caravan/caravan_info
+@onready var caravan_tab_send_btn := $economy_menu/margin/vbox/tabs/caravan/send_btn
+@onready var caravan_tab_list := $economy_menu/margin/vbox/tabs/caravan/ScrollContainer/caravan_list
 
 @onready var alliances_list := $war_menu/margin/vbox/tabs/Alliances/ScrollContainer/alliances_list
 @onready var diplomacy_list := $war_menu/margin/vbox/tabs/Diplomacy/ScrollContainer/diplomacy_list
@@ -53,9 +57,7 @@ var _incoming_trade_panel: PanelContainer = null
 var _prov_happiness_lbl: Label = null
 var _prov_levy_lbl: Label = null
 var _prov_weapons_lbl: Label = null
-var _prov_shipments_lbl: Label = null
 var _prov_recruit_btn: Button = null
-var _prov_ship_btn: Button = null
 
 # Recruit levy panel.
 var _rc_panel: PanelContainer = null
@@ -65,15 +67,31 @@ var _rc_base = null
 var _rc_province_id: String = ""
 var _rc_spinboxes: Dictionary = {}  # UNIT_TYPE -> SpinBox
 
-# Ship weapons panel.
-var _sw_panel: PanelContainer = null
-var _sw_body: VBoxContainer = null
-var _sw_info_lbl: Label = null
-var _sw_dest: OptionButton = null
-var _sw_base = null
-var _sw_province_id: String = ""
-var _sw_spinboxes: Dictionary = {}  # weapon key -> SpinBox
-var _sw_dest_ids: Array = []
+# Send caravan panel (Economy → Caravan).
+var _cv_send_panel: PanelContainer = null
+var _cv_send_body: VBoxContainer = null
+var _cv_send_info_lbl: Label = null
+var _cv_send_from: OptionButton = null
+var _cv_send_dest: OptionButton = null
+var _cv_send_confirm: Button = null
+var _cv_send_base = null
+var _cv_send_from_ids: Array = []
+var _cv_send_dest_ids: Array = []
+var _cv_send_spinboxes: Dictionary = {}  # cargo key -> SpinBox
+
+# Map caravan inspect / redirect panel.
+var _cv_panel: PanelContainer = null
+var _cv_body: VBoxContainer = null
+var _cv_base = null
+var _cv_caravan: Node2D = null
+var _cv_dest: OptionButton = null
+var _cv_dest_ids: Array = []
+
+# Enemy caravan capture panel.
+var _cv_cap_panel: PanelContainer = null
+var _cv_cap_info: Label = null
+var _cv_cap_base = null
+var _cv_cap_caravan: Node2D = null
 
 # Merchant shop panel (tabbed: Weapons + Materials).
 var _ms_panel: PanelContainer = null
@@ -210,6 +228,11 @@ func _ready() -> void:
 	_populate_gameplay_settings()
 	show_province_names_chk.toggled.connect(_on_show_province_names_toggled)
 	_ensure_province_levy_widgets()
+	if caravan_tab_send_btn != null:
+		caravan_tab_send_btn.pressed.connect(_on_caravan_tab_send_pressed)
+	if economy_tabs != null and caravan_tab_root != null:
+		var cv_idx := caravan_tab_root.get_index()
+		economy_tabs.set_tab_title(cv_idx, "Caravan")
 	refresh_msg_button()
 
 
@@ -761,7 +784,7 @@ func close_all_popups() -> void:
 	_close_building_actions_menu()
 	_close_event_report()
 	_close_recruit_menu()
-	_close_ship_menu()
+	close_caravan_menus()
 	_close_merchant_shop()
 	_close_sellswords_hire()
 	for menu in [map_menu, economy_menu, war_menu, msg_menu, settings_menu]:
@@ -2297,6 +2320,7 @@ func update_economy_menu(base_map: Node) -> void:
 		selected_province_id = base_map.resolve_economy_province_focus()
 		if selected_province_id != "":
 			_fill_province_tab(base_map, selected_province_id)
+	_fill_caravan_tab(base_map)
 
 
 func _on_province_list_clicked(province_id: String) -> void:
@@ -2371,11 +2395,6 @@ func _ensure_province_levy_widgets() -> void:
 	_prov_weapons_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_prov_weapons_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
 	left.add_child(_prov_weapons_lbl)
-	_prov_shipments_lbl = Label.new()
-	_prov_shipments_lbl.text = ""
-	_prov_shipments_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_prov_shipments_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
-	left.add_child(_prov_shipments_lbl)
 	var actions := HBoxContainer.new()
 	actions.add_theme_constant_override("separation", 8)
 	actions.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -2383,10 +2402,6 @@ func _ensure_province_levy_widgets() -> void:
 	_prov_recruit_btn.text = "Recruit army"
 	_prov_recruit_btn.pressed.connect(_on_province_recruit_pressed)
 	actions.add_child(_prov_recruit_btn)
-	_prov_ship_btn = Button.new()
-	_prov_ship_btn.text = "Ship weapons"
-	_prov_ship_btn.pressed.connect(_on_province_ship_pressed)
-	actions.add_child(_prov_ship_btn)
 	left.add_child(actions)
 
 	# Right: labor pool + sliders.
@@ -2722,30 +2737,7 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 		wparts.append("%s %d" % [GlobalUnits.weapon_name(k), int(weapons.get(k, 0))])
 	_prov_weapons_lbl.text = "Weapons: %s" % ", ".join(wparts)
 
-	var ship_lines: PackedStringArray = []
-	if base_map.has_method("get_weapon_shipments_involving"):
-		for s in base_map.get_weapon_shipments_involving(province_id):
-			var cargo_bits: PackedStringArray = []
-			var cargo: Dictionary = s.get("cargo", {})
-			for k in GlobalUnits.WEAPON_KEYS:
-				var amt := int(cargo.get(k, 0))
-				if amt > 0:
-					cargo_bits.append("%d %s" % [amt, GlobalUnits.weapon_name(k)])
-			var from_name := str(s.get("from_id", "?"))
-			var to_name := str(s.get("to_id", "?"))
-			var from_data: Dictionary = base_map.get_province_data(from_name)
-			var to_data: Dictionary = base_map.get_province_data(to_name)
-			if not from_data.is_empty():
-				from_name = str(from_data.get("name", from_name))
-			if not to_data.is_empty():
-				to_name = str(to_data.get("name", to_name))
-			ship_lines.append("%s → %s (%d seasons): %s" % [
-				from_name, to_name, int(s.get("seasons_left", 0)), ", ".join(cargo_bits),
-			])
-	_prov_shipments_lbl.text = ("In transit:\n" + "\n".join(ship_lines)) if not ship_lines.is_empty() else ""
-
 	_prov_recruit_btn.visible = has_dejure
-	_prov_ship_btn.visible = has_dejure
 
 
 # --- Battle menu ------------------------------------------------------------
@@ -3235,18 +3227,12 @@ func _on_ba_raze() -> void:
 		base.do_raze_building(fid, building)
 
 
-# --- Province recruit / ship weapons ----------------------------------------
+# --- Province recruit -------------------------------------------------------
 
 func _on_province_recruit_pressed() -> void:
 	if selected_province_id == "" or not is_instance_valid(parent_n):
 		return
 	open_recruit_menu(parent_n, selected_province_id)
-
-
-func _on_province_ship_pressed() -> void:
-	if selected_province_id == "" or not is_instance_valid(parent_n):
-		return
-	open_ship_weapons_menu(parent_n, selected_province_id)
 
 
 func _ensure_recruit_panel() -> void:
@@ -3402,14 +3388,68 @@ func _on_recruit_confirm() -> void:
 	base.do_recruit_levy(province_id, composition)
 
 
-func _ensure_ship_panel() -> void:
-	if _sw_panel != null:
+# --- Caravans (Economy tab + map menus) -------------------------------------
+
+func _fill_caravan_tab(base_map: Node) -> void:
+	if caravan_tab_list == null:
 		return
-	_sw_panel = PanelContainer.new()
-	_sw_panel.top_level = true
-	_sw_panel.z_index = 140
-	_sw_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	_sw_panel.visible = false
+	for child in caravan_tab_list.get_children():
+		child.queue_free()
+	if not base_map.has_method("list_caravans_for_player"):
+		return
+	var mine: Array = base_map.list_caravans_for_player(base_map.my_pl_id)
+	if mine.is_empty():
+		var empty := Label.new()
+		empty.text = "No caravans on the road."
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		caravan_tab_list.add_child(empty)
+		return
+	for c in mine:
+		var dest_id := str(c.dest_province_id)
+		var dest_name := dest_id
+		var dest_data: Dictionary = base_map.get_province_data(dest_id)
+		if not dest_data.is_empty():
+			dest_name = str(dest_data.get("name", dest_id))
+		var row := VBoxContainer.new()
+		row.add_theme_constant_override("separation", 2)
+		var lbl := Label.new()
+		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lbl.text = "→ %s\n%s" % [dest_name, GlobalUnits.caravan_cargo_summary(c.cargo)]
+		row.add_child(lbl)
+		var btn := Button.new()
+		btn.text = "Open"
+		btn.pressed.connect(_on_caravan_list_open.bind(c))
+		row.add_child(btn)
+		row.add_child(HSeparator.new())
+		caravan_tab_list.add_child(row)
+
+
+func _on_caravan_list_open(caravan: Node2D) -> void:
+	if not is_instance_valid(caravan) or not is_instance_valid(parent_n):
+		return
+	open_caravan_menu(parent_n, caravan)
+
+
+func _on_caravan_tab_send_pressed() -> void:
+	if not is_instance_valid(parent_n):
+		return
+	open_send_caravan_menu(parent_n, selected_province_id)
+
+
+func close_caravan_menus() -> void:
+	_close_send_caravan_menu()
+	_close_caravan_menu()
+	_close_caravan_capture_menu()
+
+
+func _ensure_send_caravan_panel() -> void:
+	if _cv_send_panel != null:
+		return
+	_cv_send_panel = PanelContainer.new()
+	_cv_send_panel.top_level = true
+	_cv_send_panel.z_index = 140
+	_cv_send_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_cv_send_panel.visible = false
 	var margin := MarginContainer.new()
 	for side in ["left", "right", "top", "bottom"]:
 		margin.add_theme_constant_override("margin_" + side, 12)
@@ -3417,135 +3457,408 @@ func _ensure_ship_panel() -> void:
 	vbox.add_theme_constant_override("separation", 8)
 	var header := HBoxContainer.new()
 	var title := Label.new()
-	title.text = "Ship weapons"
+	title.text = "Send caravan"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 	var close_btn := Button.new()
 	close_btn.text = "✕"
-	close_btn.pressed.connect(_close_ship_menu)
+	close_btn.pressed.connect(_close_send_caravan_menu)
 	header.add_child(close_btn)
 	vbox.add_child(header)
-	_sw_info_lbl = Label.new()
-	_sw_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_sw_info_lbl.custom_minimum_size = Vector2(300, 0)
-	vbox.add_child(_sw_info_lbl)
+	_cv_send_info_lbl = Label.new()
+	_cv_send_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_cv_send_info_lbl.custom_minimum_size = Vector2(340, 0)
+	vbox.add_child(_cv_send_info_lbl)
+	var from_row := HBoxContainer.new()
+	var from_lbl := Label.new()
+	from_lbl.text = "From:"
+	from_row.add_child(from_lbl)
+	_cv_send_from = OptionButton.new()
+	_cv_send_from.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cv_send_from.item_selected.connect(_on_send_caravan_from_changed)
+	from_row.add_child(_cv_send_from)
+	vbox.add_child(from_row)
 	var dest_row := HBoxContainer.new()
 	var dest_lbl := Label.new()
-	dest_lbl.text = "Destination:"
+	dest_lbl.text = "To:"
 	dest_row.add_child(dest_lbl)
-	_sw_dest = OptionButton.new()
-	_sw_dest.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	dest_row.add_child(_sw_dest)
+	_cv_send_dest = OptionButton.new()
+	_cv_send_dest.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	dest_row.add_child(_cv_send_dest)
 	vbox.add_child(dest_row)
-	_sw_body = VBoxContainer.new()
-	_sw_body.add_theme_constant_override("separation", 4)
-	vbox.add_child(_sw_body)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 220)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_cv_send_body = VBoxContainer.new()
+	_cv_send_body.add_theme_constant_override("separation", 4)
+	_cv_send_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_cv_send_body)
+	vbox.add_child(scroll)
 	var btn_row := HBoxContainer.new()
 	var cancel_btn := Button.new()
 	cancel_btn.text = "Cancel"
 	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	cancel_btn.pressed.connect(_close_ship_menu)
+	cancel_btn.pressed.connect(_close_send_caravan_menu)
 	btn_row.add_child(cancel_btn)
-	var confirm_btn := Button.new()
-	confirm_btn.text = "Ship (%d seasons)" % GlobalUnits.WEAPON_SHIP_SEASONS
-	confirm_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	confirm_btn.pressed.connect(_on_ship_confirm)
-	btn_row.add_child(confirm_btn)
+	_cv_send_confirm = Button.new()
+	_cv_send_confirm.text = "Send caravan"
+	_cv_send_confirm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cv_send_confirm.pressed.connect(_on_send_caravan_confirm)
+	btn_row.add_child(_cv_send_confirm)
 	vbox.add_child(btn_row)
 	margin.add_child(vbox)
-	_sw_panel.add_child(margin)
-	add_child(_sw_panel)
+	_cv_send_panel.add_child(margin)
+	add_child(_cv_send_panel)
 
 
-func open_ship_weapons_menu(base_map: Node, province_id: String) -> void:
-	_ensure_ship_panel()
-	_sw_base = base_map
-	_sw_province_id = province_id
-	var data: Dictionary = base_map.get_province_data(province_id)
-	if data.is_empty() or not data.get("viewer_has_dejure", false):
-		show_info_popup("You need de jure ownership to ship from here")
-		return
-
-	_sw_info_lbl.text = "Ship from %s. Cargo arrives in %d seasons to whoever holds de jure at the destination." % [
-		data.get("name", "Province"), GlobalUnits.WEAPON_SHIP_SEASONS
-	]
-
-	_sw_dest.clear()
-	_sw_dest_ids.clear()
+func open_send_caravan_menu(base_map: Node, prefer_from_id: String = "") -> void:
+	_ensure_send_caravan_panel()
+	_cv_send_base = base_map
+	_cv_send_from.clear()
+	_cv_send_from_ids.clear()
 	var list_data: Array = base_map.get_all_provinces_list_data(base_map.my_pl_id)
+	var prefer_idx := 0
 	for entry in list_data:
 		var pid := str(entry.get("id", ""))
-		if pid == province_id:
+		var data: Dictionary = base_map.get_province_data(pid)
+		if not data.get("viewer_has_dejure", false):
 			continue
-		var dest_data: Dictionary = base_map.get_province_data(pid)
-		if not dest_data.get("viewer_has_dejure", false):
-			continue
-		_sw_dest.add_item(str(dest_data.get("name", pid)))
-		_sw_dest_ids.append(pid)
-	if _sw_dest_ids.is_empty():
-		_sw_base = null
-		_sw_province_id = ""
-		show_info_popup("No other de jure province to ship to")
+		_cv_send_from.add_item(str(data.get("name", pid)))
+		if pid == prefer_from_id:
+			prefer_idx = _cv_send_from_ids.size()
+		_cv_send_from_ids.append(pid)
+	if _cv_send_from_ids.is_empty():
+		_cv_send_base = null
+		show_info_popup("You need de jure ownership in a province to send a caravan")
 		return
+	_cv_send_from.select(prefer_idx)
+	_rebuild_send_caravan_dest_and_cargo()
+	_cv_send_panel.visible = true
+	_cv_send_panel.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_cv_send_panel.size = Vector2(minf(440, vp.x * 0.9), minf(520, vp.y * 0.85))
+	_cv_send_panel.position = (vp - _cv_send_panel.size) * 0.5
 
-	for child in _sw_body.get_children():
+
+func _on_send_caravan_from_changed(_idx: int) -> void:
+	_rebuild_send_caravan_dest_and_cargo()
+
+
+func _rebuild_send_caravan_dest_and_cargo() -> void:
+	var base = _cv_send_base
+	if base == null or _cv_send_from == null:
+		return
+	var from_idx := _cv_send_from.selected
+	if from_idx < 0 or from_idx >= _cv_send_from_ids.size():
+		return
+	var from_id := str(_cv_send_from_ids[from_idx])
+	var data: Dictionary = base.get_province_data(from_id)
+	var blocked := ""
+	if base.has_method("get_caravan_spawn_blocked_reason"):
+		blocked = str(base.get_caravan_spawn_blocked_reason(from_id))
+	if blocked != "":
+		_cv_send_info_lbl.text = "From %s.\nCannot send: %s" % [data.get("name", from_id), blocked]
+	else:
+		_cv_send_info_lbl.text = (
+			"From %s. Cargo is taken now; the caravan walks each season to the destination town. "
+			+ "Whoever holds that town receives the goods."
+		) % data.get("name", from_id)
+	if _cv_send_confirm != null:
+		_cv_send_confirm.disabled = blocked != ""
+		_cv_send_confirm.tooltip_text = blocked
+
+	_cv_send_dest.clear()
+	_cv_send_dest_ids.clear()
+	for prov in base.provinces.get_children():
+		var pid := str(prov.name)
+		if pid == from_id:
+			continue
+		var pdata: Dictionary = base.get_province_data(pid)
+		if pdata.is_empty():
+			continue
+		_cv_send_dest.add_item(str(pdata.get("name", pid)))
+		_cv_send_dest_ids.append(pid)
+
+	for child in _cv_send_body.get_children():
 		child.queue_free()
-	_sw_spinboxes.clear()
+	_cv_send_spinboxes.clear()
 	var weapons: Dictionary = data.get("weapons", {})
+	var prov = base.provinces.get_node_or_null(from_id) if base.get("provinces") != null else null
+	var pid := int(base.my_pl_id)
+	var stock_keys: Array = []
 	for k in GlobalUnits.WEAPON_KEYS:
+		stock_keys.append(k)
+	for k in GlobalUnits.MATERIAL_KEYS:
+		stock_keys.append(k)
+	for k in stock_keys:
+		var have := 0
+		var label_name := ""
+		if k in GlobalUnits.WEAPON_KEYS:
+			have = int(weapons.get(k, 0))
+			label_name = GlobalUnits.weapon_name(k)
+		else:
+			if prov != null and prov.has_method("get_player_material"):
+				have = int(prov.get_player_material(pid, k))
+			label_name = GlobalUnits.material_name(k)
 		var row := HBoxContainer.new()
 		var lbl := Label.new()
 		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		lbl.text = "%s (have %d)" % [GlobalUnits.weapon_name(k), int(weapons.get(k, 0))]
+		lbl.text = "%s (have %d)" % [label_name, have]
 		row.add_child(lbl)
 		var spin := SpinBox.new()
 		spin.min_value = 0
-		spin.max_value = maxi(0, int(weapons.get(k, 0)))
+		spin.max_value = maxi(0, have)
 		spin.step = 1
 		spin.value = 0
 		spin.custom_minimum_size = Vector2(90, 0)
 		row.add_child(spin)
-		_sw_body.add_child(row)
-		_sw_spinboxes[k] = spin
-
-	_sw_panel.visible = true
-	_sw_panel.reset_size()
-	var vp := get_viewport().get_visible_rect().size
-	_sw_panel.size = Vector2(minf(400, vp.x * 0.9), _sw_panel.get_combined_minimum_size().y)
-	_sw_panel.position = (vp - _sw_panel.size) * 0.5
+		_cv_send_body.add_child(row)
+		_cv_send_spinboxes[k] = spin
 
 
-func _close_ship_menu() -> void:
-	if _sw_panel != null:
-		_sw_panel.visible = false
-	_sw_base = null
-	_sw_province_id = ""
-	_sw_spinboxes.clear()
-	_sw_dest_ids.clear()
+func _close_send_caravan_menu() -> void:
+	if _cv_send_panel != null:
+		_cv_send_panel.visible = false
+	_cv_send_base = null
+	_cv_send_spinboxes.clear()
+	_cv_send_from_ids.clear()
+	_cv_send_dest_ids.clear()
 
 
-func _on_ship_confirm() -> void:
-	var base = _sw_base
-	var from_id := _sw_province_id
-	var dest_idx := _sw_dest.selected if _sw_dest != null else -1
+func _on_send_caravan_confirm() -> void:
+	var base = _cv_send_base
+	var from_idx := _cv_send_from.selected if _cv_send_from != null else -1
+	var dest_idx := _cv_send_dest.selected if _cv_send_dest != null else -1
+	var from_id := ""
 	var to_id := ""
-	if dest_idx >= 0 and dest_idx < _sw_dest_ids.size():
-		to_id = str(_sw_dest_ids[dest_idx])
-	var cargo := GlobalUnits.empty_weapon_stock()
+	if from_idx >= 0 and from_idx < _cv_send_from_ids.size():
+		from_id = str(_cv_send_from_ids[from_idx])
+	if dest_idx >= 0 and dest_idx < _cv_send_dest_ids.size():
+		to_id = str(_cv_send_dest_ids[dest_idx])
+	var cargo := GlobalUnits.empty_caravan_cargo()
 	var any := false
-	for k in _sw_spinboxes:
-		var amt := int(_sw_spinboxes[k].value)
+	for k in _cv_send_spinboxes:
+		var amt := int(_cv_send_spinboxes[k].value)
 		cargo[k] = amt
 		if amt > 0:
 			any = true
-	_close_ship_menu()
+	_close_send_caravan_menu()
 	if base == null or from_id == "" or to_id == "":
-		show_info_popup("Pick a destination province")
+		show_info_popup("Pick source and destination provinces")
 		return
 	if not any:
-		show_info_popup("Select weapons to ship")
+		show_info_popup("Select goods to send")
 		return
-	base.do_ship_weapons(from_id, to_id, cargo)
+	base.do_send_caravan(from_id, to_id, cargo)
+
+
+func _ensure_caravan_menu() -> void:
+	if _cv_panel != null:
+		return
+	_cv_panel = PanelContainer.new()
+	_cv_panel.top_level = true
+	_cv_panel.z_index = 130
+	_cv_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_cv_panel.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var header := HBoxContainer.new()
+	var title := Label.new()
+	title.name = "Title"
+	title.text = "Caravan"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 16)
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.pressed.connect(_close_caravan_menu)
+	header.add_child(title)
+	header.add_child(close_btn)
+	_cv_body = VBoxContainer.new()
+	_cv_body.add_theme_constant_override("separation", 6)
+	vbox.add_child(header)
+	vbox.add_child(HSeparator.new())
+	vbox.add_child(_cv_body)
+	margin.add_child(vbox)
+	_cv_panel.add_child(margin)
+	add_child(_cv_panel)
+
+
+func open_caravan_menu(base_map: Node, caravan: Node2D) -> void:
+	_ensure_caravan_menu()
+	_cv_base = base_map
+	_cv_caravan = caravan
+	_rebuild_caravan_menu()
+
+
+func refresh_caravan_menu_if(base_map: Node, caravan: Node2D) -> void:
+	if _cv_panel == null or not _cv_panel.visible:
+		return
+	if _cv_caravan != caravan:
+		return
+	_cv_base = base_map
+	_rebuild_caravan_menu()
+
+
+func _close_caravan_menu() -> void:
+	if _cv_panel != null:
+		_cv_panel.visible = false
+	_cv_base = null
+	_cv_caravan = null
+	_cv_dest = null
+	_cv_dest_ids.clear()
+
+
+func _rebuild_caravan_menu() -> void:
+	if _cv_body == null or _cv_caravan == null or _cv_base == null:
+		return
+	for child in _cv_body.get_children():
+		child.queue_free()
+	_cv_dest = null
+	_cv_dest_ids.clear()
+	var c := _cv_caravan
+	if not is_instance_valid(c):
+		_close_caravan_menu()
+		return
+	var dest_id := str(c.dest_province_id)
+	var dest_name := dest_id
+	var dest_data: Dictionary = _cv_base.get_province_data(dest_id)
+	if not dest_data.is_empty():
+		dest_name = str(dest_data.get("name", dest_id))
+	var info := Label.new()
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.custom_minimum_size = Vector2(280, 0)
+	info.text = "Destination: %s\nCargo: %s" % [dest_name, GlobalUnits.caravan_cargo_summary(c.cargo)]
+	_cv_body.add_child(info)
+	var dest_row := HBoxContainer.new()
+	var dest_lbl := Label.new()
+	dest_lbl.text = "New destination:"
+	dest_row.add_child(dest_lbl)
+	_cv_dest = OptionButton.new()
+	_cv_dest.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var select_i := 0
+	for prov in _cv_base.provinces.get_children():
+		var pid := str(prov.name)
+		var pdata: Dictionary = _cv_base.get_province_data(pid)
+		if pdata.is_empty():
+			continue
+		if pid == dest_id:
+			select_i = _cv_dest_ids.size()
+		_cv_dest.add_item(str(pdata.get("name", pid)))
+		_cv_dest_ids.append(pid)
+	_cv_dest.select(select_i)
+	dest_row.add_child(_cv_dest)
+	_cv_body.add_child(dest_row)
+	var set_btn := Button.new()
+	set_btn.text = "Set destination"
+	set_btn.pressed.connect(_on_caravan_set_dest)
+	_cv_body.add_child(set_btn)
+	_cv_panel.visible = true
+	_cv_panel.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_cv_panel.size = Vector2(minf(380, vp.x * 0.9), _cv_panel.get_combined_minimum_size().y)
+	_cv_panel.position = (vp - _cv_panel.size) * 0.5
+
+
+func _on_caravan_set_dest() -> void:
+	var base = _cv_base
+	var c = _cv_caravan
+	var idx := _cv_dest.selected if _cv_dest != null else -1
+	var dest_id := ""
+	if idx >= 0 and idx < _cv_dest_ids.size():
+		dest_id = str(_cv_dest_ids[idx])
+	if base == null or c == null or dest_id == "":
+		return
+	base.do_redirect_caravan(String(c.name), dest_id)
+	show_info_popup("Caravan destination updated")
+
+
+func _ensure_caravan_capture_menu() -> void:
+	if _cv_cap_panel != null:
+		return
+	_cv_cap_panel = PanelContainer.new()
+	_cv_cap_panel.top_level = true
+	_cv_cap_panel.z_index = 140
+	_cv_cap_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_cv_cap_panel.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var header := HBoxContainer.new()
+	var title := Label.new()
+	title.text = "Enemy caravan"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 16)
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.pressed.connect(_close_caravan_capture_menu)
+	header.add_child(title)
+	header.add_child(close_btn)
+	_cv_cap_info = Label.new()
+	_cv_cap_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_cv_cap_info.custom_minimum_size = Vector2(280, 0)
+	var take_btn := Button.new()
+	take_btn.text = "Take ownership"
+	take_btn.pressed.connect(_on_caravan_capture_take)
+	var destroy_btn := Button.new()
+	destroy_btn.text = "Destroy"
+	destroy_btn.pressed.connect(_on_caravan_capture_destroy)
+	var ignore_btn := Button.new()
+	ignore_btn.text = "Ignore"
+	ignore_btn.pressed.connect(_close_caravan_capture_menu)
+	vbox.add_child(header)
+	vbox.add_child(HSeparator.new())
+	vbox.add_child(_cv_cap_info)
+	vbox.add_child(take_btn)
+	vbox.add_child(destroy_btn)
+	vbox.add_child(ignore_btn)
+	margin.add_child(vbox)
+	_cv_cap_panel.add_child(margin)
+	add_child(_cv_cap_panel)
+
+
+func open_caravan_capture_menu(base_map: Node, _army: Node2D, caravan: Node2D) -> void:
+	_ensure_caravan_capture_menu()
+	_cv_cap_base = base_map
+	_cv_cap_caravan = caravan
+	var owner_name := "?"
+	if base_map.players.has(caravan.player_owner):
+		owner_name = str(base_map.players[caravan.player_owner].name)
+	_cv_cap_info.text = "Owner: %s\nCargo: %s\nTake it to redirect, or destroy it (no loot)." % [
+		owner_name, GlobalUnits.caravan_cargo_summary(caravan.cargo)
+	]
+	_cv_cap_panel.visible = true
+	_cv_cap_panel.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_cv_cap_panel.size = Vector2(minf(360, vp.x * 0.9), _cv_cap_panel.get_combined_minimum_size().y)
+	_cv_cap_panel.position = (vp - _cv_cap_panel.size) * 0.5
+
+
+func _close_caravan_capture_menu() -> void:
+	if _cv_cap_panel != null:
+		_cv_cap_panel.visible = false
+	_cv_cap_base = null
+	_cv_cap_caravan = null
+
+
+func _on_caravan_capture_take() -> void:
+	var base = _cv_cap_base
+	var c = _cv_cap_caravan
+	_close_caravan_capture_menu()
+	if base != null and c != null and is_instance_valid(c):
+		base.do_capture_caravan(String(c.name))
+
+
+func _on_caravan_capture_destroy() -> void:
+	var base = _cv_cap_base
+	var c = _cv_cap_caravan
+	_close_caravan_capture_menu()
+	if base != null and c != null and is_instance_valid(c):
+		base.do_destroy_caravan(String(c.name))
 
 
 # --- Merchant shop ----------------------------------------------------------

@@ -1,9 +1,10 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://objects/overworld/othr/sellswords/sellswords.gd" id="1_script"]
 [ext_resource type="Texture2D" uid="uid://hyku2irqn8sl" path="res://sprites/overworld/objects/province/economy/base_ground_economy.png" id="2_ground"]
 [ext_resource type="Texture2D" uid="uid://qwlncmdccgj2" path="res://sprites/overworld/objects/province/sellswords/sellswords.png" id="3_spr"]
 [ext_resource type="Script" uid="uid://c8bldclick2xyzq" path="res://objects/overworld/othr/building_clickable.gd" id="4_clk"]
+[ext_resource type="PackedScene" uid="uid://bumabll72sky" path="res://objects/overworld/othr/flag/flag.tscn" id="5_flag"]
 
 [sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_ss"]
 points = PackedVector2Array(32, 0, 0, 16, 32, 32, 64, 16)
@@ -13,7 +14,6 @@ script = ExtResource("1_script")
 
 [node name="ground" type="Sprite2D" parent="."]
 position = Vector2(32, 16)
-modulate = Color(0.7, 0.55, 0.4, 1)
 texture = ExtResource("2_ground")
 
 [node name="building_spr" type="Sprite2D" parent="."]
@@ -25,3 +25,6 @@ script = ExtResource("4_clk")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Area2D"]
 shape = SubResource("ConvexPolygonShape2D_ss")
+
+[node name="Flag" parent="." instance=ExtResource("5_flag")]
+position = Vector2(33, 0)

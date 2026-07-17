@@ -81,6 +81,23 @@ func setup_flag() -> void:
 	_setup_banners(banner_pids, players_dict, true)
 
 
+## Pole + stacked wavy banners in fixed colors (no ownership triangle).
+func setup_decorative_banners(colors: Array) -> void:
+	if flag_sprite != null:
+		flag_sprite.visible = false
+	visible = true
+	if pole_spr != null:
+		pole_spr.visible = true
+	_reset_banners_and_pole(colors, false)
+	var anchor := BANNER_ONLY_BASE_Y
+	for i in colors.size():
+		var color: Color = colors[i] if colors[i] is Color else Color.WHITE
+		var base_y := anchor - i * BANNER_STEP
+		var banner := _make_banner_line(color, base_y)
+		_banner_data.append({ "node": banner, "base_y": base_y, "phase": i * BANNER_PHASE_GAP })
+		add_child(banner)
+
+
 func _shows_ownership_triangle() -> bool:
 	if settlement.has_method("shows_ownership_triangle"):
 		return settlement.shows_ownership_triangle()

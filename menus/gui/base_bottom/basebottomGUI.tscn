@@ -293,6 +293,37 @@ layout_mode = 2
 size_flags_horizontal = 3
 text = "Economy: — / —"
 
+[node name="caravan" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs"]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+metadata/_tab_index = 3
+
+[node name="caravan_title" type="Label" parent="economy_menu/margin/vbox/tabs/caravan"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Caravans"
+
+[node name="caravan_info" type="Label" parent="economy_menu/margin/vbox/tabs/caravan"]
+layout_mode = 2
+autowrap_mode = 3
+text = "Send goods between provinces. Caravans walk each season toward the destination town."
+
+[node name="send_btn" type="Button" parent="economy_menu/margin/vbox/tabs/caravan"]
+layout_mode = 2
+text = "Send caravan…"
+
+[node name="ScrollContainer" type="ScrollContainer" parent="economy_menu/margin/vbox/tabs/caravan"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="caravan_list" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/caravan/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
 [node name="war_menu" type="PanelContainer" parent="." unique_id=1949477651]
 visible = false
 offset_left = 420.0
