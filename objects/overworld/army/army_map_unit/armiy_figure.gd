@@ -18,7 +18,7 @@ extends Node2D
 var force_id: String = ""
 
 var base_map
-# Movement points left this turn; each tile stepped costs 1.
+# Movement points left this turn; enter-cost is 1 on road, 2 off-road.
 var movement_left := movement_points
 
 var _outline_material: ShaderMaterial

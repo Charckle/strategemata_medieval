@@ -12,6 +12,7 @@ var point_id_to_cell: Dictionary = {}
 var blocked_cell_to_object: Dictionary = {}   # Vector2i -> Node
 var object_to_footprint: Dictionary = {}      # Node -> Array[Vector2i]
 var map_layer: TileMapLayer
+var roads_layer: TileMapLayer
 var selected_army: Node2D = null
 var current_path: Array[Vector2i] = []
 # Cell -> army Node currently standing on it (rebuilt after every move).
@@ -26,6 +27,9 @@ const PATH_REACHABLE_COLOR := Color(0.2, 0.85, 0.35, 0.9)
 const PATH_REST_COLOR := Color(0.6, 0.6, 0.6, 0.6)
 
 const ARMY_CENTER_OFFSET := Vector2(32, 16)
+# MP cost to enter a cell (charged on the destination tile).
+const COST_ROAD := 1
+const COST_OFF_ROAD := 2
 # Isometric cell space: the only true neighbors are the 4 cardinal cell
 # directions (tiles sharing a diamond edge). A (1,1)-style step touches only at
 # a vertex and is NOT adjacent, so movement is strictly edge-based.
@@ -73,18 +77,60 @@ func place_army_at_cell(army: Node2D, cell: Vector2i) -> void:
 	army.global_position = _get_cell_center_global(cell) - ARMY_CENTER_OFFSET
 
 
-# to ni OK. čekira samo en layer če je walkable
+# Walkable terrain layer (skips decorative layers like roads).
 func _get_map_layer() -> TileMapLayer:
 	for child in tilemap.get_children():
-		if child is TileMapLayer and child.tile_set != null:
+		if child is TileMapLayer and child.tile_set != null and child.name != "roads":
 			return child as TileMapLayer
 	return null
 
 
+func _get_roads_layer() -> TileMapLayer:
+	var layer = tilemap.get_node_or_null("roads")
+	if layer is TileMapLayer:
+		return layer as TileMapLayer
+	return null
+
+
+func is_road_cell(cell: Vector2i) -> bool:
+	if roads_layer == null:
+		return false
+	var tile_data := roads_layer.get_cell_tile_data(cell)
+	if tile_data == null:
+		return false
+	return bool(tile_data.get_custom_data("road"))
+
+
+## MP cost to enter `cell` (start cell is never charged).
+func enter_cost(cell: Vector2i) -> int:
+	return COST_ROAD if is_road_cell(cell) else COST_OFF_ROAD
+
+
+## Sum of enter-costs along a path (index 0 is free; each later cell is charged).
+func path_mp_cost(path_cells: Array[Vector2i]) -> int:
+	var total := 0
+	for i in range(1, path_cells.size()):
+		total += enter_cost(path_cells[i])
+	return total
+
+
+## Farthest path index affordable with `mp` movement points.
+func _farthest_affordable_index(path_cells: Array[Vector2i], mp: int) -> int:
+	var spent := 0
+	var best := 0
+	for i in range(1, path_cells.size()):
+		var step_cost := enter_cost(path_cells[i])
+		if spent + step_cost > mp:
+			break
+		spent += step_cost
+		best = i
+	return best
+
+
 func _setup_astar_graph() -> void:
-	# to ni ok, čekiramo samo en layer za walkable!!!!
 	map_layer = _get_map_layer()
-	
+	roads_layer = _get_roads_layer()
+
 	astar_graph = AStar2D.new()
 
 	# set walkable tiles
@@ -92,9 +138,9 @@ func _setup_astar_graph() -> void:
 		var tile_data = map_layer.get_cell_tile_data(cell)
 		if tile_data == null:
 			continue
-		
+
 		var is_walkable = tile_data.get_custom_data("walkable")
-		
+
 		if is_walkable:
 			walkable_cells[cell] = true
 
@@ -160,26 +206,38 @@ func get_approach_cells(node: Node) -> Array[Vector2i]:
 	return result
 
 
-# Cells reachable from a start cell within max_steps edge-moves (BFS).
-# Other armies block entry — you path to their approach tiles and interact.
-func get_reachable_cells(from_cell: Vector2i, max_steps: int) -> Dictionary:
+# Cells reachable from a start cell within max_mp movement points (Dijkstra).
+# Values are cumulative MP cost. Other armies block entry — path to approach.
+func get_reachable_cells(from_cell: Vector2i, max_mp: int) -> Dictionary:
 	var result: Dictionary = {from_cell: 0}
-	var frontier: Array[Vector2i] = [from_cell]
-	var dist := 0
-	while not frontier.is_empty() and dist < max_steps:
-		dist += 1
-		var next_frontier: Array[Vector2i] = []
-		for cell in frontier:
-			for dir in EDGE_DIRS:
-				var n: Vector2i = cell + dir
-				if not walkable_cells.has(n) or result.has(n):
-					continue
-				# Occupied by another army: cannot enter.
-				if occupancy.has(n) and n != from_cell:
-					continue
-				result[n] = dist
-				next_frontier.append(n)
-		frontier = next_frontier
+	# Entries are [cost, cell]; expand cheapest first.
+	var frontier: Array = [[0, from_cell]]
+	while not frontier.is_empty():
+		var best_i := 0
+		var best_cost: int = frontier[0][0]
+		for i in range(1, frontier.size()):
+			if int(frontier[i][0]) < best_cost:
+				best_cost = int(frontier[i][0])
+				best_i = i
+		var item: Array = frontier.pop_at(best_i)
+		var cost: int = int(item[0])
+		var cell: Vector2i = item[1]
+		if cost > int(result.get(cell, 0x7FFFFFFF)):
+			continue
+		for dir in EDGE_DIRS:
+			var n: Vector2i = cell + dir
+			if not walkable_cells.has(n):
+				continue
+			# Occupied by another army: cannot enter.
+			if occupancy.has(n) and n != from_cell:
+				continue
+			var next_cost: int = cost + enter_cost(n)
+			if next_cost > max_mp:
+				continue
+			if result.has(n) and int(result[n]) <= next_cost:
+				continue
+			result[n] = next_cost
+			frontier.append([next_cost, n])
 	return result
 
 
@@ -199,12 +257,15 @@ func _approach_cells_of_cell(cell: Vector2i, ignore_army: Node2D = null) -> Arra
 
 func _best_path_to_cells(from_cell: Vector2i, target_cells: Array[Vector2i]) -> Array[Vector2i]:
 	var best_path: Array[Vector2i] = []
+	var best_cost := 0x7FFFFFFF
 	for target_cell in target_cells:
 		var path_cells: Array[Vector2i] = _find_path_cells(from_cell, target_cell)
 		if path_cells.is_empty():
 			continue
-		if best_path.is_empty() or path_cells.size() < best_path.size():
+		var cost := path_mp_cost(path_cells)
+		if best_path.is_empty() or cost < best_cost:
 			best_path = path_cells
+			best_cost = cost
 	return best_path
 
 
@@ -226,8 +287,8 @@ func has_path_from(from_cell: Vector2i, target_cell: Vector2i) -> bool:
 	return astar_graph.get_id_path(from_id, to_id).size() > 0
 
 
-# Path that never steps onto another army's cell. Uses BFS so occupancy is
-# respected (AStar is static and does not know about armies).
+# Path that never steps onto another army's cell. Dijkstra over enter-costs so
+# roads are preferred; occupancy is respected (AStar is static).
 func _find_path_cells(from_cell: Vector2i, target_cell: Vector2i) -> Array[Vector2i]:
 	if not _is_walkable_cell(from_cell) or not _is_walkable_cell(target_cell):
 		return []
@@ -238,25 +299,38 @@ func _find_path_cells(from_cell: Vector2i, target_cell: Vector2i) -> Array[Vecto
 		return [from_cell]
 
 	var came_from: Dictionary = {}
-	var frontier: Array[Vector2i] = [from_cell]
+	var cost_so_far: Dictionary = {from_cell: 0}
+	var frontier: Array = [[0, from_cell]]
 	came_from[from_cell] = from_cell  # sentinel: start maps to itself
 	var found := false
 	while not frontier.is_empty():
-		var current: Vector2i = frontier.pop_front()
+		var best_i := 0
+		var best_cost: int = frontier[0][0]
+		for i in range(1, frontier.size()):
+			if int(frontier[i][0]) < best_cost:
+				best_cost = int(frontier[i][0])
+				best_i = i
+		var item: Array = frontier.pop_at(best_i)
+		var cost: int = int(item[0])
+		var current: Vector2i = item[1]
+		if cost > int(cost_so_far.get(current, 0x7FFFFFFF)):
+			continue
 		if current == target_cell:
 			found = true
 			break
 		for dir_variant in EDGE_DIRS:
 			var dir: Vector2i = dir_variant
 			var n: Vector2i = current + dir
-			if came_from.has(n):
-				continue
 			if not walkable_cells.has(n):
 				continue
 			if occupancy.has(n) and n != from_cell:
 				continue
+			var next_cost: int = cost + enter_cost(n)
+			if cost_so_far.has(n) and int(cost_so_far[n]) <= next_cost:
+				continue
+			cost_so_far[n] = next_cost
 			came_from[n] = current
-			frontier.append(n)
+			frontier.append([next_cost, n])
 
 	if not found:
 		return []
@@ -377,17 +451,17 @@ func _render_path_preview(path_cells: Array[Vector2i]) -> void:
 	if path_cells.is_empty():
 		return
 	current_path = path_cells
-	var reachable_steps: int = min(selected_army.movement_left, path_cells.size() - 1)
+	var stop_i: int = _farthest_affordable_index(path_cells, selected_army.movement_left)
 
-	for i in range(0, reachable_steps + 1):
+	for i in range(0, stop_i + 1):
 		path_line.add_point(base_map.to_local(_get_cell_center_global(path_cells[i])))
 	# Out-of-range remainder, dimmed (shows where the army would continue later).
-	if reachable_steps < path_cells.size() - 1:
-		for i in range(reachable_steps, path_cells.size()):
+	if stop_i < path_cells.size() - 1:
+		for i in range(stop_i, path_cells.size()):
 			rest_line.add_point(base_map.to_local(_get_cell_center_global(path_cells[i])))
 
 	if reachable_overlay != null:
-		reachable_overlay.set_stop_cell(path_cells[reachable_steps])
+		reachable_overlay.set_stop_cell(path_cells[stop_i])
 
 
 func _confirm_move() -> bool:
@@ -462,25 +536,28 @@ func confirm_move_to_army(target: Node2D) -> bool:
 func _execute_move_along_path(garrison_building: Node, target_army: Node2D) -> bool:
 	if selected_army == null or current_path.size() < 2:
 		return false
-	var reachable_steps: int = mini(selected_army.movement_left, current_path.size() - 1)
-	if reachable_steps <= 0:
+	var stop_i: int = _farthest_affordable_index(current_path, selected_army.movement_left)
+	if stop_i <= 0:
 		return false  # no movement points left this turn
 
 	# Never end on a tile occupied by another army (path should already avoid
 	# this; clamp as a safety net).
 	var army := selected_army
-	while reachable_steps > 0:
-		var candidate: Vector2i = current_path[reachable_steps]
+	while stop_i > 0:
+		var candidate: Vector2i = current_path[stop_i]
 		if occupancy.has(candidate) and occupancy[candidate] != army:
-			reachable_steps -= 1
+			stop_i -= 1
 			continue
 		break
-	if reachable_steps <= 0:
+	if stop_i <= 0:
 		return false
 
-	var end_cell: Vector2i = current_path[reachable_steps]
+	var end_cell: Vector2i = current_path[stop_i]
+	var spent_mp := 0
+	for i in range(1, stop_i + 1):
+		spent_mp += enter_cost(current_path[i])
 	var army_name := String(army.name)
-	var remaining_mp = army.movement_left - reachable_steps
+	var remaining_mp = army.movement_left - spent_mp
 
 	# Moving onto a building's approach with MP left to spend: open the garrison
 	# transfer UI once the move applies (avoids a second click that only shows
@@ -499,7 +576,7 @@ func _execute_move_along_path(garrison_building: Node, target_army: Node2D) -> b
 	# Pathfinding and the building Area2D can both receive this click. After we
 	# deselect, a second pass would open the empty building info card — block it.
 	base_map.suppress_building_click_this_frame()
-	base_map.request_army_move.rpc_id(1, army_name, end_cell.x, end_cell.y, reachable_steps)
+	base_map.request_army_move.rpc_id(1, army_name, end_cell.x, end_cell.y, spent_mp)
 	# Army teleports under the cursor on call_local; suppress the follow-up
 	# Area2D click on this same frame so the Army Menu does not reopen.
 	base_map.suppress_army_click_this_frame()

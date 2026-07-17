@@ -15,7 +15,7 @@ const ECON_SUBTYPE_FOR_LABOR := {
 
 var resources
 
-@export var p_name = "Gondor"
+@export var p_name = "Mordor"
 @export var player_owner = 1
 @export var home_province = false
 var dejure
@@ -388,6 +388,7 @@ func add_player_horses(player_id: int, amount: int) -> void:
 	var h := ensure_holding(player_id)
 	h["horses"] = maxi(0, int(h.get("horses", 0)) + amount)
 	_sync_weapons_horses_total()
+	_refresh_horse_field_visuals()
 
 
 func _sync_weapons_horses_total() -> void:
@@ -502,9 +503,9 @@ func set_labor_category(player_id: int, category: String, amount: int, season: i
 		others += int(labor.get(cat, 0))
 	var remaining := maxi(0, pop - others)
 	var cap := labor_category_cap(player_id, category, season)
-	# Grain/horses in winter have cap 0 — force 0. Economy always has building cap.
+	# Grain fields idle in winter (cap 0). Horse pastures stay workable year-round.
 	var max_v := remaining
-	if category in ["grain", "horses"]:
+	if category == "grain":
 		max_v = mini(remaining, cap) if season != 0 else 0
 	else:
 		max_v = mini(remaining, cap)
@@ -712,11 +713,40 @@ func grain_labor_required(player_id: int, season: int) -> int:
 	return count_planted_grain_fields(player_id) * GlobalUnits.PEOPLE_PER_GRAIN_FIELD
 
 
-func horse_labor_required(player_id: int, season: int) -> int:
-	if season == 0: # WINTER — nobody works fields
-		return 0
-	var pastures := count_fields_by_crop(player_id, 2) # CROP.HORSES
-	return pastures * GlobalUnits.PEOPLE_PER_HORSE_FIELD
+func get_horse_pasture_fields(player_id: int) -> Array:
+	var out: Array = []
+	for f in get_fields_for_player(player_id):
+		if int(f.crop) == 2: # CROP.HORSES
+			out.append(f)
+	out.sort_custom(func(a, b): return String(a.name) < String(b.name))
+	return out
+
+
+## Fill pastures in order up to HORSES_PER_FIELD; leftover stock stays off-field.
+## Returns Array of {"field": Node, "horses": int} for every horse pasture.
+func distribute_horses_to_pastures(player_id: int) -> Array:
+	var pastures := get_horse_pasture_fields(player_id)
+	var remaining := get_player_horses(player_id)
+	var cap := GlobalUnits.HORSES_PER_FIELD
+	var out: Array = []
+	for f in pastures:
+		var put := mini(remaining, cap)
+		out.append({"field": f, "horses": put})
+		remaining -= put
+	return out
+
+
+func count_occupied_horse_fields(player_id: int) -> int:
+	var n := 0
+	for entry in distribute_horses_to_pastures(player_id):
+		if int(entry.get("horses", 0)) > 0:
+			n += 1
+	return n
+
+
+func horse_labor_required(player_id: int, _season: int) -> int:
+	# Labor scales with pastures that actually host horses (not empty designations).
+	return count_occupied_horse_fields(player_id) * GlobalUnits.PEOPLE_PER_HORSE_FIELD
 
 
 func total_labor_required(player_id: int, season: int) -> int:
@@ -780,7 +810,7 @@ func get_holding_summary(player_id: int, season: int) -> Dictionary:
 		"has_silver": economy_worker_cap(player_id, "silver") > 0,
 		"has_blacksmith": economy_worker_cap(player_id, "blacksmith") > 0,
 		"has_grain_work": count_planted_grain_fields(player_id) > 0 or count_fields_by_crop(player_id, 1) > 0,
-		"has_horse_work": count_fields_by_crop(player_id, 2) > 0,
+		"has_horse_work": count_occupied_horse_fields(player_id) > 0,
 	}
 
 
@@ -1087,21 +1117,10 @@ func _tick_holding_agriculture(player_id: int, ended_season: int, new_season: in
 	elif ended_season != 0:
 		_apply_neglect_visuals(player_id, 1.0)
 
-	# Foals in spring/summer/autumn when pastures cared for and stock has horses.
-	if ended_season != 0:
-		var horse_need: int = alloc["horse_need"]
-		var pastures := count_fields_by_crop(player_id, 2)
-		if pastures > 0 and get_player_horses(player_id) >= 1:
-			var horse_cov := 1.0
-			if horse_need > 0:
-				horse_cov = clampf(float(alloc["horse_workers"]) / float(horse_need), 0.0, 1.0)
-			if horse_cov > 0.0:
-				var foals := 0
-				for _i in pastures:
-					if rng.randf() <= horse_cov:
-						foals += rng.randi_range(GlobalUnits.FOAL_MIN, GlobalUnits.FOAL_MAX)
-				if foals > 0:
-					add_player_horses(player_id, foals)
+	# Foals every season (incl. winter): per occupied pasture from fill × labor.
+	var foals := _roll_foals_for_holding(player_id, int(alloc["horse_workers"]), rng)
+	if foals > 0:
+		add_player_horses(player_id, foals)
 
 	# Harvest when leaving autumn → entering winter.
 	if ended_season == 3 and new_season == 0: # AUTUMN → WINTER
@@ -1126,7 +1145,51 @@ func _apply_neglect_visuals(player_id: int, coverage: float) -> void:
 		planted[i].neglected = i >= active_n
 
 
+func _roll_foals_for_holding(player_id: int, horse_workers: int, rng: RandomNumberGenerator) -> int:
+	var occupied: Array = []
+	for entry in distribute_horses_to_pastures(player_id):
+		if int(entry.get("horses", 0)) > 0:
+			occupied.append(entry)
+	if occupied.is_empty():
+		return 0
+	var people_per := float(horse_workers) / float(occupied.size())
+	var foals := 0
+	var cap := float(GlobalUnits.HORSES_PER_FIELD)
+	var need := float(GlobalUnits.PEOPLE_PER_HORSE_FIELD)
+	for entry in occupied:
+		var fill := clampf(float(entry["horses"]) / cap, 0.0, 1.0)
+		var labor := clampf(people_per / need, 0.0, 1.0)
+		var eff := fill * labor
+		if eff >= GlobalUnits.FOAL_EFF_HIGH:
+			foals += rng.randi_range(GlobalUnits.FOAL_HIGH_MIN, GlobalUnits.FOAL_HIGH_MAX)
+		elif eff >= GlobalUnits.FOAL_EFF_MID:
+			foals += rng.randi_range(GlobalUnits.FOAL_MID_MIN, GlobalUnits.FOAL_MID_MAX)
+	return foals
+
+
+func _apply_horse_display_counts() -> void:
+	for f in fields.get_children():
+		if f.get("display_horses") != null:
+			f.display_horses = 0
+	for pid in get_holding_controllers():
+		for entry in distribute_horses_to_pastures(pid):
+			var f = entry.get("field")
+			if f != null and is_instance_valid(f):
+				f.display_horses = int(entry.get("horses", 0))
+
+
+func _refresh_horse_field_visuals() -> void:
+	_apply_horse_display_counts()
+	var season := 0
+	if base_map != null and base_map.get("season") != null:
+		season = int(base_map.season)
+	for f in fields.get_children():
+		if int(f.get("crop")) == 2 and f.has_method("update_visuals_for_season"):
+			f.update_visuals_for_season(season)
+
+
 func refresh_field_visuals(season: int) -> void:
+	_apply_horse_display_counts()
 	for f in fields.get_children():
 		if f.has_method("update_visuals_for_season"):
 			f.update_visuals_for_season(season)

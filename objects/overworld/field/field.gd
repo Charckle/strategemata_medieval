@@ -12,6 +12,8 @@ enum CROP { EMPTY, GRAIN, HORSES }
 var planted: bool = false
 ## Visual-only: underworked grain fields look idle but keep their crop assignment.
 var neglected: bool = false
+## Visual-only: horses placed on this pasture after holding stock is distributed.
+var display_horses: int = 0
 
 @onready var field_sprite: Sprite2D = $field_sprite
 
@@ -46,6 +48,8 @@ func set_crop(new_crop: int, season: int) -> void:
 	neglected = false
 	if not staying_sown:
 		planted = false
+	if crop != CROP.HORSES:
+		display_horses = 0
 	update_visuals_for_season(season)
 
 
@@ -86,6 +90,14 @@ func update_for_growth() -> void:
 
 
 func change_sprite() -> void:
+	if field_sprite == null:
+		return
+	if crop == CROP.HORSES:
+		if display_horses > 0:
+			field_sprite.texture = preload("uid://b0d4fpwlqrylg") # field_horse_occupied
+		else:
+			field_sprite.texture = preload("uid://bq8885n2ex0eh") # field_horse_occupied_empty
+		return
 	var textures := {
 		GROWN_STAGES.EMPTY: preload("uid://pg7qvgiwn0ld"),
 		GROWN_STAGES.WINTER: preload("uid://4rt1ci43b6h7"),
@@ -93,5 +105,4 @@ func change_sprite() -> void:
 		GROWN_STAGES.SUMMER: preload("uid://kjuwmnlo8gk0"),
 		GROWN_STAGES.AUTUMN: preload("uid://bxrkdfvsesd0s")
 	}
-	if field_sprite != null:
-		field_sprite.texture = textures[grown_stage]
+	field_sprite.texture = textures[grown_stage]

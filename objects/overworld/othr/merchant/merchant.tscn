@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" path="res://objects/overworld/othr/merchant/merchant.gd" id="1_script"]
 [ext_resource type="Texture2D" uid="uid://hyku2irqn8sl" path="res://sprites/overworld/objects/province/economy/base_ground_economy.png" id="2_ground"]
-[ext_resource type="Texture2D" uid="uid://c43brywdf0lxo" path="res://sprites/overworld/objects/province/economy/woodcutter/woodcutter.png" id="3_spr"]
+[ext_resource type="Texture2D" path="res://sprites/overworld/objects/province/merchant/merchant.png" id="3_spr"]
 [ext_resource type="Script" uid="uid://c8bldclick2xyzq" path="res://objects/overworld/othr/building_clickable.gd" id="4_clk"]
 
 [sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_m"]
@@ -18,7 +18,6 @@ texture = ExtResource("2_ground")
 
 [node name="building_spr" type="Sprite2D" parent="."]
 position = Vector2(32, 12)
-modulate = Color(1, 0.9, 0.55, 1)
 texture = ExtResource("3_spr")
 
 [node name="Area2D" type="Area2D" parent="."]

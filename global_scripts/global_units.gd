@@ -106,13 +106,20 @@ const MATERIAL_MARK_PRICES := {
 
 # --- Fields / agriculture ---------------------------------------------------
 # Plant winter (costs GRAIN_SEED_PER_FIELD from holding stock). Labor scales with
-# planted fields. Harvest when leaving autumn. Horses: pasture + stock + labor → foals.
+# planted fields. Harvest when leaving autumn.
+# Horses: each pasture hosts up to HORSES_PER_FIELD; labor need is per occupied
+# pasture; foals scale with (horses/cap)×(workers/need) every season incl. winter.
 const GRAIN_SEED_PER_FIELD := 5
 const GRAIN_YIELD_PER_FIELD := 80
 const PEOPLE_PER_GRAIN_FIELD := 8
-const PEOPLE_PER_HORSE_FIELD := 5
-const FOAL_MIN := 1
-const FOAL_MAX := 3
+const PEOPLE_PER_HORSE_FIELD := 10
+const HORSES_PER_FIELD := 20
+const FOAL_EFF_HIGH := 0.75
+const FOAL_EFF_MID := 0.25
+const FOAL_HIGH_MIN := 2
+const FOAL_HIGH_MAX := 5
+const FOAL_MID_MIN := 1
+const FOAL_MID_MAX := 3
 const STARTING_GRAIN := 40
 
 # Labor category keys shared by fields + economy.

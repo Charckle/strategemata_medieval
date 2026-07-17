@@ -158,18 +158,40 @@ func update_for_stage() -> void:
 
 
 func change_sprite() -> void:
+	# Ground pad is always the shared economy base; deposit/building art sits on building_spr.
 	if ground != null:
 		ground.visible = true
-	if stage == STAGES.EMPTY:
-		if building_spr != null:
-			building_spr.visible = false
-		return
+		ground.texture = preload("uid://hyku2irqn8sl")
 	if building_spr == null:
+		return
+	var unbuilt := stage == STAGES.EMPTY or stage == STAGES.RAZED
+	if unbuilt:
+		var deposit_tex := _unbuilt_deposit_texture()
+		if deposit_tex != null:
+			building_spr.visible = true
+			building_spr.texture = deposit_tex
+		else:
+			building_spr.visible = false
 		return
 	building_spr.visible = true
 	var textures := {
 		SUBTYPES.WOODCUTTER: {STAGES.SMALL: preload("uid://c43brywdf0lxo")},
 		SUBTYPES.STONEQUARRY: {STAGES.SMALL: preload("uid://ft668a4yuq1k")},
+		SUBTYPES.BLACKSMITH: {
+			STAGES.SMALL: preload("uid://cyg7nwmf3kopv"),
+			STAGES.MEDIUM: preload("uid://cyg7nwmf3kopv"),
+			STAGES.BIG: preload("uid://cyg7nwmf3kopv"),
+		},
+		SUBTYPES.IRONMINE: {
+			STAGES.SMALL: preload("uid://cuidag43bhr3p"),
+			STAGES.MEDIUM: preload("uid://cuidag43bhr3p"),
+			STAGES.BIG: preload("uid://cuidag43bhr3p"),
+		},
+		SUBTYPES.SILVERMINE: {
+			STAGES.SMALL: preload("uid://bwmwh435mm4nd"),
+			STAGES.MEDIUM: preload("uid://bwmwh435mm4nd"),
+			STAGES.BIG: preload("uid://bwmwh435mm4nd"),
+		},
 	}
 	var subtype_tex: Dictionary = textures.get(subtype, {})
 	var tex = subtype_tex.get(stage, subtype_tex.get(STAGES.SMALL, null))
@@ -177,6 +199,20 @@ func change_sprite() -> void:
 		building_spr.texture = tex
 	else:
 		building_spr.texture = preload("uid://c43brywdf0lxo")
+
+
+func _unbuilt_deposit_texture() -> Texture2D:
+	if slot_kind != SLOT_KIND.DEPOSIT:
+		return null
+	match deposit_type:
+		DEPOSIT_TYPE.STONE:
+			return preload("uid://bur7n2w0ha3lc")
+		DEPOSIT_TYPE.IRON:
+			return preload("uid://dcu7coff4tvb")
+		DEPOSIT_TYPE.SILVER:
+			return preload("uid://cf1w5fxqumsj1")
+		_:
+			return null
 
 
 func get_subtype_name() -> String:
