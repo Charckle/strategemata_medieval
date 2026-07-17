@@ -81,6 +81,20 @@ const WEAPON_PRICE_STRENGTH_MULT := 4
 # When 2+ merchants share a province, prices drop by this fraction.
 const MERCHANT_COMPETITION_DISCOUNT := 0.15
 
+# Sellsword hire price = unit strength * count * this (tweak later).
+const SELLSWORD_PRICE_STRENGTH_MULT := 5
+const SELLSWORD_STACK_MIN := 50
+const SELLSWORD_STACK_MAX := 200
+# Hireable types (no peasants).
+const SELLSWORD_UNIT_POOL := [
+	UNIT_TYPE.MACEMEN,
+	UNIT_TYPE.PIKEMEN,
+	UNIT_TYPE.ARCHER,
+	UNIT_TYPE.SWORDSMEN,
+	UNIT_TYPE.CROSSBOWMEN,
+	UNIT_TYPE.KNIGHTS,
+]
+
 # Weapon key -> unit type whose strength sets the mark price.
 const WEAPON_PRICE_UNIT := {
 	"maces": UNIT_TYPE.MACEMEN,
@@ -220,6 +234,50 @@ func weapon_mark_price_discounted(key: String, competition: bool) -> int:
 	if not competition:
 		return base
 	return int(floor(float(base) * (1.0 - MERCHANT_COMPETITION_DISCOUNT)))
+
+
+## Marks to hire one sellsword stack (strength × mult × count).
+func sellsword_stack_mark_price(type_: int, count: int) -> int:
+	if count <= 0:
+		return 0
+	return unit_strength(type_) * SELLSWORD_PRICE_STRENGTH_MULT * count
+
+
+## Total marks for a sellsword offer Array of { "type", "count" }.
+func sellsword_offer_mark_price(offer: Array) -> int:
+	var total := 0
+	for entry in offer:
+		total += sellsword_stack_mark_price(
+			int(entry.get("type", UNIT_TYPE.PEASANT)),
+			int(entry.get("count", 0))
+		)
+	return total
+
+
+## Roll a hire offer: 50%/30%/20% → 1/2/3 unique types; each stack 50–200 men.
+func roll_sellsword_offer(rng: RandomNumberGenerator) -> Array:
+	var roll := rng.randf()
+	var n_types := 1
+	if roll < 0.50:
+		n_types = 1
+	elif roll < 0.80:
+		n_types = 2
+	else:
+		n_types = 3
+	n_types = mini(n_types, SELLSWORD_UNIT_POOL.size())
+	var pool: Array = SELLSWORD_UNIT_POOL.duplicate()
+	var ordered: Array = []
+	while not pool.is_empty():
+		var idx := rng.randi() % pool.size()
+		ordered.append(pool[idx])
+		pool.remove_at(idx)
+	var offer: Array = []
+	for i in n_types:
+		offer.append({
+			"type": int(ordered[i]),
+			"count": rng.randi_range(SELLSWORD_STACK_MIN, SELLSWORD_STACK_MAX),
+		})
+	return offer
 
 
 func empty_material_stock() -> Dictionary:

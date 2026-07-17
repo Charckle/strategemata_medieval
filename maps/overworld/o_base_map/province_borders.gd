@@ -103,10 +103,12 @@ func _rebuild_province_territory(provinces: Node, ml: TileMapLayer, walkable: Di
 						owner_of[cell] = prov
 						frontier.append(cell)
 					_dist[cell] = 0
-	# Merchants also claim their tile so blocked camps don't punch territory holes.
-	var merchants = base_map.get_node_or_null("merchants")
-	if merchants != null:
-		for m in merchants.get_children():
+	# Merchants / sellswords also claim their tile so blocked camps don't punch territory holes.
+	for container_name in ["merchants", "sellswords"]:
+		var camps = base_map.get_node_or_null(container_name)
+		if camps == null:
+			continue
+		for m in camps.get_children():
 			var prov = m.get("province")
 			if prov == null or not is_instance_valid(prov):
 				continue

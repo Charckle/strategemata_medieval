@@ -60,10 +60,15 @@ var weapon_shipments: Array = []
 const ARMY_FIGURE_SCENE := preload("res://objects/overworld/army/army_map_unit/armiy_figure.tscn")
 const MERCHANT_SCENE := preload("res://objects/overworld/othr/merchant/merchant.tscn")
 const MERCHANT_COUNT := 2
+const SELLSWORDS_SCENE := preload("res://objects/overworld/othr/sellswords/sellswords.tscn")
+const SELLSWORDS_SPAWN_CHANCE := 0.10
+const SELLSWORDS_DOUBLE_CHANCE := 0.10
+const SELLSWORDS_MAX_PER_PROVINCE := 2
 
 @onready var provinces = $provinces
 @onready var armies = $armies
 @onready var merchants = $merchants
+@onready var sellswords = $sellswords
 @onready var camera: Camera2D = $Camera2D
 @onready var pathfinding = $pathfinding
 @onready var province_labels = $ProvinceLabels
@@ -74,6 +79,7 @@ const MERCHANT_COUNT := 2
 # province Node -> Array[Node] of bordering provinces (built once after borders).
 var province_neighbors: Dictionary = {}
 var _next_merchant_id: int = 1
+var _next_sellswords_id: int = 1
 
 # Building info popup: hover this long (seconds) before the transient popup shows.
 const BUILDING_HOVER_DELAY := 2.0
@@ -131,7 +137,8 @@ func initialize_map() -> void:
 	province_borders.rebuild()
 	build_province_neighbors()
 	spawn_merchants()
-	# Merchants seed territory; refresh borders after placement.
+	spawn_sellswords_initial()
+	# Camps seed territory; refresh borders after placement.
 	province_borders.rebuild()
 	build_province_neighbors()
 	_sync_initial_province_focus()
@@ -2050,6 +2057,9 @@ func on_building_clicked(building: Node2D) -> bool:
 	if building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.MERCHANT:
 		_on_merchant_clicked(building)
 		return true
+	if building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.SELLSWORDS:
+		_on_sellswords_clicked(building)
+		return true
 	if building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.FIELD:
 		if gui_node.has_method("show_field_popup"):
 			gui_node.show_field_popup(self, building)
@@ -2079,6 +2089,14 @@ func _on_merchant_clicked(merchant: Node2D) -> void:
 	gui_node.open_merchant_shop(self, merchant)
 
 
+func _on_sellswords_clicked(band: Node2D) -> void:
+	var prov = band.get("province")
+	if prov == null or not prov.has_method("has_dejure") or not prov.has_dejure(my_pl_id):
+		gui_node.show_info_popup("Only the de jure owner can hire these sellswords")
+		return
+	gui_node.open_sellswords_hire(self, band)
+
+
 func _building_display_name(b: Node2D) -> String:
 	if b.get("type_") != null:
 		match b.type_:
@@ -2087,6 +2105,7 @@ func _building_display_name(b: Node2D) -> String:
 			GlobalStuff.BUILDING_TYPE.CASTLE: return "Castle"
 			GlobalStuff.BUILDING_TYPE.FIELD: return "Field"
 			GlobalStuff.BUILDING_TYPE.MERCHANT: return "Merchant"
+			GlobalStuff.BUILDING_TYPE.SELLSWORDS: return "Sellswords"
 			GlobalStuff.BUILDING_TYPE.ECONOMY:
 				if b.has_method("get_subtype_name"):
 					return b.get_subtype_name()
@@ -2105,6 +2124,21 @@ func _building_display_body(b: Node2D) -> String:
 		lines.append("Staying: %d season(s)" % int(b.get("seasons_left")))
 		if merchant_competition_in_province(prov):
 			lines.append("Competition: 15% discount")
+		return "\n".join(lines)
+	if b.get("type_") != null and b.type_ == GlobalStuff.BUILDING_TYPE.SELLSWORDS:
+		var prov_ss = b.get("province")
+		var pname_ss := "Unknown"
+		if prov_ss != null and prov_ss.get("p_name") != null:
+			pname_ss = str(prov_ss.p_name)
+		lines.append("Province: %s" % pname_ss)
+		lines.append("Staying: %d season(s)" % int(b.get("seasons_left")))
+		var offer: Array = b.get("offer") if b.get("offer") != null else []
+		for entry in offer:
+			var ut := int(entry.get("type", GlobalUnits.UNIT_TYPE.PEASANT))
+			var cnt := int(entry.get("count", 0))
+			var cost := GlobalUnits.sellsword_stack_mark_price(ut, cnt)
+			lines.append("%d %s — %d marks" % [cnt, GlobalUnits.unit_name(ut), cost])
+		lines.append("Total: %d marks" % GlobalUnits.sellsword_offer_mark_price(offer))
 		return "\n".join(lines)
 	if b.get("type_") != null and b.type_ == GlobalStuff.BUILDING_TYPE.FIELD:
 		var owner_name := "Unowned"
@@ -3322,6 +3356,198 @@ func apply_buy_from_merchant(
 		update_menus()
 
 
+# --- Sellswords -------------------------------------------------------------
+
+func sellswords_count_in_province(prov: Node) -> int:
+	if prov == null or sellswords == null:
+		return 0
+	var n := 0
+	for s in sellswords.get_children():
+		if s.get("province") == prov:
+			n += 1
+	return n
+
+
+func spawn_sellswords_initial() -> void:
+	if sellswords == null:
+		return
+	while sellswords.get_child_count() > 0:
+		var child = sellswords.get_child(0)
+		sellswords.remove_child(child)
+		child.free()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0x53454C4C  # "SELL"
+	_roll_sellswords_spawns(rng)
+
+
+func tick_sellswords() -> void:
+	if sellswords == null:
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(turn) ^ 0x53454C4C
+	# Expire first so a province can roll a new band the same season.
+	var ordered: Array = sellswords.get_children()
+	ordered.sort_custom(func(a, b) -> bool: return String(a.name) < String(b.name))
+	var to_remove: Array = []
+	for s in ordered:
+		if int(s.seasons_left) > 0:
+			s.seasons_left = int(s.seasons_left) - 1
+		if int(s.seasons_left) <= 0:
+			to_remove.append(s)
+	for s in to_remove:
+		_remove_sellswords_band(s)
+	_roll_sellswords_spawns(rng)
+
+
+func _roll_sellswords_spawns(rng: RandomNumberGenerator) -> void:
+	var prov_list: Array = provinces.get_children()
+	prov_list.sort_custom(func(a, b) -> bool: return String(a.name) < String(b.name))
+	for prov in prov_list:
+		if sellswords_count_in_province(prov) > 0:
+			continue
+		if rng.randf() >= SELLSWORDS_SPAWN_CHANCE:
+			continue
+		var want := SELLSWORDS_MAX_PER_PROVINCE if rng.randf() < SELLSWORDS_DOUBLE_CHANCE else 1
+		for _i in want:
+			var cells := get_free_walkable_cells_in_province(prov)
+			if cells.is_empty():
+				break
+			_spawn_sellswords_at(prov, cells[rng.randi() % cells.size()], rng)
+
+
+func _spawn_sellswords_at(prov: Node, cell: Vector2i, rng: RandomNumberGenerator) -> Node:
+	var s = SELLSWORDS_SCENE.instantiate()
+	s.name = "sellswords_%d" % _next_sellswords_id
+	_next_sellswords_id += 1
+	s.base_map = self
+	sellswords.add_child(s)
+	s.place_at_cell(cell, prov)
+	s.roll_stay(rng)
+	s.roll_offer(rng)
+	if not pathfinding.block_cell_for_object(cell, s):
+		push_warning("Failed to block cell for sellswords at %s" % str(cell))
+	return s
+
+
+func _remove_sellswords_band(s: Node) -> void:
+	if s == null or not is_instance_valid(s):
+		return
+	pathfinding.unblock_object(s)
+	var parent := s.get_parent()
+	if parent != null:
+		parent.remove_child(s)
+	s.queue_free()
+
+
+func get_sellswords_by_id(band_id: String) -> Node:
+	if sellswords == null:
+		return null
+	return sellswords.get_node_or_null(band_id)
+
+
+func do_hire_sellswords(band_id: String) -> void:
+	var s := get_sellswords_by_id(band_id)
+	if s == null:
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Sellswords not found")
+		return
+	var prov = s.get("province")
+	if prov == null or not prov.has_method("has_dejure") or not prov.has_dejure(my_pl_id):
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Only the de jure owner can hire these sellswords")
+		return
+	var offer: Array = s.get("offer") if s.get("offer") != null else []
+	var total_cost := GlobalUnits.sellsword_offer_mark_price(offer)
+	if total_cost <= 0 or offer.is_empty():
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Nothing to hire")
+		return
+	var marks := int(players[my_pl_id].game_data.get("marks", 0))
+	if marks < total_cost:
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Not enough marks (need %d)" % total_cost)
+		return
+	request_hire_sellswords.rpc_id(1, band_id, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_hire_sellswords(band_id: String, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	if not players.has(player_id):
+		return
+	var s := get_sellswords_by_id(band_id)
+	if s == null:
+		return
+	var prov = s.get("province")
+	if prov == null or not prov.has_method("has_dejure") or not prov.has_dejure(player_id):
+		return
+	var offer: Array = s.get("offer") if s.get("offer") != null else []
+	if offer.is_empty():
+		return
+	var total_cost := GlobalUnits.sellsword_offer_mark_price(offer)
+	if total_cost <= 0:
+		return
+	var marks := int(players[player_id].game_data.get("marks", 0))
+	if marks < total_cost:
+		return
+	var cell: Vector2i = s.cell
+	if cell.x == 0x7FFFFFFF:
+		return
+	_next_runtime_force += 1
+	var new_id := "rt_%d" % _next_runtime_force
+	# Deep-copy offer for the RPC payload.
+	var offer_copy: Array = []
+	for entry in offer:
+		offer_copy.append({
+			"type": int(entry.get("type", GlobalUnits.UNIT_TYPE.PEASANT)),
+			"count": int(entry.get("count", 0)),
+		})
+	apply_hire_sellswords.rpc(band_id, player_id, offer_copy, total_cost, new_id, cell.x, cell.y)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_hire_sellswords(
+	band_id: String,
+	player_id: int,
+	offer: Array,
+	total_cost: int,
+	new_id: String,
+	cell_x: int,
+	cell_y: int
+) -> void:
+	var s := get_sellswords_by_id(band_id)
+	if s == null:
+		return
+	if not players.has(player_id):
+		return
+	var marks := int(players[player_id].game_data.get("marks", 0))
+	if marks < total_cost:
+		return
+	var units: Array = []
+	for entry in offer:
+		var cnt := int(entry.get("count", 0))
+		if cnt <= 0:
+			continue
+		GlobalUnits.add_stack(units, GlobalUnits.make_stack(
+			int(entry.get("type", GlobalUnits.UNIT_TYPE.PEASANT)),
+			player_id,
+			GlobalUnits.SOURCE.SELLSWORD,
+			cnt
+		))
+	if units.is_empty():
+		return
+	players[player_id].game_data["marks"] = marks - total_cost
+	_remove_sellswords_band(s)
+	# -1 = full effective MP for the hired band this turn.
+	_spawn_army_figure(new_id, units, Vector2i(cell_x, cell_y), -1, player_id)
+	if is_instance_valid(gui_node):
+		if player_id == my_pl_id:
+			gui_node.update_money(players[my_pl_id].game_data["marks"])
+		update_menus()
+	update_all_army_visuals()
+
+
 # --- Province weapons / levy ------------------------------------------------
 
 func find_province_for_cell(cell: Vector2i) -> Node:
@@ -3775,6 +4001,10 @@ func get_objects_with_pathfinding_blocked_tiles() -> Array:
 		for m in merchants.get_children():
 			if m.has_method("get_pathfinding_blocked_tile_centers"):
 				result.append(m)
+	if sellswords != null:
+		for s in sellswords.get_children():
+			if s.has_method("get_pathfinding_blocked_tile_centers"):
+				result.append(s)
 	return result
 
 
@@ -3855,6 +4085,7 @@ func calculate_new_turn_game_data():
 	tick_razed_buildings()
 	clear_expired_raid_smoke()
 	tick_merchants()
+	tick_sellswords()
 	# Season already bumped; apply agriculture for the season that just ended.
 	tick_all_agriculture()
 	#calculate and then display the new data

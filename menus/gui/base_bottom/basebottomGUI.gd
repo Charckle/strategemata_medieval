@@ -87,6 +87,14 @@ var _ms_weapon_spinboxes: Dictionary = {}  # weapon key -> SpinBox
 var _ms_material_spinboxes: Dictionary = {}  # material key -> SpinBox
 var _ms_competition := false
 
+# Sellswords hire panel (all-or-nothing).
+var _ss_panel: PanelContainer = null
+var _ss_info_lbl: Label = null
+var _ss_body: VBoxContainer = null
+var _ss_total_lbl: Label = null
+var _ss_base = null
+var _ss_band: Node = null
+
 var _info_popup: PopupPanel = null
 var _info_popup_label: Label = null
 
@@ -755,6 +763,7 @@ func close_all_popups() -> void:
 	_close_recruit_menu()
 	_close_ship_menu()
 	_close_merchant_shop()
+	_close_sellswords_hire()
 	for menu in [map_menu, economy_menu, war_menu, msg_menu, settings_menu]:
 		if menu != null:
 			menu.visible = false
@@ -3793,3 +3802,114 @@ func _on_merchant_buy_confirm() -> void:
 		show_info_popup("Select items to buy")
 		return
 	base.do_buy_from_merchant(merchant_id, weapons, materials)
+
+
+# --- Sellswords hire --------------------------------------------------------
+
+func _ensure_sellswords_hire() -> void:
+	if _ss_panel != null:
+		return
+	_ss_panel = PanelContainer.new()
+	_ss_panel.top_level = true
+	_ss_panel.z_index = 140
+	_ss_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_ss_panel.visible = false
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var header := HBoxContainer.new()
+	var title := Label.new()
+	title.text = "Sellswords"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 16)
+	header.add_child(title)
+	var close_btn := Button.new()
+	close_btn.text = "✕"
+	close_btn.pressed.connect(_close_sellswords_hire)
+	header.add_child(close_btn)
+	vbox.add_child(header)
+	_ss_info_lbl = Label.new()
+	_ss_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_ss_info_lbl.custom_minimum_size = Vector2(320, 0)
+	vbox.add_child(_ss_info_lbl)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 120)
+	_ss_body = VBoxContainer.new()
+	_ss_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ss_body.add_theme_constant_override("separation", 4)
+	scroll.add_child(_ss_body)
+	vbox.add_child(scroll)
+	_ss_total_lbl = Label.new()
+	_ss_total_lbl.text = "Total: 0 marks"
+	vbox.add_child(_ss_total_lbl)
+	var btn_row := HBoxContainer.new()
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel_btn.pressed.connect(_close_sellswords_hire)
+	btn_row.add_child(cancel_btn)
+	var hire_btn := Button.new()
+	hire_btn.text = "Hire"
+	hire_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hire_btn.pressed.connect(_on_sellswords_hire_confirm)
+	btn_row.add_child(hire_btn)
+	vbox.add_child(btn_row)
+	margin.add_child(vbox)
+	_ss_panel.add_child(margin)
+	add_child(_ss_panel)
+
+
+func open_sellswords_hire(base_map: Node, band: Node) -> void:
+	_ensure_sellswords_hire()
+	_ss_base = base_map
+	_ss_band = band
+	var prov = band.get("province")
+	var pname := "Province"
+	if prov != null and prov.get("p_name") != null:
+		pname = str(prov.p_name)
+	var marks := 0
+	if base_map.players.has(base_map.my_pl_id):
+		marks = int(base_map.players[base_map.my_pl_id].game_data.get("marks", 0))
+	var stay := int(band.get("seasons_left")) if band.get("seasons_left") != null else 0
+	_ss_info_lbl.text = "Hiring in %s.\nYour marks: %d\nStaying: %d season(s)" % [pname, marks, stay]
+
+	for child in _ss_body.get_children():
+		child.queue_free()
+	var offer: Array = band.get("offer") if band.get("offer") != null else []
+	var total := 0
+	for entry in offer:
+		var ut := int(entry.get("type", GlobalUnits.UNIT_TYPE.PEASANT))
+		var cnt := int(entry.get("count", 0))
+		var cost := GlobalUnits.sellsword_stack_mark_price(ut, cnt)
+		total += cost
+		var row := Label.new()
+		row.text = "%d %s — %d marks" % [cnt, GlobalUnits.unit_name(ut), cost]
+		_ss_body.add_child(row)
+	_ss_total_lbl.text = "Total: %d marks (all or nothing)" % total
+
+	_ss_panel.visible = true
+	_ss_panel.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_ss_panel.size = Vector2(minf(420, vp.x * 0.9), minf(320, vp.y * 0.75))
+	_ss_panel.position = (vp - _ss_panel.size) * 0.5
+
+
+func _close_sellswords_hire() -> void:
+	if _ss_panel != null:
+		_ss_panel.visible = false
+	_ss_base = null
+	_ss_band = null
+
+
+func _on_sellswords_hire_confirm() -> void:
+	var base = _ss_base
+	var band = _ss_band
+	var band_id := ""
+	if band != null:
+		band_id = String(band.name)
+	_close_sellswords_hire()
+	if base == null or band_id == "":
+		return
+	base.do_hire_sellswords(band_id)

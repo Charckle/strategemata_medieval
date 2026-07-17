@@ -35,6 +35,10 @@ window/size/viewport_height=720
 window/stretch/mode="viewport"
 window/stretch/aspect="expand"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/map_painter/plugin.cfg")
+
 [gui]
 
 theme/custom="res://menus/themes/ui_theme.tres"

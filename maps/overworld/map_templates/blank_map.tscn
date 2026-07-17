@@ -1,0 +1,15 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="PackedScene" uid="uid://6ytluejirihy" path="res://maps/overworld/o_base_map/o_base_map.tscn" id="1_base"]
+[ext_resource type="TileSet" uid="uid://dp6okpca82gwy" path="res://sprites/overworld/map_tiles/summer/summer_set.tres" id="2_summer"]
+[ext_resource type="TileSet" path="res://sprites/overworld/map_tiles/summer/road/road_set.tres" id="3_road"]
+
+[node name="OBaseMap" instance=ExtResource("1_base")]
+
+[node name="base_layer" type="TileMapLayer" parent="tilemap" index="0"]
+
+[node name="ground_01" type="TileMapLayer" parent="tilemap" index="1"]
+tile_set = ExtResource("2_summer")
+
+[node name="roads" type="TileMapLayer" parent="tilemap" index="2"]
+tile_set = ExtResource("3_road")
