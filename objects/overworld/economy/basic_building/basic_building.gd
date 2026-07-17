@@ -14,6 +14,9 @@ var type_ = GlobalStuff.BUILDING_TYPE.ECONOMY
 @export var stage: STAGES = STAGES.EMPTY
 @export var player_owner = 1
 
+## Blacksmith only: weapon key from GlobalUnits.BLACKSMITH_CRAFTABLE, or "" idle.
+@export var craft_weapon: String = "maces"
+
 const GARRISON_CAPACITY := 50
 @export var start_garrison: Array = []
 
@@ -119,14 +122,35 @@ func apply_build(sub: int, owner_id: int) -> void:
 	subtype = sub as SUBTYPES
 	stage = STAGES.SMALL
 	player_owner = owner_id
+	if int(subtype) == int(SUBTYPES.BLACKSMITH):
+		craft_weapon = "maces"
+	else:
+		craft_weapon = ""
 	update_for_stage()
 	set_flags()
 
 
 func apply_demolish() -> void:
 	stage = STAGES.EMPTY
+	craft_weapon = ""
 	update_for_stage()
 	set_flags()
+
+
+func is_blacksmith() -> bool:
+	return is_built() and int(subtype) == int(SUBTYPES.BLACKSMITH)
+
+
+func set_craft_weapon(weapon_key: String) -> void:
+	if weapon_key != "" and weapon_key not in GlobalUnits.BLACKSMITH_CRAFTABLE:
+		return
+	craft_weapon = weapon_key
+
+
+func get_craft_weapon() -> String:
+	if not is_blacksmith():
+		return ""
+	return craft_weapon
 
 
 func update_for_stage() -> void:

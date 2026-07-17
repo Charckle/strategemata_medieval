@@ -4,7 +4,7 @@ class_name GameEvents
 ## Shared helpers for the global event log + per-player message inbox.
 ## Events are plain Dictionaries so they survive RPC / JSON.
 
-enum KIND { BATTLE, JOIN, BUILDING_CAPTURE }
+enum KIND { BATTLE, JOIN, BUILDING_CAPTURE, VIP }
 
 const INBOX_CAP := 30
 
@@ -16,6 +16,7 @@ static func kind_name(kind: int) -> String:
 		KIND.BATTLE: return "Battle"
 		KIND.JOIN: return "Join offer"
 		KIND.BUILDING_CAPTURE: return "Building"
+		KIND.VIP: return "VIP"
 	return "Event"
 
 
@@ -31,6 +32,17 @@ static func inbox_label(event: Dictionary, reader_id: int) -> String:
 			if reader_id == int(event.get("new_owner", -1)):
 				return "Building captured — %s" % place
 			return "Building lost — %s" % place
+		KIND.VIP:
+			var vk := str(event.get("vip_kind", ""))
+			if vk == "sword":
+				return "VIP executed"
+			if vk == "trade_propose":
+				return "Trade offer received"
+			if vk == "trade_reject":
+				return "Trade rejected"
+			if vk == "trade_accept":
+				return "Trade completed"
+			return "VIP"
 	return kind_name(int(event.get("kind", -1)))
 
 
@@ -44,6 +56,17 @@ static func report_title(event: Dictionary, reader_id: int) -> String:
 			if reader_id == int(event.get("new_owner", -1)):
 				return "Building captured"
 			return "Building lost"
+		KIND.VIP:
+			match str(event.get("vip_kind", "")):
+				"trade_propose":
+					return "Trade offer"
+				"trade_reject":
+					return "Trade rejected"
+				"trade_accept":
+					return "Trade completed"
+				"sword":
+					return "VIP executed"
+			return "VIP report"
 	return "Status report"
 
 
@@ -63,6 +86,12 @@ static func report_body(event: Dictionary, reader_id: int, player_name_cb: Calla
 			lines.append_array(_join_body(event))
 		KIND.BUILDING_CAPTURE:
 			lines.append_array(_building_body(event, reader_id, player_name_cb))
+		KIND.VIP:
+			var txt := str(event.get("text", ""))
+			if txt != "":
+				lines.append(txt)
+			else:
+				lines.append("VIP update.")
 		_:
 			lines.append("No details available.")
 	return "\n".join(lines)

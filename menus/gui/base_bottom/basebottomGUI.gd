@@ -9,6 +9,8 @@ extends CanvasLayer
 @onready var msg_list := $msg_menu/margin/vbox/tabs/Inbox/ScrollContainer/msg_list
 @onready var msg_empty_lbl := $msg_menu/margin/vbox/tabs/Inbox/empty_lbl
 @onready var show_province_names_chk := $settings_menu/margin/vbox/tabs/Gameplay/show_province_names_row/show_province_names_chk
+@onready var map_tabs := $map_menu/margin/vbox/tabs
+@onready var minimap := $map_menu/margin/vbox/tabs/Map/Minimap
 
 @onready var parent_n = get_parent()
 
@@ -19,12 +21,12 @@ extends CanvasLayer
 @onready var overview_population_lbl := $economy_menu/margin/vbox/tabs/overview/population_lbl
 @onready var provinces_list_container := $economy_menu/margin/vbox/tabs/all_provinces/ScrollContainer/provinces_list
 @onready var province_tab_name := $economy_menu/margin/vbox/tabs/province/province_name_lbl
-@onready var province_tab_status := $economy_menu/margin/vbox/tabs/province/status_lbl
-@onready var province_tab_owner := $economy_menu/margin/vbox/tabs/province/owner_lbl
-@onready var province_tab_defacto := $economy_menu/margin/vbox/tabs/province/defacto_lbl
-@onready var province_tab_dejure := $economy_menu/margin/vbox/tabs/province/dejure_lbl
-@onready var province_tab_population := $economy_menu/margin/vbox/tabs/province/population_prov_lbl
-@onready var province_tab_income := $economy_menu/margin/vbox/tabs/province/income_prov_lbl
+@onready var province_tab_status := $economy_menu/margin/vbox/tabs/province/info_grid/status_lbl
+@onready var province_tab_owner := $economy_menu/margin/vbox/tabs/province/info_grid/owner_lbl
+@onready var province_tab_defacto := $economy_menu/margin/vbox/tabs/province/info_grid/defacto_lbl
+@onready var province_tab_dejure := $economy_menu/margin/vbox/tabs/province/info_grid/dejure_lbl
+@onready var province_tab_population := $economy_menu/margin/vbox/tabs/province/info_grid/population_prov_lbl
+@onready var province_tab_income := $economy_menu/margin/vbox/tabs/province/info_grid/income_prov_lbl
 @onready var province_tab_villages := $economy_menu/margin/vbox/tabs/province/buildings_grid/villages_val
 @onready var province_tab_towns := $economy_menu/margin/vbox/tabs/province/buildings_grid/towns_val
 @onready var province_tab_castles := $economy_menu/margin/vbox/tabs/province/buildings_grid/castles_val
@@ -32,9 +34,20 @@ extends CanvasLayer
 @onready var province_tab_root := $economy_menu/margin/vbox/tabs/province
 
 @onready var alliances_list := $war_menu/margin/vbox/tabs/Alliances/ScrollContainer/alliances_list
+@onready var diplomacy_list := $war_menu/margin/vbox/tabs/Diplomacy/ScrollContainer/diplomacy_list
 
 var selected_province_id: String = ""
 var _refreshing_alliances := false
+
+# VIP trade UI (War → Diplomacy tab / runtime panels).
+var _vt_panel: PanelContainer = null
+var _vt_body: VBoxContainer = null
+var _vt_base = null
+var _vt_to_pid: int = -1
+var _vt_offer_vip_checks: Dictionary = {}  # vip_id -> CheckBox
+var _vt_offer_marks_spin: SpinBox = null
+var _vt_request_marks_spin: SpinBox = null
+var _incoming_trade_panel: PanelContainer = null
 
 # Province levy / weapons UI (built under province tab at runtime).
 var _prov_happiness_lbl: Label = null
@@ -106,6 +119,8 @@ var _fm_withdraw_mode := false  # true = guest player peels off only their troop
 var _fm_split_spinboxes: Array = []
 var _fm_left_spinboxes: Array = []
 var _fm_right_spinboxes: Array = []
+var _fm_left_vip_checks: Dictionary = {}  # vip_id -> CheckBox
+var _fm_right_vip_checks: Dictionary = {}
 
 # Building info popup (built at runtime): header with title + X, plus a body.
 var _building_popup: PanelContainer = null
@@ -125,8 +140,13 @@ var _field_popup_field: Node = null
 var _field_popup_base = null
 
 # Province fields / labor UI.
+var _prov_manage_root: VBoxContainer = null
 var _prov_fields_lbl: Label = null
+var _prov_stock_lbl: Label = null
 var _prov_labor_lbl: Label = null
+var _prov_agri_lbl: Label = null
+var _prov_prod_lbl: Label = null
+var _prov_smith_lbl: Label = null
 var _prov_labor_box: VBoxContainer = null
 var _prov_labor_sliders: Dictionary = {} # category -> HSlider
 var _prov_labor_updating := false
@@ -173,6 +193,7 @@ var _er_base = null
 var _er_event_id: String = ""
 
 func _ready() -> void:
+	$Panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	$Panel/map_btn.pressed.connect(_on_map_btn_pressed)
 	$Panel/economy_btn.pressed.connect(_on_economy_btn_pressed)
 	$Panel/war_btn.pressed.connect(_on_war_btn_pressed)
@@ -198,16 +219,89 @@ func _on_show_province_names_toggled(pressed: bool) -> void:
 
 func _on_map_btn_pressed() -> void:
 	_toggle_menu(map_menu)
+	if map_menu.visible:
+		_refresh_minimap()
+
+
+func _refresh_minimap() -> void:
+	# Defer so the Map tab has a real size after the menu shows.
+	_refresh_minimap_deferred.call_deferred()
+
+
+func _refresh_minimap_deferred() -> void:
+	if minimap == null or not is_instance_valid(parent_n):
+		return
+	if map_tabs != null:
+		map_tabs.current_tab = 0
+	if minimap.has_method("rebuild"):
+		minimap.rebuild(parent_n)
 
 
 func _on_economy_btn_pressed() -> void:
+	var opening = not economy_menu.visible
 	_toggle_menu(economy_menu)
+	if opening and economy_menu.visible:
+		_open_economy_on_province()
+
+
+func is_economy_menu_open() -> bool:
+	return economy_menu != null and economy_menu.visible
+
+
+func _open_economy_on_province() -> void:
+	if not is_instance_valid(parent_n):
+		return
+	var pid := ""
+	if parent_n.has_method("resolve_economy_province_focus"):
+		pid = parent_n.resolve_economy_province_focus()
+	selected_province_id = pid
+	economy_tabs.current_tab = 2
+	if parent_n.has_method("set_province_focus") and pid != "":
+		parent_n.set_province_focus(pid, false)
+	update_economy_menu(parent_n)
+
+
+func on_province_focused(province_id: String) -> void:
+	selected_province_id = province_id
+	if not is_economy_menu_open():
+		return
+	economy_tabs.current_tab = 2
+	if is_instance_valid(parent_n):
+		_fill_province_tab(parent_n, province_id)
+
+
+## Screen-space hit test for open menus / popups (Area2D click-through guard).
+func blocks_map_at_mouse() -> bool:
+	var pos := get_viewport().get_mouse_position()
+	for child in get_children():
+		if not (child is Control):
+			continue
+		var c := child as Control
+		if not c.visible or c.mouse_filter == Control.MOUSE_FILTER_IGNORE:
+			continue
+		if c.get_global_rect().has_point(pos):
+			return true
+	return false
+
+
+## True when a menu/popup overlay is open (not the always-on top/bottom chrome).
+func blocks_camera_pan() -> bool:
+	for child in get_children():
+		if not (child is Control):
+			continue
+		if child.name == "Panel" or child.name == "top_panel":
+			continue
+		if (child as Control).visible:
+			return true
+	return false
+
 
 
 func _on_war_btn_pressed() -> void:
 	_toggle_menu(war_menu)
 	if war_menu.visible:
 		refresh_alliances_list()
+		refresh_vip_trade_ui()
 
 
 func _on_settings_btn_pressed() -> void:
@@ -583,6 +677,23 @@ func _rebuild_economy_building_popup() -> void:
 	if _econ_popup_base.players.has(pid):
 		marks = int(_econ_popup_base.players[pid].game_data.get("marks", 0))
 	if b.has_method("is_built") and b.is_built():
+		var owns_building := int(b.get("player_owner")) == pid
+		if b.has_method("is_blacksmith") and b.is_blacksmith() and is_dejure and owns_building:
+			var recipe_lbl := Label.new()
+			recipe_lbl.text = "Craft recipe:"
+			_econ_popup_btns.add_child(recipe_lbl)
+			var current := str(b.get_craft_weapon()) if b.has_method("get_craft_weapon") else ""
+			var idle_btn := Button.new()
+			idle_btn.text = "Idle"
+			idle_btn.disabled = current == ""
+			idle_btn.pressed.connect(_on_econ_recipe_pressed.bind(""))
+			_econ_popup_btns.add_child(idle_btn)
+			for wkey in GlobalUnits.BLACKSMITH_CRAFTABLE:
+				var rbtn := Button.new()
+				rbtn.text = GlobalUnits.blacksmith_recipe_label(str(wkey))
+				rbtn.disabled = current == str(wkey)
+				rbtn.pressed.connect(_on_econ_recipe_pressed.bind(str(wkey)))
+				_econ_popup_btns.add_child(rbtn)
 		if is_dejure:
 			var dem := Button.new()
 			dem.text = "Demolish"
@@ -616,6 +727,13 @@ func _on_econ_demolish_pressed() -> void:
 		return
 	if _econ_popup_base.has_method("do_demolish_economy"):
 		_econ_popup_base.do_demolish_economy(_econ_popup_building)
+
+
+func _on_econ_recipe_pressed(weapon_key: String) -> void:
+	if _econ_popup_base == null or _econ_popup_building == null:
+		return
+	if _econ_popup_base.has_method("do_set_blacksmith_recipe"):
+		_econ_popup_base.do_set_blacksmith_recipe(_econ_popup_building, weapon_key)
 
 
 # --- Close everything (called on player switch / end-turn) ------------------
@@ -803,6 +921,35 @@ func _rebuild_army_menu() -> void:
 	disband_btn.pressed.connect(_on_am_disband_pressed)
 	_am_body.add_child(disband_btn)
 
+	# VIP slot
+	if _am_base.has_method("get_vips_on_force"):
+		var vip_ids: Array = _am_base.get_vips_on_force(_am_army.force_id)
+		if not vip_ids.is_empty():
+			_am_body.add_child(HSeparator.new())
+			var vip_hdr := Label.new()
+			vip_hdr.text = "VIP"
+			_am_body.add_child(vip_hdr)
+			var ctrl = _am_army.get_controller()
+			for vid in vip_ids:
+				var v: Dictionary = _am_base.get_vip(str(vid))
+				if v.is_empty():
+					continue
+				var row := HBoxContainer.new()
+				var lbl := Label.new()
+				lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				lbl.text = _am_base.vip_display_name(str(vid))
+				var bonus := GlobalVips.role_bonus(int(v.get("role", 0)))
+				if int(v.get("owner", -1)) == ctrl:
+					lbl.text += "  (+%.0f%%)" % (bonus * 100.0)
+				row.add_child(lbl)
+				var owner_id := int(v.get("owner", -1))
+				if ctrl == _am_base.my_pl_id and owner_id != _am_base.my_pl_id:
+					var sword_btn := Button.new()
+					sword_btn.text = "Sword"
+					sword_btn.pressed.connect(_on_am_put_vip_to_sword.bind(str(vid)))
+					row.add_child(sword_btn)
+				_am_body.add_child(row)
+
 	# Captured / hostage actions
 	var special: Array = []
 	for s in units:
@@ -835,6 +982,12 @@ func _rebuild_army_menu() -> void:
 
 	_am_panel.visible = true
 	_fit_army_menu_panel()
+
+
+func _on_am_put_vip_to_sword(vip_id: String) -> void:
+	if _am_base == null or _am_army == null:
+		return
+	_am_base.do_put_vip_to_sword(_am_army.force_id, vip_id)
 
 
 func refresh_army_menu_if_force(force_id: String) -> void:
@@ -1276,6 +1429,13 @@ func _close_force_menu() -> void:
 	_fm_split_spinboxes.clear()
 	_fm_left_spinboxes.clear()
 	_fm_right_spinboxes.clear()
+	_fm_left_vip_checks.clear()
+	_fm_right_vip_checks.clear()
+
+
+func refresh_force_menu_if_open() -> void:
+	if _fm_panel != null and _fm_panel.visible:
+		_rebuild_force_menu()
 
 
 func _fm_left_units() -> Array:
@@ -1479,18 +1639,52 @@ func _collect_out_units(spinbox_entries: Array) -> Array:
 	return out_units
 
 
+func _fm_collect_checked_vips(checks: Dictionary) -> Array:
+	var out: Array = []
+	for vid in checks:
+		var cb: CheckBox = checks[vid]
+		if cb != null and cb.button_pressed:
+			out.append(str(vid))
+	return out
+
+
+func _fm_right_force_id() -> String:
+	if _fm_right_is_garrison:
+		if _fm_base == null or _fm_building == null:
+			return ""
+		# VIP special slot: town FLAT / castle INSIDE (or current spot for men).
+		return _fm_base.garrison_force_id_for(_fm_building, _fm_spot)
+	return _fm_right_id
+
+
+func _fm_building_accepts_vip() -> bool:
+	if not _fm_right_is_garrison or _fm_building == null:
+		return true
+	var type_ = _fm_building.get("type_")
+	if type_ == null:
+		return false
+	return type_ == GlobalStuff.BUILDING_TYPE.TOWN or type_ == GlobalStuff.BUILDING_TYPE.CASTLE
+
+
 func _on_fm_transfer_confirm() -> void:
 	if _fm_base == null or not _fm_base.forces.has(_fm_left_id):
 		return
 
 	var left_to_right := _collect_out_units(_fm_left_spinboxes)
 	var right_to_left := _collect_out_units(_fm_right_spinboxes)
-	if left_to_right.is_empty() and right_to_left.is_empty():
-		show_info_popup("Select at least one unit to transfer")
+	var vips_l2r := _fm_collect_checked_vips(_fm_left_vip_checks)
+	var vips_r2l := _fm_collect_checked_vips(_fm_right_vip_checks)
+	if left_to_right.is_empty() and right_to_left.is_empty() and vips_l2r.is_empty() and vips_r2l.is_empty():
+		show_info_popup("Select at least one unit or VIP to transfer")
+		return
+
+	if (not vips_l2r.is_empty() or not vips_r2l.is_empty()) and _fm_right_is_garrison and not _fm_building_accepts_vip():
+		show_info_popup("VIPs can only be deposited in towns and castles")
 		return
 
 	var base = _fm_base
 	var left_id := _fm_left_id
+	var right_id := _fm_right_force_id()
 
 	if _fm_right_is_garrison:
 		var fig = base.armies.get_node_or_null(left_id)
@@ -1507,6 +1701,10 @@ func _on_fm_transfer_confirm() -> void:
 		if left_men > 0 and left_men < GlobalUnits.MIN_SPLIT_MEN:
 			show_info_popup("Army must keep at least %d men" % GlobalUnits.MIN_SPLIT_MEN)
 			return
+		var left_keeps_vip = base.get_vips_on_force(left_id).size() - vips_l2r.size() + vips_r2l.size()
+		if left_keeps_vip > 0 and left_men < GlobalUnits.MIN_SPLIT_MEN:
+			show_info_popup("Army with a VIP needs at least %d men" % GlobalUnits.MIN_SPLIT_MEN)
+			return
 
 		var cap: int = _fm_building.get_garrison_capacity(_fm_spot)
 		var garrison_men := GlobalUnits.total_men(garrison_after)
@@ -1519,12 +1717,25 @@ func _on_fm_transfer_confirm() -> void:
 			return
 
 		var building_key = base.get_building_key(_fm_building)
+		var bldg = _fm_building
 		_close_force_menu()
-		base.request_batch_garrison_units.rpc_id(1, left_id, building_key, _fm_spot, left_to_right, right_to_left)
+		if not left_to_right.is_empty() or not right_to_left.is_empty():
+			base.request_batch_garrison_units.rpc_id(1, left_id, building_key, _fm_spot, left_to_right, right_to_left)
+		if not vips_l2r.is_empty():
+			var vip_dest = base.garrison_force_id_for(bldg, base.vip_garrison_spot_for(bldg))
+			base.do_transfer_vips(left_id, vip_dest, vips_l2r)
+		if not vips_r2l.is_empty():
+			for vid in vips_r2l:
+				var v: Dictionary = base.get_vip(str(vid))
+				if v.is_empty():
+					continue
+				var src_fid := str(v.get("force_id", ""))
+				if src_fid != "":
+					base.do_transfer_vips(src_fid, left_id, [str(vid)])
 	else:
 		if not base.forces.has(_fm_right_id):
 			return
-		var right_id := _fm_right_id
+		right_id = _fm_right_id
 		var left_after := GlobalUnits.clone_units(_fm_left_units())
 		var right_after := GlobalUnits.clone_units(_fm_right_units())
 		GlobalUnits.subtract_units(left_after, left_to_right)
@@ -1540,9 +1751,22 @@ func _on_fm_transfer_confirm() -> void:
 		if right_men > 0 and right_men < GlobalUnits.MIN_SPLIT_MEN:
 			show_info_popup("Right army must keep at least %d men" % GlobalUnits.MIN_SPLIT_MEN)
 			return
+		var left_keeps = base.get_vips_on_force(left_id).size() - vips_l2r.size() + vips_r2l.size()
+		var right_keeps = base.get_vips_on_force(right_id).size() - vips_r2l.size() + vips_l2r.size()
+		if left_keeps > 0 and left_men < GlobalUnits.MIN_SPLIT_MEN:
+			show_info_popup("Army with a VIP needs at least %d men" % GlobalUnits.MIN_SPLIT_MEN)
+			return
+		if right_keeps > 0 and right_men < GlobalUnits.MIN_SPLIT_MEN:
+			show_info_popup("Army with a VIP needs at least %d men" % GlobalUnits.MIN_SPLIT_MEN)
+			return
 
 		_close_force_menu()
-		base.request_batch_transfer_units.rpc_id(1, left_id, right_id, left_to_right, right_to_left)
+		if not left_to_right.is_empty() or not right_to_left.is_empty():
+			base.request_batch_transfer_units.rpc_id(1, left_id, right_id, left_to_right, right_to_left)
+		if not vips_l2r.is_empty():
+			base.do_transfer_vips(left_id, right_id, vips_l2r)
+		if not vips_r2l.is_empty():
+			base.do_transfer_vips(right_id, left_id, vips_r2l)
 
 
 func _on_fm_split_confirm() -> void:
@@ -1608,42 +1832,83 @@ func _build_force_column(is_left: bool) -> VBoxContainer:
 		var empty := Label.new()
 		empty.text = "(empty)"
 		col.add_child(empty)
-		return col
+	else:
+		var dir_hint := Label.new()
+		dir_hint.text = "→ move right" if is_left else "← move left"
+		col.add_child(dir_hint)
 
-	var dir_hint := Label.new()
-	dir_hint.text = "→ move right" if is_left else "← move left"
-	col.add_child(dir_hint)
+		for stack in units:
+			var row := HBoxContainer.new()
+			var owner_name := ""
+			if _fm_base.players.has(int(stack["owner"])):
+				owner_name = str(_fm_base.players[int(stack["owner"])].name_)
+			var lbl := Label.new()
+			lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			lbl.text = "%d %s [%s]" % [int(stack["count"]), GlobalUnits.unit_name(stack["type"]), owner_name]
+			var st := GlobalUnits.stack_status(stack)
+			if st != GlobalUnits.STATUS.FIGHTING:
+				lbl.text += " (%s)" % GlobalUnits.status_name(st)
+			var spin := SpinBox.new()
+			spin.min_value = 0
+			spin.max_value = int(stack["count"])
+			spin.value = 0
+			spin.step = 1
+			var entry := {"stack": stack.duplicate(), "spin": spin}
+			var all_btn := _make_spin_all_button(spin)
+			if is_left:
+				_fm_left_spinboxes.append(entry)
+				row.add_child(lbl)
+				row.add_child(spin)
+				row.add_child(all_btn)
+			else:
+				_fm_right_spinboxes.append(entry)
+				row.add_child(all_btn)
+				row.add_child(spin)
+				row.add_child(lbl)
+			col.add_child(row)
 
-	for stack in units:
-		var row := HBoxContainer.new()
-		var owner_name := ""
-		if _fm_base.players.has(int(stack["owner"])):
-			owner_name = str(_fm_base.players[int(stack["owner"])].name_)
-		var lbl := Label.new()
-		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		lbl.text = "%d %s [%s]" % [int(stack["count"]), GlobalUnits.unit_name(stack["type"]), owner_name]
-		var st := GlobalUnits.stack_status(stack)
-		if st != GlobalUnits.STATUS.FIGHTING:
-			lbl.text += " (%s)" % GlobalUnits.status_name(st)
-		var spin := SpinBox.new()
-		spin.min_value = 0
-		spin.max_value = int(stack["count"])
-		spin.value = 0
-		spin.step = 1
-		var entry := {"stack": stack.duplicate(), "spin": spin}
-		var all_btn := _make_spin_all_button(spin)
+	# VIP checkboxes (special slot; not capacity).
+	var vip_ids: Array = []
+	if _fm_base.has_method("get_vips_on_force"):
 		if is_left:
-			_fm_left_spinboxes.append(entry)
-			row.add_child(lbl)
-			row.add_child(spin)
-			row.add_child(all_btn)
-		else:
-			_fm_right_spinboxes.append(entry)
-			row.add_child(all_btn)
-			row.add_child(spin)
-			row.add_child(lbl)
-		col.add_child(row)
+			vip_ids = _fm_base.get_vips_on_force(_fm_left_id)
+		elif _fm_right_is_garrison and _fm_building_accepts_vip():
+			vip_ids = _fm_base.get_building_vip_ids(_fm_building)
+		elif not _fm_right_is_garrison:
+			vip_ids = _fm_base.get_vips_on_force(_fm_right_id)
+	if not vip_ids.is_empty() and (is_left or not _fm_right_is_garrison or _fm_building_accepts_vip()):
+		col.add_child(HSeparator.new())
+		var vip_lbl := Label.new()
+		vip_lbl.text = "VIP (check to move)"
+		col.add_child(vip_lbl)
+		for vid in vip_ids:
+			var row := HBoxContainer.new()
+			var cb := CheckBox.new()
+			cb.text = _fm_base.vip_display_name(str(vid))
+			cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			if is_left:
+				_fm_left_vip_checks[str(vid)] = cb
+			else:
+				_fm_right_vip_checks[str(vid)] = cb
+			row.add_child(cb)
+			var v: Dictionary = _fm_base.get_vip(str(vid))
+			var owner_id := int(v.get("owner", -1))
+			var holder := int(_fm_base.holder_of_vip(str(vid)))
+			if holder == _fm_base.my_pl_id and owner_id != _fm_base.my_pl_id:
+				var sword_btn := Button.new()
+				sword_btn.text = "Sword"
+				var src_fid := str(v.get("force_id", ""))
+				sword_btn.pressed.connect(_on_fm_put_vip_to_sword.bind(src_fid, str(vid)))
+				row.add_child(sword_btn)
+			col.add_child(row)
 	return col
+
+
+func _on_fm_put_vip_to_sword(force_id: String, vip_id: String) -> void:
+	if _fm_base == null:
+		return
+	_fm_base.do_put_vip_to_sword(force_id, vip_id)
+	_rebuild_force_menu()
 
 
 func _fm_force_label(fid: String, _unused: bool) -> String:
@@ -1723,6 +1988,259 @@ func _on_alliance_toggled(pressed: bool, other_id: int) -> void:
 	parent_n.do_set_alliance(other_id, pressed)
 
 
+# --- VIP trade (War → Diplomacy tab) ----------------------------------------
+
+func refresh_vip_trade_ui() -> void:
+	if diplomacy_list == null:
+		return
+	for child in diplomacy_list.get_children():
+		diplomacy_list.remove_child(child)
+		child.queue_free()
+	var base = parent_n
+	if not is_instance_valid(base) or not base.has_method("get_pending_vip_trades_for"):
+		return
+
+	var title := Label.new()
+	title.text = "VIP Trade"
+	title.add_theme_font_size_override("font_size", 16)
+	diplomacy_list.add_child(title)
+
+	var hint := Label.new()
+	hint.text = "Offer VIPs you hold and/or marks. Request marks in return. Offers last until the receiver ends their turn."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(360, 0)
+	diplomacy_list.add_child(hint)
+
+	var others: Array = base.get_playing_players_except(base.my_pl_id) if base.has_method("get_playing_players_except") else []
+	for pid in others:
+		var row := HBoxContainer.new()
+		var pname = base.player_display_name(int(pid))
+		var lbl := Label.new()
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl.text = pname
+		var btn := Button.new()
+		btn.text = "Propose trade"
+		btn.pressed.connect(_open_vip_trade_composer.bind(int(pid)))
+		row.add_child(lbl)
+		row.add_child(btn)
+		diplomacy_list.add_child(row)
+
+	diplomacy_list.add_child(HSeparator.new())
+	var pend_lbl := Label.new()
+	pend_lbl.text = "Pending offers"
+	diplomacy_list.add_child(pend_lbl)
+
+	var trades: Array = base.get_pending_vip_trades_for(base.my_pl_id)
+	if trades.is_empty():
+		var empty := Label.new()
+		empty.text = "(none)"
+		diplomacy_list.add_child(empty)
+	else:
+		for t in trades:
+			var from_pid := int(t.get("from", -1))
+			var to_pid := int(t.get("to", -1))
+			var tid := str(t.get("id", ""))
+			var line := Label.new()
+			var vip_txt := ""
+			for vid in t.get("offer_vip_ids", []):
+				if vip_txt != "":
+					vip_txt += ", "
+				vip_txt += base.vip_display_name(str(vid))
+			if vip_txt == "":
+				vip_txt = "(no VIP)"
+			line.text = "%s → %s: offer %s + %d marks, request %d marks" % [
+				base.player_display_name(from_pid),
+				base.player_display_name(to_pid),
+				vip_txt,
+				int(t.get("offer_marks", 0)),
+				int(t.get("request_marks", 0)),
+			]
+			line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			line.custom_minimum_size = Vector2(360, 0)
+			diplomacy_list.add_child(line)
+			if to_pid == base.my_pl_id:
+				var brow := HBoxContainer.new()
+				var accept := Button.new()
+				accept.text = "Accept"
+				var still_holds := true
+				for vid in t.get("offer_vip_ids", []):
+					if not base.player_holds_vip(from_pid, str(vid)):
+						still_holds = false
+						break
+				if not still_holds:
+					accept.disabled = true
+					accept.text = "Player no longer possesses the VIP"
+				else:
+					accept.pressed.connect(_on_vip_trade_respond.bind(tid, true))
+				var reject := Button.new()
+				reject.text = "Reject"
+				reject.pressed.connect(_on_vip_trade_respond.bind(tid, false))
+				brow.add_child(accept)
+				brow.add_child(reject)
+				diplomacy_list.add_child(brow)
+
+
+func _open_vip_trade_composer(to_pid: int) -> void:
+	_ensure_vip_trade_panel()
+	_vt_base = parent_n
+	_vt_to_pid = to_pid
+	_rebuild_vip_trade_composer()
+	_vt_panel.visible = true
+
+
+func _ensure_vip_trade_panel() -> void:
+	if _vt_panel != null:
+		return
+	_vt_panel = PanelContainer.new()
+	_vt_panel.top_level = true
+	_vt_panel.z_index = 150
+	_vt_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_vt_panel.visible = false
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var header := HBoxContainer.new()
+	var title := Label.new()
+	title.text = "Propose VIP trade"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.pressed.connect(func(): _vt_panel.visible = false)
+	header.add_child(title)
+	header.add_child(close_btn)
+	_vt_body = VBoxContainer.new()
+	vbox.add_child(header)
+	vbox.add_child(_vt_body)
+	margin.add_child(vbox)
+	_vt_panel.add_child(margin)
+	add_child(_vt_panel)
+
+
+func _rebuild_vip_trade_composer() -> void:
+	if _vt_body == null or _vt_base == null:
+		return
+	for c in _vt_body.get_children():
+		_vt_body.remove_child(c)
+		c.queue_free()
+	_vt_offer_vip_checks.clear()
+
+	var to_name = _vt_base.player_display_name(_vt_to_pid)
+	var hdr := Label.new()
+	hdr.text = "Trade with %s" % to_name
+	_vt_body.add_child(hdr)
+
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 16)
+
+	var offer_col := VBoxContainer.new()
+	offer_col.custom_minimum_size = Vector2(220, 0)
+	var offer_h := Label.new()
+	offer_h.text = "Your offer"
+	offer_col.add_child(offer_h)
+	var held: Array = []
+	for vid in _vt_base.vips:
+		if _vt_base.player_holds_vip(_vt_base.my_pl_id, str(vid)):
+			held.append(str(vid))
+	if held.is_empty():
+		var none := Label.new()
+		none.text = "(no VIPs held)"
+		offer_col.add_child(none)
+	else:
+		for vid in held:
+			var cb := CheckBox.new()
+			cb.text = _vt_base.vip_display_name(vid)
+			_vt_offer_vip_checks[vid] = cb
+			offer_col.add_child(cb)
+	var om_row := HBoxContainer.new()
+	var om_lbl := Label.new()
+	om_lbl.text = "Marks:"
+	_vt_offer_marks_spin = SpinBox.new()
+	_vt_offer_marks_spin.min_value = 0
+	_vt_offer_marks_spin.max_value = int(_vt_base.players[_vt_base.my_pl_id].game_data.get("marks", 0))
+	_vt_offer_marks_spin.step = 10
+	om_row.add_child(om_lbl)
+	om_row.add_child(_vt_offer_marks_spin)
+	offer_col.add_child(om_row)
+
+	var req_col := VBoxContainer.new()
+	req_col.custom_minimum_size = Vector2(220, 0)
+	var req_h := Label.new()
+	req_h.text = "Your request"
+	req_col.add_child(req_h)
+	var rm_row := HBoxContainer.new()
+	var rm_lbl := Label.new()
+	rm_lbl.text = "Marks:"
+	_vt_request_marks_spin = SpinBox.new()
+	_vt_request_marks_spin.min_value = 0
+	_vt_request_marks_spin.max_value = 999999
+	_vt_request_marks_spin.step = 10
+	rm_row.add_child(rm_lbl)
+	rm_row.add_child(_vt_request_marks_spin)
+	req_col.add_child(rm_row)
+	var req_note := Label.new()
+	req_note.text = "(VIPs can only be offered, not requested)"
+	req_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	req_note.custom_minimum_size = Vector2(200, 0)
+	req_col.add_child(req_note)
+
+	cols.add_child(offer_col)
+	cols.add_child(VSeparator.new())
+	cols.add_child(req_col)
+	_vt_body.add_child(cols)
+
+	var send := Button.new()
+	send.text = "Send proposal"
+	send.pressed.connect(_on_vip_trade_send)
+	_vt_body.add_child(send)
+
+	_vt_panel.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_vt_panel.size = _vt_panel.get_combined_minimum_size()
+	_vt_panel.position = (vp - _vt_panel.size) * 0.5
+
+
+func _on_vip_trade_send() -> void:
+	if _vt_base == null:
+		return
+	var offer_vips: Array = []
+	for vid in _vt_offer_vip_checks:
+		if _vt_offer_vip_checks[vid].button_pressed:
+			offer_vips.append(vid)
+	var offer_marks := int(_vt_offer_marks_spin.value) if _vt_offer_marks_spin != null else 0
+	var request_marks := int(_vt_request_marks_spin.value) if _vt_request_marks_spin != null else 0
+	if offer_vips.is_empty() and offer_marks <= 0:
+		show_info_popup("Offer at least a VIP or marks")
+		return
+	_vt_base.do_propose_vip_trade(_vt_to_pid, offer_vips, offer_marks, request_marks)
+	_vt_panel.visible = false
+	refresh_vip_trade_ui()
+
+
+func _on_vip_trade_respond(trade_id: String, accept: bool) -> void:
+	if not is_instance_valid(parent_n):
+		return
+	parent_n.do_respond_vip_trade(trade_id, accept)
+	refresh_vip_trade_ui()
+
+
+func on_vip_trade_proposed(base_map, _trade_id: String) -> void:
+	if war_menu != null and war_menu.visible:
+		refresh_vip_trade_ui()
+	if is_instance_valid(base_map) and has_method("refresh_msg_button"):
+		refresh_msg_button()
+	if is_instance_valid(base_map) and has_method("refresh_msg_list_if_open"):
+		refresh_msg_list_if_open()
+
+
+func on_vip_trade_resolved(_base_map, _trade_id: String, _accepted: bool, _reason: String) -> void:
+	if war_menu != null and war_menu.visible:
+		refresh_vip_trade_ui()
+	if is_instance_valid(parent_n) and parent_n.has_method("update_visuals_and_stats"):
+		parent_n.update_visuals_and_stats()
+
+
 func update_economy_menu(base_map: Node) -> void:
 	if not is_instance_valid(base_map) or not base_map.has_method("get_player_overview_data"):
 		return
@@ -1766,56 +2284,178 @@ func update_economy_menu(base_map: Node) -> void:
 
 	if selected_province_id != "":
 		_fill_province_tab(base_map, selected_province_id)
+	elif base_map.has_method("resolve_economy_province_focus"):
+		selected_province_id = base_map.resolve_economy_province_focus()
+		if selected_province_id != "":
+			_fill_province_tab(base_map, selected_province_id)
 
 
 func _on_province_list_clicked(province_id: String) -> void:
 	selected_province_id = province_id
 	economy_tabs.current_tab = 2
+	if is_instance_valid(parent_n) and parent_n.has_method("set_province_focus"):
+		parent_n.set_province_focus(province_id, true)
 	if is_instance_valid(parent_n) and parent_n.has_method("get_province_data"):
 		_fill_province_tab(parent_n, province_id)
+
+
+func _make_prov_section_label(initial: String) -> Label:
+	var lbl := Label.new()
+	lbl.text = initial
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	return lbl
 
 
 func _ensure_province_levy_widgets() -> void:
 	if _prov_happiness_lbl != null or province_tab_root == null:
 		return
-	province_tab_root.add_child(HSeparator.new())
-	_prov_fields_lbl = Label.new()
-	_prov_fields_lbl.text = "Fields: —"
-	_prov_fields_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	province_tab_root.add_child(_prov_fields_lbl)
-	_prov_labor_lbl = Label.new()
-	_prov_labor_lbl.text = "Labor: —"
-	_prov_labor_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	province_tab_root.add_child(_prov_labor_lbl)
-	_prov_labor_box = VBoxContainer.new()
-	_prov_labor_box.add_theme_constant_override("separation", 4)
-	province_tab_root.add_child(_prov_labor_box)
-	province_tab_root.add_child(HSeparator.new())
+	province_tab_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	province_tab_root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+	_prov_manage_root = VBoxContainer.new()
+	_prov_manage_root.add_theme_constant_override("separation", 6)
+	_prov_manage_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	_prov_manage_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_prov_manage_root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	province_tab_root.add_child(_prov_manage_root)
+	_prov_manage_root.add_child(HSeparator.new())
+
+	var columns := HBoxContainer.new()
+	columns.add_theme_constant_override("separation", 20)
+	columns.mouse_filter = Control.MOUSE_FILTER_STOP
+	columns.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	columns.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_prov_manage_root.add_child(columns)
+
+	# Left: holding status + levy.
+	var left := VBoxContainer.new()
+	left.add_theme_constant_override("separation", 6)
+	left.mouse_filter = Control.MOUSE_FILTER_STOP
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.size_flags_stretch_ratio = 1.0
+	left.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	columns.add_child(left)
+
+	_prov_fields_lbl = _make_prov_section_label("Fields: —")
+	left.add_child(_prov_fields_lbl)
+	_prov_stock_lbl = _make_prov_section_label("Stock: —")
+	left.add_child(_prov_stock_lbl)
+	left.add_child(HSeparator.new())
+	_prov_agri_lbl = _make_prov_section_label("Agriculture: —")
+	left.add_child(_prov_agri_lbl)
+	_prov_prod_lbl = _make_prov_section_label("Next season production: —")
+	left.add_child(_prov_prod_lbl)
+	_prov_smith_lbl = _make_prov_section_label("Blacksmith: —")
+	left.add_child(_prov_smith_lbl)
+	left.add_child(HSeparator.new())
 	_prov_happiness_lbl = Label.new()
 	_prov_happiness_lbl.text = "Happiness: —"
-	province_tab_root.add_child(_prov_happiness_lbl)
+	_prov_happiness_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	left.add_child(_prov_happiness_lbl)
 	_prov_levy_lbl = Label.new()
 	_prov_levy_lbl.text = "Levy: —"
-	province_tab_root.add_child(_prov_levy_lbl)
+	_prov_levy_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	left.add_child(_prov_levy_lbl)
 	_prov_weapons_lbl = Label.new()
 	_prov_weapons_lbl.text = "Weapons: —"
 	_prov_weapons_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	province_tab_root.add_child(_prov_weapons_lbl)
+	_prov_weapons_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	left.add_child(_prov_weapons_lbl)
 	_prov_shipments_lbl = Label.new()
 	_prov_shipments_lbl.text = ""
 	_prov_shipments_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	province_tab_root.add_child(_prov_shipments_lbl)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
+	_prov_shipments_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	left.add_child(_prov_shipments_lbl)
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 8)
+	actions.mouse_filter = Control.MOUSE_FILTER_STOP
 	_prov_recruit_btn = Button.new()
 	_prov_recruit_btn.text = "Recruit army"
 	_prov_recruit_btn.pressed.connect(_on_province_recruit_pressed)
-	row.add_child(_prov_recruit_btn)
+	actions.add_child(_prov_recruit_btn)
 	_prov_ship_btn = Button.new()
 	_prov_ship_btn.text = "Ship weapons"
 	_prov_ship_btn.pressed.connect(_on_province_ship_pressed)
-	row.add_child(_prov_ship_btn)
-	province_tab_root.add_child(row)
+	actions.add_child(_prov_ship_btn)
+	left.add_child(actions)
+
+	# Right: labor pool + sliders.
+	var right := VBoxContainer.new()
+	right.add_theme_constant_override("separation", 8)
+	right.mouse_filter = Control.MOUSE_FILTER_STOP
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right.size_flags_stretch_ratio = 1.35
+	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	columns.add_child(right)
+
+	_prov_labor_lbl = _make_prov_section_label("Labor pool: —")
+	right.add_child(_prov_labor_lbl)
+	var labor_scroll := ScrollContainer.new()
+	labor_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	labor_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	labor_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	labor_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	right.add_child(labor_scroll)
+	_prov_labor_box = VBoxContainer.new()
+	_prov_labor_box.add_theme_constant_override("separation", 6)
+	_prov_labor_box.mouse_filter = Control.MOUSE_FILTER_STOP
+	_prov_labor_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	labor_scroll.add_child(_prov_labor_box)
+
+
+func _blacksmith_status_text(preview: Dictionary, holding: Dictionary) -> String:
+	if not bool(holding.get("has_blacksmith", false)):
+		return "Blacksmith: (none in this holding)"
+	var smith: Dictionary = preview.get("blacksmith", {})
+	var workers := int(smith.get("workers", 0))
+	var cap := int(smith.get("worker_cap", 0))
+	var crafts := int(smith.get("crafts", 0))
+	var labor_crafts := int(smith.get("labor_crafts", 0))
+	var free_slots := int(smith.get("free_slots", 0))
+	var people_per := int(smith.get("people_per_weapon", 1))
+	var bottleneck := str(smith.get("bottleneck", "ok"))
+	var craft_bits: PackedStringArray = []
+	var weapons_prev: Dictionary = preview.get("weapons", {})
+	for wk in GlobalUnits.BLACKSMITH_CRAFTABLE:
+		var amt := int(weapons_prev.get(wk, 0))
+		if amt > 0:
+			craft_bits.append("%d %s" % [amt, GlobalUnits.weapon_name(str(wk))])
+	var craft_txt := (", ".join(craft_bits)) if not craft_bits.is_empty() else "nothing"
+	var lines: PackedStringArray = []
+	lines.append("Blacksmith: %d / %d workers · next season crafts %s" % [workers, cap, craft_txt])
+	match bottleneck:
+		"none":
+			lines.append("No smith buildings.")
+		"no_workers":
+			lines.append("Idle — assign workers (labor cost depends on recipe).")
+		"idle_recipe":
+			lines.append("Workers assigned but no craft recipe set (open the smith).")
+		"materials":
+			lines.append(
+				"Materials limit crafts: labor could make %d, stock allows %d. Add wood/iron."
+				% [labor_crafts, crafts]
+			)
+		"can_expand":
+			var more_weapons := int(free_slots / people_per)
+			lines.append(
+				"Not at full capacity — %d free slots (~%d more weapons if materials allow)."
+				% [free_slots, more_weapons]
+			)
+		"partial_team":
+			var need := int(smith.get("people_to_next", people_per))
+			lines.append(
+				"Almost another weapon — need %d more worker(s) for the next craft."
+				% need
+			)
+		"full":
+			lines.append("At full labor capacity — production maxed for current recipes/materials.")
+		_:
+			if crafts > 0 and free_slots == 0:
+				lines.append("At full labor capacity.")
+			elif crafts > 0:
+				lines.append("%d free worker slots remain." % free_slots)
+	return "\n".join(lines)
 
 
 func _on_prov_labor_category_changed(category: String, value: float) -> void:
@@ -1835,6 +2475,7 @@ func _labor_category_label(cat: String) -> String:
 		"stone": return "Stone quarries"
 		"iron": return "Iron mines"
 		"silver": return "Silver mines"
+		"blacksmith": return "Blacksmiths"
 	return cat.capitalize()
 
 
@@ -1862,13 +2503,30 @@ func _rebuild_labor_sliders(holding: Dictionary) -> void:
 		show_cats.append("iron")
 	if bool(holding.get("has_silver", false)) or int(caps.get("silver", 0)) > 0:
 		show_cats.append("silver")
+	if bool(holding.get("has_blacksmith", false)) or int(caps.get("blacksmith", 0)) > 0:
+		show_cats.append("blacksmith")
 	_prov_labor_updating = true
 	for cat in show_cats:
-		_add_labor_slider_row(str(cat), labor, caps, pop)
+		_add_labor_slider_row(str(cat), labor, caps, pop, holding)
 	_prov_labor_updating = false
 
 
-func _add_labor_slider_row(cat: String, labor: Dictionary, caps: Dictionary, pop: int) -> void:
+func _labor_slider_panel_style() -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.12, 0.08, 0.05, 0.55)
+	sb.border_color = Color(0.35, 0.25, 0.14, 0.85)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(3)
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 8
+	return sb
+
+
+func _add_labor_slider_row(
+	cat: String, labor: Dictionary, caps: Dictionary, pop: int, holding: Dictionary = {}
+) -> void:
 	var cur := int(labor.get(cat, 0))
 	var cap := int(caps.get(cat, 0))
 	var others := 0
@@ -1877,25 +2535,58 @@ func _add_labor_slider_row(cat: String, labor: Dictionary, caps: Dictionary, pop
 			continue
 		others += int(labor.get(other_cat, 0))
 	var max_v := maxi(0, mini(pop - others, cap))
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
+	var panel := PanelContainer.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_theme_stylebox_override("panel", _labor_slider_panel_style())
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 4)
+	col.mouse_filter = Control.MOUSE_FILTER_STOP
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var lbl := Label.new()
+	lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Show assigned / building-cap; slider max may be lower if people are scarce.
+	var base_txt := "%s %d/%d" % [_labor_category_label(cat), cur, cap]
 	if max_v <= 0 and cap > 0:
-		lbl.text = "%s %d/%d (no free people)" % [_labor_category_label(cat), cur, cap]
-	else:
-		lbl.text = "%s %d/%d" % [_labor_category_label(cat), cur, max_v]
-	lbl.custom_minimum_size.x = 180
+		base_txt += " (no free people)"
+	elif max_v < cap and cur >= max_v:
+		base_txt += " (people cap %d)" % max_v
+	if cat == "blacksmith":
+		var preview: Dictionary = holding.get("economy_preview", {})
+		var smith: Dictionary = preview.get("blacksmith", {})
+		var crafts := int(smith.get("crafts", 0))
+		var free_slots := int(smith.get("free_slots", 0))
+		var bn := str(smith.get("bottleneck", ""))
+		match bn:
+			"full":
+				base_txt += " · full (%d crafts)" % crafts
+			"materials":
+				base_txt += " · materials limit (%d crafts)" % crafts
+			"can_expand":
+				base_txt += " · %d free · %d crafts" % [free_slots, crafts]
+			"idle_recipe":
+				base_txt += " · set recipe"
+			"no_workers":
+				base_txt += " · no workers"
+			_:
+				if cap > 0:
+					base_txt += " · %d crafts" % crafts
+	lbl.text = base_txt
 	var slider := HSlider.new()
 	slider.min_value = 0
 	slider.max_value = maxi(max_v, 0)
 	slider.step = 1
 	slider.value = clampi(cur, 0, max_v)
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.custom_minimum_size.y = 18
 	slider.editable = max_v > 0
 	_connect_labor_slider(slider, cat)
-	row.add_child(lbl)
-	row.add_child(slider)
-	_prov_labor_box.add_child(row)
+	col.add_child(lbl)
+	col.add_child(slider)
+	panel.add_child(col)
+	_prov_labor_box.add_child(panel)
 	_prov_labor_sliders[cat] = slider
 
 
@@ -1914,22 +2605,13 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 		province_tab_defacto.text = "De facto: —"
 		province_tab_dejure.text = "De jure: —"
 		province_tab_population.text = "Population: —"
-		province_tab_income.text = "Predicted income: —"
-		province_tab_villages.text = "— / —"
-		province_tab_towns.text = "— / —"
-		province_tab_castles.text = "— / —"
-		province_tab_economy.text = "— / —"
-		if _prov_happiness_lbl:
-			_prov_happiness_lbl.text = "Happiness: —"
-			_prov_levy_lbl.text = "Levy: —"
-			_prov_weapons_lbl.text = "Weapons: —"
-			_prov_shipments_lbl.text = ""
-			_prov_recruit_btn.visible = false
-			_prov_ship_btn.visible = false
-		if _prov_fields_lbl:
-			_prov_fields_lbl.text = "Fields: —"
-			_prov_labor_lbl.text = "Labor: —"
-			_rebuild_labor_sliders({})
+		province_tab_income.text = "Income: —"
+		province_tab_villages.text = "Villages: — / —"
+		province_tab_towns.text = "Towns: — / —"
+		province_tab_castles.text = "Castles: — / —"
+		province_tab_economy.text = "Economy: — / —"
+		if _prov_manage_root != null:
+			_prov_manage_root.visible = false
 		return
 	province_tab_name.text = data.get("name", "—")
 	province_tab_status.text = "Status: %s" % data.get("status_name", "—")
@@ -1938,31 +2620,44 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	province_tab_dejure.text = "De jure: %s" % data.get("dejure_name", "—")
 	province_tab_population.text = "Population: %s (next: %s)" % [data.get("population_has", 0), data.get("population_will", 0)]
 	if data.get("viewer_has_dejure", false):
-		province_tab_income.text = "Predicted income: %s" % data.get("marks_will", 0)
+		province_tab_income.text = "Income: %s" % data.get("marks_will", 0)
 	else:
-		province_tab_income.text = "Predicted income: 0  (no de jure — no income)"
+		province_tab_income.text = "Income: 0 (no de jure)"
 
 	var v = data.get("villages", {"control": 0, "all": 0})
-	province_tab_villages.text = "%d / %d" % [v.get("control", 0), v.get("all", 0)]
+	province_tab_villages.text = "Villages: %d / %d" % [v.get("control", 0), v.get("all", 0)]
 	var t = data.get("towns", {"control": 0, "all": 0})
-	province_tab_towns.text = "%d / %d" % [t.get("control", 0), t.get("all", 0)]
+	province_tab_towns.text = "Towns: %d / %d" % [t.get("control", 0), t.get("all", 0)]
 	var c = data.get("castles", {"control": 0, "all": 0})
-	province_tab_castles.text = "%d / %d" % [c.get("control", 0), c.get("all", 0)]
+	province_tab_castles.text = "Castles: %d / %d" % [c.get("control", 0), c.get("all", 0)]
 	var e = data.get("economy", {"control": 0, "all": 0})
-	province_tab_economy.text = "%d / %d" % [e.get("control", 0), e.get("all", 0)]
+	province_tab_economy.text = "Economy: %d / %d" % [e.get("control", 0), e.get("all", 0)]
+
+	# Only your holdings / de jure provinces expose management UI.
+	var has_holding := bool(data.get("viewer_has_holding", false))
+	var has_dejure := bool(data.get("viewer_has_dejure", false))
+	var can_manage := has_holding or has_dejure
+	if _prov_manage_root != null:
+		_prov_manage_root.visible = can_manage
+	if not can_manage:
+		return
 
 	var holding: Dictionary = data.get("holding", {})
-	var has_holding := bool(data.get("viewer_has_holding", false))
 	if _prov_fields_lbl != null:
 		if has_holding and not holding.is_empty():
 			var preview: Dictionary = holding.get("economy_preview", {})
 			_prov_fields_lbl.text = (
-				"Fields: %d grain (%d sown), %d horse, %d idle | Stock G%d W%d S%d I%d | Horses %d | Grain pot %.0f"
+				"Fields: %d grain (%d sown), %d horse, %d idle"
 				% [
 					int(holding.get("grain_fields", 0)),
 					int(holding.get("planted_grain", 0)),
 					int(holding.get("horse_fields", 0)),
 					int(holding.get("idle_fields", 0)),
+				]
+			)
+			_prov_stock_lbl.text = (
+				"Stock: grain %d · wood %d · stone %d · iron %d · horses %d · grain pot %.0f"
+				% [
 					int(holding.get("grain_stock", 0)),
 					int(holding.get("wood_stock", 0)),
 					int(holding.get("stone_stock", 0)),
@@ -1973,21 +2668,37 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			)
 			var pop := int(holding.get("population", 0))
 			var assigned := int(holding.get("labor_assigned", 0))
+			_prov_labor_lbl.text = "Labor pool: %d / %d people assigned (sliders below)" % [assigned, pop]
 			var cov := float(holding.get("grain_coverage", 1.0)) * 100.0
-			_prov_labor_lbl.text = (
-				"Labor %d / %d · grain coverage %.0f%% · next season: wood %d stone %d iron %d marks %d"
+			var grain_need := int(holding.get("grain_labor_need", 0))
+			var horse_need := int(holding.get("horse_labor_need", 0))
+			var labor_map: Dictionary = holding.get("labor", {})
+			_prov_agri_lbl.text = (
+				"Agriculture: grain coverage %.0f%% (%d / %d workers) · horse pastures %d / %d workers"
 				% [
-					assigned, pop, cov,
+					cov,
+					int(labor_map.get("grain", 0)), grain_need,
+					int(labor_map.get("horses", 0)), horse_need,
+				]
+			)
+			_prov_prod_lbl.text = (
+				"Next season production: wood %+d · stone %+d · iron %+d · marks %+d"
+				% [
 					int(preview.get("wood", 0)),
 					int(preview.get("stone", 0)),
 					int(preview.get("iron", 0)),
 					int(preview.get("marks", 0)),
 				]
 			)
+			_prov_smith_lbl.text = _blacksmith_status_text(preview, holding)
 			_rebuild_labor_sliders(holding)
 		else:
 			_prov_fields_lbl.text = "Fields: (no settlement holding here)"
-			_prov_labor_lbl.text = "Labor: —"
+			_prov_stock_lbl.text = "Stock: —"
+			_prov_labor_lbl.text = "Labor pool: —"
+			_prov_agri_lbl.text = "Agriculture: —"
+			_prov_prod_lbl.text = "Next season production: —"
+			_prov_smith_lbl.text = "Blacksmith: —"
 			_rebuild_labor_sliders({})
 
 	_prov_happiness_lbl.text = "Happiness: %.0f" % float(data.get("happiness", 100))
@@ -2024,7 +2735,6 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			])
 	_prov_shipments_lbl.text = ("In transit:\n" + "\n".join(ship_lines)) if not ship_lines.is_empty() else ""
 
-	var has_dejure := bool(data.get("viewer_has_dejure", false))
 	_prov_recruit_btn.visible = has_dejure
 	_prov_ship_btn.visible = has_dejure
 

@@ -22,6 +22,13 @@ var alliances := {}
 # the server-authoritative apply_* RPCs below so it stays in sync.
 var forces := {}
 var _next_runtime_force := 0
+
+# VIP registry: vip_id -> { id, role, owner, force_id, alive }
+var vips := {}
+var _next_vip_id := 1
+# Pending VIP trades: trade_id -> { from, to, offer_vip_ids, offer_marks, request_marks }
+var vip_trades := {}
+var _next_vip_trade_id := 1
 # Set when a move click is processed; blocks army Area2D from opening the menu
 # on the same frame after the army teleports under the cursor.
 var _suppress_army_click_frame := -1
@@ -73,6 +80,13 @@ const BUILDING_HOVER_DELAY := 2.0
 var _hover_candidate: Node2D = null
 var _hover_elapsed := 0.0
 
+# Province focus: thick map border + economy Province tab context.
+# sticky_province_id: last building/list pick (preferred when opening economy).
+# focused_province_id: currently highlighted province (camera while menu closed).
+var focused_province_id: String = ""
+var sticky_province_id: String = ""
+var _last_camera_focus_cell := Vector2i(999999, 999999)
+
 func dummy_player_data():
 	players[0] = GlobalStuff.PlayerData.new(0, GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL, 1, 0, "Richard", {"marks": 2500, "people": 0})
 	players[1] = GlobalStuff.PlayerData.new(1, GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL, 1, 1, "William", {"marks": 2500, "people": 0})
@@ -112,6 +126,7 @@ func initialize_map() -> void:
 	# pathfinding
 	pathfinding.initialize()
 	build_forces_registry()
+	seed_starting_vips()
 	refresh_all_building_flags()
 	province_borders.rebuild()
 	build_province_neighbors()
@@ -119,6 +134,91 @@ func initialize_map() -> void:
 	# Merchants seed territory; refresh borders after placement.
 	province_borders.rebuild()
 	build_province_neighbors()
+	_sync_initial_province_focus()
+	refresh_all_vip_crowns()
+
+
+# --- Province focus ---------------------------------------------------------
+
+func _sync_initial_province_focus() -> void:
+	var cam_prov := get_province_at_camera()
+	if cam_prov != null:
+		set_province_focus(String(cam_prov.name), false)
+		return
+	if players.has(my_pl_id):
+		var home_id: String = str(players[my_pl_id].game_data.get("home_province_id", ""))
+		if not home_id.is_empty() and _get_province_by_id(home_id) != null:
+			set_province_focus(home_id, false)
+
+
+func get_province_at_camera() -> Node:
+	if pathfinding == null or pathfinding.map_layer == null or camera == null:
+		return null
+	var ml: TileMapLayer = pathfinding.map_layer
+	var cell: Vector2i = ml.local_to_map(ml.to_local(camera.get_screen_center_position()))
+	return find_province_for_cell(cell)
+
+
+## Sticky (building/list) → camera → last focus → home.
+func resolve_economy_province_focus() -> String:
+	if sticky_province_id != "" and _get_province_by_id(sticky_province_id) != null:
+		return sticky_province_id
+	var cam_prov := get_province_at_camera()
+	if cam_prov != null:
+		return String(cam_prov.name)
+	if focused_province_id != "" and _get_province_by_id(focused_province_id) != null:
+		return focused_province_id
+	if players.has(my_pl_id):
+		var home_id: String = str(players[my_pl_id].game_data.get("home_province_id", ""))
+		if not home_id.is_empty() and _get_province_by_id(home_id) != null:
+			return home_id
+	return ""
+
+
+func set_province_focus(province_id: String, sticky: bool = false) -> void:
+	if sticky and province_id != "":
+		sticky_province_id = province_id
+	if province_id == focused_province_id:
+		return
+	focused_province_id = province_id
+	_notify_province_borders_focus()
+	if is_instance_valid(gui_node) and gui_node.has_method("on_province_focused"):
+		gui_node.on_province_focused(province_id)
+
+
+func _notify_province_borders_focus() -> void:
+	if province_borders == null or not province_borders.has_method("set_focused_province"):
+		return
+	var prov = _get_province_by_id(focused_province_id) if focused_province_id != "" else null
+	province_borders.set_focused_province(prov)
+
+
+func set_sticky_province_from_building(building: Node) -> void:
+	if building == null:
+		return
+	var prov := find_province_for_building(building)
+	if prov == null:
+		prov = building.get("province")
+	if prov == null or not is_instance_valid(prov):
+		return
+	set_province_focus(String(prov.name), true)
+
+
+func _update_camera_province_focus() -> void:
+	if is_instance_valid(gui_node) and gui_node.has_method("is_economy_menu_open") \
+			and gui_node.is_economy_menu_open():
+		return
+	if pathfinding == null or pathfinding.map_layer == null or camera == null:
+		return
+	var ml: TileMapLayer = pathfinding.map_layer
+	var cell: Vector2i = ml.local_to_map(ml.to_local(camera.get_screen_center_position()))
+	if cell == _last_camera_focus_cell:
+		return
+	_last_camera_focus_cell = cell
+	var prov := find_province_for_cell(cell)
+	if prov == null:
+		return  # contested / empty — keep last valid focus
+	set_province_focus(String(prov.name), false)
 
 
 # --- Force registry ---------------------------------------------------------
@@ -188,6 +288,413 @@ func get_force_controller(fid: String) -> int:
 	return -1
 
 
+# --- VIP characters ---------------------------------------------------------
+
+func seed_starting_vips() -> void:
+	vips.clear()
+	_next_vip_id = 1
+	var pids: Array = players.keys()
+	pids.sort()
+	for pid in pids:
+		if int(players[pid].status) != GlobalStuff.PLAYER_STATUS.PLAYING:
+			continue
+		var town := _home_town_for_player(int(pid))
+		if town == null:
+			continue
+		var fid := ensure_building_vip_force(town)
+		for role in [GlobalVips.ROLE.KING, GlobalVips.ROLE.QUEEN, GlobalVips.ROLE.PRINCE]:
+			_alloc_vip(role, int(pid), fid)
+	refresh_all_vip_crowns()
+
+
+func _alloc_vip(role: int, owner_pid: int, force_id: String) -> String:
+	var vid := "vip_%d" % _next_vip_id
+	_next_vip_id += 1
+	vips[vid] = GlobalVips.make_vip(vid, role, owner_pid, force_id)
+	return vid
+
+
+func _home_town_for_player(pid: int) -> Node:
+	if not players.has(pid):
+		return null
+	var home_id: String = str(players[pid].game_data.get("home_province_id", ""))
+	var prov = _get_province_by_id(home_id) if home_id != "" else null
+	if prov != null:
+		var sett = prov.get_node_or_null("settlements")
+		if sett != null:
+			for s in sett.get_children():
+				if s.get("type_") != null and s.type_ == GlobalStuff.BUILDING_TYPE.TOWN \
+						and int(s.player_owner) == pid:
+					return s
+			for s in sett.get_children():
+				if s.get("type_") != null and s.type_ == GlobalStuff.BUILDING_TYPE.TOWN:
+					return s
+	# Fallback: first owned town on the map.
+	for p in provinces.get_children():
+		var sett2 = p.get_node_or_null("settlements")
+		if sett2 == null:
+			continue
+		for s in sett2.get_children():
+			if s.get("type_") != null and s.type_ == GlobalStuff.BUILDING_TYPE.TOWN \
+					and int(s.player_owner) == pid:
+				return s
+	return null
+
+
+func vip_garrison_spot_for(building: Node) -> int:
+	if building != null and building.get("type_") != null \
+			and building.type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
+		return GlobalUnits.SPOT.INSIDE
+	return GlobalUnits.SPOT.FLAT
+
+
+func ensure_building_vip_force(building: Node) -> String:
+	var key := _building_key(building)
+	var spot := vip_garrison_spot_for(building)
+	var fid := _garrison_force_id(key, spot)
+	if not forces.has(fid):
+		forces[fid] = {
+			"units": [],
+			"location": {"kind": "garrison", "building": key, "spot": spot},
+		}
+	return fid
+
+
+func get_vips_on_force(force_id: String) -> Array:
+	return GlobalVips.vip_ids_on_force(vips, force_id)
+
+
+func force_has_any_vip(force_id: String) -> bool:
+	return GlobalVips.force_has_vip(vips, force_id)
+
+
+func building_has_any_vip(building: Node) -> bool:
+	if building == null:
+		return false
+	for fid in _building_garrison_force_ids(building):
+		if force_has_any_vip(fid):
+			return true
+	return false
+
+
+func get_building_vip_ids(building: Node) -> Array:
+	var out: Array = []
+	if building == null:
+		return out
+	for fid in _building_garrison_force_ids(building):
+		for vid in get_vips_on_force(fid):
+			if not out.has(vid):
+				out.append(vid)
+	return out
+
+
+func _building_garrison_force_ids(building: Node) -> Array:
+	var key := _building_key(building)
+	var out: Array = []
+	if building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
+		for spot in [GlobalUnits.SPOT.INSIDE, GlobalUnits.SPOT.OUTSIDE]:
+			out.append(_garrison_force_id(key, spot))
+	else:
+		out.append(_garrison_force_id(key, GlobalUnits.SPOT.FLAT))
+	return out
+
+
+func get_vip(vip_id: String) -> Dictionary:
+	if vips.has(vip_id):
+		return vips[vip_id]
+	return {}
+
+
+func vip_display_name(vip_id: String) -> String:
+	var v := get_vip(vip_id)
+	if v.is_empty():
+		return "VIP"
+	return GlobalVips.display_name(v, players)
+
+
+func set_vip_force(vip_id: String, force_id: String) -> void:
+	if not vips.has(vip_id):
+		return
+	if not bool(vips[vip_id].get("alive", false)):
+		return
+	vips[vip_id]["force_id"] = force_id
+
+
+func move_vips_to_force(vip_ids: Array, dest_force_id: String) -> void:
+	if dest_force_id == "" or not forces.has(dest_force_id):
+		return
+	for vid in vip_ids:
+		set_vip_force(str(vid), dest_force_id)
+
+
+func transfer_all_vips(from_force_id: String, to_force_id: String) -> void:
+	move_vips_to_force(get_vips_on_force(from_force_id), to_force_id)
+
+
+func kill_vip(vip_id: String) -> void:
+	if not vips.has(vip_id):
+		return
+	vips[vip_id]["alive"] = false
+	vips[vip_id]["force_id"] = ""
+
+
+func holder_of_vip(vip_id: String) -> int:
+	var v := get_vip(vip_id)
+	if v.is_empty() or not bool(v.get("alive", false)):
+		return -1
+	var fid := str(v.get("force_id", ""))
+	if not forces.has(fid):
+		return -1
+	var loc: Dictionary = forces[fid].get("location", {})
+	if str(loc.get("kind", "")) == "garrison":
+		var b := _building_from_key(str(loc.get("building", "")))
+		if b != null and b.get("player_owner") != null:
+			return int(b.player_owner)
+		return -1
+	return get_force_controller(fid)
+
+
+func player_holds_vip(pid: int, vip_id: String) -> bool:
+	return holder_of_vip(vip_id) == pid
+
+
+func refresh_vip_crown_for_force(force_id: String) -> void:
+	var fig = armies.get_node_or_null(force_id)
+	if fig != null and fig.has_method("refresh_vip_crown"):
+		fig.refresh_vip_crown()
+	var bkey := _building_key_from_garrison_force_id(force_id)
+	if bkey != "":
+		var b := _building_from_key(bkey)
+		if b != null and b.has_method("refresh_vip_crown"):
+			b.refresh_vip_crown()
+
+
+func refresh_all_vip_crowns() -> void:
+	for fig in armies.get_children():
+		if fig.has_method("refresh_vip_crown"):
+			fig.refresh_vip_crown()
+	for prov in provinces.get_children():
+		for container_name in ["settlements", "defense"]:
+			var container = prov.get_node_or_null(container_name)
+			if container == null:
+				continue
+			for b in container.get_children():
+				if b.has_method("refresh_vip_crown"):
+					b.refresh_vip_crown()
+
+
+func _force_anchor_cell(force_id: String) -> Vector2i:
+	var invalid := Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+	if not forces.has(force_id):
+		return invalid
+	var loc: Dictionary = forces[force_id].get("location", {})
+	if str(loc.get("kind", "")) == "garrison":
+		var b := _building_from_key(str(loc.get("building", "")))
+		if b == null:
+			return invalid
+		var approach = pathfinding.get_approach_cells(b)
+		if approach.is_empty():
+			return invalid
+		return approach[0]
+	var fig = armies.get_node_or_null(force_id)
+	if fig == null:
+		return invalid
+	return pathfinding.get_army_cell(fig)
+
+
+func _path_dist(from_cell: Vector2i, to_cell: Vector2i) -> int:
+	var invalid := Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+	if from_cell == invalid or to_cell == invalid:
+		return 999999
+	if from_cell == to_cell:
+		return 0
+	if pathfinding == null or pathfinding.astar_graph == null:
+		return 999999
+	if not pathfinding.cell_to_point_id.has(from_cell) or not pathfinding.cell_to_point_id.has(to_cell):
+		return 999999
+	var path: PackedInt64Array = pathfinding.astar_graph.get_id_path(
+		pathfinding.cell_to_point_id[from_cell],
+		pathfinding.cell_to_point_id[to_cell]
+	)
+	if path.is_empty():
+		return 999999
+	return path.size() - 1
+
+
+func _pick_closest_vip_cand(cands: Array) -> String:
+	var best_fid := ""
+	var best_dist := 999999
+	for c in cands:
+		if bool(c.get("pathless", true)):
+			continue
+		var d := int(c["dist"])
+		if best_fid == "" or d < best_dist:
+			best_fid = str(c["fid"])
+			best_dist = d
+	return best_fid
+
+
+func _building_approach_cell(building: Node) -> Vector2i:
+	var invalid := Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+	if building == null or pathfinding == null:
+		return invalid
+	var approach = pathfinding.get_approach_cells(building)
+	if approach.is_empty():
+		return invalid
+	return approach[0]
+
+
+## Closest owned town/castle garrison (preferred) or army for player_id from from_cell.
+## Returns force_id or "" if none.
+func find_closest_vip_destination(player_id: int, from_cell: Vector2i, prefer_garrison: bool = true) -> String:
+	var garrison_cands: Array = []
+	var army_cands: Array = []
+	for prov in provinces.get_children():
+		for container_name in ["settlements", "defense"]:
+			var container = prov.get_node_or_null(container_name)
+			if container == null:
+				continue
+			for b in container.get_children():
+				if b.get("player_owner") == null or int(b.player_owner) != player_id:
+					continue
+				var type_ = b.get("type_")
+				if type_ == null:
+					continue
+				if type_ != GlobalStuff.BUILDING_TYPE.TOWN and type_ != GlobalStuff.BUILDING_TYPE.CASTLE:
+					continue
+				var fid := garrison_force_id_for(b, vip_garrison_spot_for(b))
+				var cell := _building_approach_cell(b)
+				var dist := _path_dist(from_cell, cell)
+				garrison_cands.append({"fid": fid, "dist": dist, "pathless": dist >= 999999, "building": b})
+	for fig in armies.get_children():
+		if not fig.has_method("get_controller") or fig.get_controller() != player_id:
+			continue
+		var fid2 := str(fig.force_id) if fig.get("force_id") != null else str(fig.name)
+		if not forces.has(fid2):
+			continue
+		if GlobalUnits.total_men(forces[fid2]["units"]) < GlobalUnits.MIN_SPLIT_MEN:
+			continue
+		var cell2 := _force_anchor_cell(fid2)
+		var dist2 := _path_dist(from_cell, cell2)
+		army_cands.append({"fid": fid2, "dist": dist2, "pathless": dist2 >= 999999})
+
+	var chosen := ""
+	if prefer_garrison:
+		chosen = _pick_closest_vip_cand(garrison_cands)
+		if chosen == "":
+			chosen = _pick_closest_vip_cand(army_cands)
+	else:
+		chosen = _pick_closest_vip_cand(army_cands)
+		if chosen == "":
+			chosen = _pick_closest_vip_cand(garrison_cands)
+
+	if chosen != "":
+		if chosen.begins_with("g:"):
+			var bkey := _building_key_from_garrison_force_id(chosen)
+			var b := _building_from_key(bkey)
+			if b != null:
+				return ensure_building_vip_force(b)
+		return chosen
+
+	# Fallback: first province (by name) town/castle of the player.
+	var prov_list: Array = provinces.get_children()
+	prov_list.sort_custom(func(a, b): return String(a.name) < String(b.name))
+	for prov in prov_list:
+		for container_name in ["settlements", "defense"]:
+			var container = prov.get_node_or_null(container_name)
+			if container == null:
+				continue
+			for b in container.get_children():
+				if b.get("player_owner") == null or int(b.player_owner) != player_id:
+					continue
+				var type_ = b.get("type_")
+				if type_ == null:
+					continue
+				if type_ != GlobalStuff.BUILDING_TYPE.TOWN and type_ != GlobalStuff.BUILDING_TYPE.CASTLE:
+					continue
+				return ensure_building_vip_force(b)
+	return ""
+
+
+func relocate_vips_for_player(vip_ids: Array, player_id: int, from_cell: Vector2i) -> void:
+	var dest := find_closest_vip_destination(player_id, from_cell, true)
+	if dest == "":
+		return  # edge case: nowhere to go — leave as-is / no-op
+	move_vips_to_force(vip_ids, dest)
+	refresh_vip_crown_for_force(dest)
+
+
+func relocate_vips_from_disbanded_force(force_id: String, disbander: int) -> void:
+	var vip_ids := get_vips_on_force(force_id)
+	if vip_ids.is_empty():
+		return
+	var from_cell := _force_anchor_cell(force_id)
+	var dest := find_closest_vip_destination(disbander, from_cell, true)
+	if dest == "" or dest == force_id:
+		# Fallback: original owners' closest (per VIP).
+		for vid in vip_ids:
+			var v := get_vip(str(vid))
+			if v.is_empty():
+				continue
+			var owner_id := int(v.get("owner", -1))
+			var odest := find_closest_vip_destination(owner_id, from_cell, true)
+			if odest != "" and odest != force_id:
+				set_vip_force(str(vid), odest)
+				refresh_vip_crown_for_force(odest)
+			# else: no-op, leave force_id (force is about to be erased — clear)
+			elif dest == "":
+				# Cannot place — leave alive but force cleared in kill path avoided; park on owner home if any
+				var town := _home_town_for_player(owner_id)
+				if town != null:
+					var tfid := ensure_building_vip_force(town)
+					set_vip_force(str(vid), tfid)
+					refresh_vip_crown_for_force(tfid)
+		return
+	move_vips_to_force(vip_ids, dest)
+	refresh_vip_crown_for_force(dest)
+
+
+func _make_vip_message_event(kind_extra: String, text: String, recipient: int, actor_id: int = -1) -> String:
+	var event := {
+		"kind": GameEvents.KIND.VIP,
+		"vip_kind": kind_extra,
+		"text": text,
+		"turn": turn,
+		"season": int(season),
+		"place_name": "",
+		"world_x": 0.0,
+		"world_y": 0.0,
+		"participant_ids": [recipient],
+		"actor_id": actor_id if actor_id >= 0 else recipient,
+	}
+	var eid := _register_event(event)
+	_deliver_event_to_players(eid, [recipient], int(event["actor_id"]), false)
+	return eid
+
+
+func vip_combat_delta_for_sides(my_force_ids: Array, my_controller: int, enemy_force_ids: Array) -> float:
+	return GlobalVips.combat_delta(vips, my_force_ids, my_controller, enemy_force_ids)
+
+
+func get_force_battle_strength_with_vips(force_id: String, enemy_force_ids: Array) -> int:
+	if not forces.has(force_id):
+		return 0
+	var base := GlobalUnits.fighting_strength(forces[force_id]["units"])
+	var ctrl := get_force_controller(force_id)
+	var delta := vip_combat_delta_for_sides([force_id], ctrl, enemy_force_ids)
+	return GlobalVips.apply_strength_multiplier(base, delta)
+
+
+func get_building_battle_strength_with_vips(building: Node, enemy_force_ids: Array) -> int:
+	var base := get_building_battle_strength(building)
+	if building == null:
+		return base
+	var ctrl := int(building.player_owner) if building.get("player_owner") != null else -1
+	var my_fids := _building_garrison_force_ids(building)
+	var delta := vip_combat_delta_for_sides(my_fids, ctrl, enemy_force_ids)
+	return GlobalVips.apply_strength_multiplier(base, delta)
+
+
 # --- Game events / message inbox --------------------------------------------
 
 func export_events_state() -> Dictionary:
@@ -242,7 +749,12 @@ func center_camera_on_event(event_id: String) -> void:
 	var event := get_event(event_id)
 	if event.is_empty():
 		return
-	camera.position = GameEvents.world_pos_of(event)
+	jump_camera_to(GameEvents.world_pos_of(event))
+
+
+func jump_camera_to(world_pos: Vector2) -> void:
+	camera.position = world_pos
+	_last_camera_focus_cell = Vector2i(999999, 999999)
 
 
 func _alloc_event_id() -> String:
@@ -483,16 +995,26 @@ func _building_key_from_garrison_force_id(fid: String) -> String:
 
 
 # Frees the figure (if any) and drops the entry when a force is emptied.
+# VIP-only garrisons are kept. VIP-only mobile armies relocate VIPs then erase.
 func _cleanup_force_if_empty(fid: String) -> void:
 	if not forces.has(fid):
 		return
 	if GlobalUnits.total_men(forces[fid]["units"]) > 0:
 		return
+	var vip_ids := get_vips_on_force(fid)
+	var loc: Dictionary = forces[fid].get("location", {})
+	var is_garrison := str(loc.get("kind", "")) == "garrison"
+	if not vip_ids.is_empty() and is_garrison:
+		return
+	if not vip_ids.is_empty() and not is_garrison:
+		var ctrl := get_force_controller(fid)
+		relocate_vips_from_disbanded_force(fid, ctrl)
 	forces.erase(fid)
 	var fig = armies.get_node_or_null(fid)
 	if fig != null:
 		armies.remove_child(fig)
 		fig.queue_free()
+	refresh_all_vip_crowns()
 
 
 func suppress_army_click_this_frame() -> void:
@@ -500,7 +1022,7 @@ func suppress_army_click_this_frame() -> void:
 
 
 func should_suppress_army_click() -> bool:
-	return _suppress_army_click_frame == Engine.get_process_frames()
+	return _suppress_army_click_frame == Engine.get_process_frames() or is_mouse_over_gui()
 
 
 func suppress_building_click_this_frame() -> void:
@@ -508,10 +1030,24 @@ func suppress_building_click_this_frame() -> void:
 
 
 func should_suppress_building_click() -> bool:
-	return _suppress_building_click_frame == Engine.get_process_frames()
+	return _suppress_building_click_frame == Engine.get_process_frames() or is_mouse_over_gui()
+
+
+## True when the cursor is over any Control (menus, bottom bar, popups).
+## Area2D map picks ignore this otherwise and click "through" UI.
+## Uses hover plus a geometry fallback: Labels often IGNORE, which can make
+## gui_get_hovered_control() return null over filled menu panels.
+func is_mouse_over_gui() -> bool:
+	if get_viewport().gui_get_hovered_control() != null:
+		return true
+	if is_instance_valid(gui_node) and gui_node.has_method("blocks_map_at_mouse"):
+		return gui_node.blocks_map_at_mouse()
+	return false
 
 
 func on_army_clicked(army: Node2D) -> void:
+	if is_mouse_over_gui():
+		return
 	var selected = pathfinding.selected_army if pathfinding != null else null
 	# Clicking the army you're already moving: same spot → open its menu.
 	if selected == army:
@@ -786,15 +1322,21 @@ func request_battle_attack(attacker_id: String, defender_army_id: String, buildi
 	rng.randomize()
 
 	var atk_units: Array = forces[attacker_id]["units"]
-	var atk_str := GlobalUnits.fighting_strength(atk_units)
-	var def_str := 0
 	var def_units: Array = []
+	var def_force_ids: Array = []
 	if building != null:
-		def_str = get_building_battle_strength(building)
 		def_units = get_all_building_garrison(building)
+		def_force_ids = _building_garrison_force_ids(building)
 	else:
 		def_units = forces[defender_army_id]["units"]
-		def_str = GlobalUnits.fighting_strength(def_units)
+		def_force_ids = [defender_army_id]
+
+	var atk_str := get_force_battle_strength_with_vips(attacker_id, def_force_ids)
+	var def_str := 0
+	if building != null:
+		def_str = get_building_battle_strength_with_vips(building, [attacker_id])
+	else:
+		def_str = get_force_battle_strength_with_vips(defender_army_id, [attacker_id])
 
 	if atk_str <= 0:
 		return
@@ -831,11 +1373,15 @@ func request_battle_attack(attacker_id: String, defender_army_id: String, buildi
 	var destroy_attacker := false
 	var destroy_defender_army := false
 	var clear_garrison := false
+	var captured_vip_ids: Array = []
 
 	if attacker_won:
 		new_attacker = GlobalUnits.merge_units(atk_result["remaining"], atk_result["wounded"])
 		# Wipe defender: leftover fighters count as dead; wounded → hostage pool.
 		hostage_pool = GlobalUnits.account_wiped_side(def_result, true)
+		for fid in def_force_ids:
+			for vid in get_vips_on_force(str(fid)):
+				captured_vip_ids.append(vid)
 		if building != null:
 			clear_garrison = true
 			new_defender = []
@@ -848,11 +1394,14 @@ func request_battle_attack(attacker_id: String, defender_army_id: String, buildi
 		destroy_attacker = true
 		new_attacker = []
 		new_defender = GlobalUnits.merge_units(def_result["remaining"], def_result["wounded"])
+		for vid in get_vips_on_force(attacker_id):
+			captured_vip_ids.append(vid)
 
 	var battle_event := _make_battle_event(
 		attacker_id, defender_army_id, building, attacker_won,
 		atk_units, def_units, atk_result, def_result, hostage_pool
 	)
+	battle_event["captured_vip_ids"] = captured_vip_ids.duplicate()
 
 	apply_battle_result.rpc(
 		attacker_id,
@@ -865,7 +1414,8 @@ func request_battle_attack(attacker_id: String, defender_army_id: String, buildi
 		destroy_defender_army,
 		clear_garrison,
 		hostage_pool,
-		battle_event
+		battle_event,
+		captured_vip_ids
 	)
 
 
@@ -881,9 +1431,21 @@ func apply_battle_result(
 	destroy_defender_army: bool,
 	clear_garrison: bool,
 	hostage_pool: Array,
-	battle_event: Dictionary
+	battle_event: Dictionary,
+	captured_vip_ids: Array = []
 ) -> void:
 	var building: Node = _building_from_key(building_key) if building_key != "" else null
+
+	# Move captured VIPs to the winner before wiping the loser, so cleanup does
+	# not treat them as a normal disband relocation.
+	if not captured_vip_ids.is_empty():
+		if attacker_won and forces.has(attacker_id):
+			move_vips_to_force(captured_vip_ids, attacker_id)
+		elif not attacker_won:
+			if building != null:
+				move_vips_to_force(captured_vip_ids, ensure_building_vip_force(building))
+			elif forces.has(defender_army_id):
+				move_vips_to_force(captured_vip_ids, defender_army_id)
 
 	if destroy_attacker:
 		if forces.has(attacker_id):
@@ -913,6 +1475,7 @@ func apply_battle_result(
 	pathfinding.rebuild_occupancy()
 	update_all_army_visuals()
 	refresh_all_building_flags()
+	refresh_all_vip_crowns()
 
 	var event_id := _register_event(battle_event)
 	var participants: Array = battle_event.get("participant_ids", [])
@@ -935,6 +1498,7 @@ func _clear_building_garrison(building: Node) -> void:
 		var fid := _garrison_force_id(key, spot)
 		if forces.has(fid):
 			forces[fid]["units"] = []
+			_cleanup_force_if_empty(fid)
 
 
 func _set_building_garrison_units(building: Node, units: Array) -> void:
@@ -1413,6 +1977,7 @@ func _is_army_selected() -> bool:
 
 
 func _process(delta: float) -> void:
+	_update_camera_province_focus()
 	if _hover_candidate == null:
 		return
 	# An army being selected reserves clicks/hover for movement/attack orders.
@@ -1427,6 +1992,8 @@ func _process(delta: float) -> void:
 
 
 func on_building_hover_start(building: Node2D) -> void:
+	if is_mouse_over_gui():
+		return
 	if _is_army_selected() or gui_node.is_building_popup_pinned():
 		return
 	_hover_candidate = building
@@ -1445,6 +2012,8 @@ func on_building_hover_end(building: Node2D) -> void:
 # returns false so the click falls through to army movement/attack pathing.
 func on_building_clicked(building: Node2D) -> bool:
 	if should_suppress_building_click():
+		return true
+	if is_mouse_over_gui():
 		return true
 	if _is_army_selected():
 		# Clicking a garrisonable building with an army selected either opens
@@ -1477,6 +2046,7 @@ func on_building_clicked(building: Node2D) -> bool:
 	if gui_node.is_force_menu_open():
 		return true
 	_hover_candidate = null
+	set_sticky_province_from_building(building)
 	if building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.MERCHANT:
 		_on_merchant_clicked(building)
 		return true
@@ -1569,7 +2139,11 @@ func _building_display_body(b: Node2D) -> String:
 			lines.append("Workers cap: %d" % int(b.worker_cap()))
 			var cat := str(b.labor_category())
 			if cat == "blacksmith":
-				lines.append("Blacksmith: production coming later")
+				var wkey := str(b.get_craft_weapon()) if b.has_method("get_craft_weapon") else ""
+				if wkey == "":
+					lines.append("Crafting: idle (no recipe)")
+				else:
+					lines.append("Crafting: %s" % GlobalUnits.blacksmith_recipe_label(wkey))
 			elif cat != "":
 				lines.append("Labor category: %s" % cat)
 		else:
@@ -1589,6 +2163,12 @@ func _building_display_body(b: Node2D) -> String:
 		lines.append("Income: %s marks" % str(b.predicted_marks))
 	if b.has_method("get_garrison_capacity"):
 		lines.append(_building_garrison_text(b))
+	var vip_ids := get_building_vip_ids(b)
+	if not vip_ids.is_empty():
+		var vip_names: PackedStringArray = []
+		for vid in vip_ids:
+			vip_names.append(vip_display_name(str(vid)))
+		lines.append("VIP: %s" % ", ".join(vip_names))
 	if lines.is_empty():
 		return "—"
 	return "\n".join(lines)
@@ -1725,6 +2305,7 @@ func apply_merge_forces(target_id: String, source_id: String) -> void:
 	if not forces.has(target_id) or not forces.has(source_id):
 		return
 	forces[target_id]["units"] = GlobalUnits.merge_units(forces[target_id]["units"], forces[source_id]["units"])
+	transfer_all_vips(source_id, target_id)
 	# Merged army gets the lower of the two MP values — can't refresh by merging.
 	var sfig = armies.get_node_or_null(source_id)
 	var tfig = armies.get_node_or_null(target_id)
@@ -1738,6 +2319,7 @@ func apply_merge_forces(target_id: String, source_id: String) -> void:
 		tfig.refresh_from_force()
 	pathfinding.rebuild_occupancy()
 	update_all_army_visuals()
+	refresh_all_vip_crowns()
 
 
 # Split out_units off source_id into a NEW mobile army placed at (cell).
@@ -1841,6 +2423,15 @@ func request_batch_transfer_units(left_id: String, right_id: String, left_to_rig
 	if left_men > 0 and left_men < GlobalUnits.MIN_SPLIT_MEN:
 		return
 	if right_men > 0 and right_men < GlobalUnits.MIN_SPLIT_MEN:
+		return
+	# Armies that keep VIPs must retain ≥ MIN_SPLIT_MEN.
+	if force_has_any_vip(left_id) and left_men > 0 and left_men < GlobalUnits.MIN_SPLIT_MEN:
+		return
+	if force_has_any_vip(left_id) and left_men == 0:
+		return
+	if force_has_any_vip(right_id) and right_men > 0 and right_men < GlobalUnits.MIN_SPLIT_MEN:
+		return
+	if force_has_any_vip(right_id) and right_men == 0:
 		return
 	apply_batch_transfer_units.rpc(left_id, right_id, left_to_right, right_to_left)
 
@@ -2125,6 +2716,10 @@ func apply_deploy_all_garrison(building_key: String, new_id: String, controller_
 	var all_units: Array = get_all_building_garrison(b)
 	if GlobalUnits.total_men(all_units) <= 0:
 		return
+	var vip_ids: Array = []
+	for fid in _building_garrison_force_ids(b):
+		for vid in get_vips_on_force(fid):
+			vip_ids.append(vid)
 	if b.get("type_") != null and b.type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
 		for spot in [GlobalUnits.SPOT.INSIDE, GlobalUnits.SPOT.OUTSIDE]:
 			var gid := _garrison_force_id(building_key, spot)
@@ -2135,9 +2730,327 @@ func apply_deploy_all_garrison(building_key: String, new_id: String, controller_
 		if forces.has(gid):
 			forces.erase(gid)
 	_spawn_army_figure(new_id, all_units, Vector2i(cell_x, cell_y), 0, controller_player)
+	move_vips_to_force(vip_ids, new_id)
 	pathfinding.rebuild_occupancy()
 	refresh_building_flags(building_key)
 	update_all_army_visuals()
+	refresh_all_vip_crowns()
+
+
+# --- VIP actions (transfer / sword / trade) ---------------------------------
+
+func do_transfer_vips(from_id: String, to_id: String, vip_ids: Array) -> void:
+	request_transfer_vips.rpc_id(1, from_id, to_id, vip_ids)
+
+
+func _ensure_force_exists(force_id: String) -> bool:
+	if forces.has(force_id):
+		return true
+	if not force_id.begins_with("g:"):
+		return false
+	var bkey := _building_key_from_garrison_force_id(force_id)
+	if bkey == "":
+		return false
+	var rest := force_id.substr(2)
+	var hash_idx := rest.rfind("#")
+	if hash_idx < 0:
+		return false
+	var spot := int(rest.substr(hash_idx + 1))
+	var b := _building_from_key(bkey)
+	if b == null:
+		return false
+	var type_ = b.get("type_")
+	if type_ == null:
+		return false
+	if type_ != GlobalStuff.BUILDING_TYPE.TOWN and type_ != GlobalStuff.BUILDING_TYPE.CASTLE:
+		return false
+	forces[force_id] = {
+		"units": [],
+		"location": {"kind": "garrison", "building": bkey, "spot": spot},
+	}
+	return true
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_transfer_vips(from_id: String, to_id: String, vip_ids: Array) -> void:
+	if not multiplayer.is_server():
+		return
+	if not forces.has(from_id):
+		return
+	if not _ensure_force_exists(to_id):
+		return
+	if vip_ids.is_empty():
+		return
+	# Validate each VIP is on from_id.
+	for vid in vip_ids:
+		var v := get_vip(str(vid))
+		if v.is_empty() or not bool(v.get("alive", false)):
+			return
+		if str(v.get("force_id", "")) != from_id:
+			return
+	# Destination: mobile army needs ≥ MIN_SPLIT_MEN after transfer.
+	var to_loc: Dictionary = forces[to_id].get("location", {})
+	if str(to_loc.get("kind", "")) == "cell":
+		if GlobalUnits.total_men(forces[to_id]["units"]) < GlobalUnits.MIN_SPLIT_MEN:
+			return
+	# Source army cannot be left with VIP and < MIN_SPLIT_MEN men.
+	var from_loc: Dictionary = forces[from_id].get("location", {})
+	if str(from_loc.get("kind", "")) == "cell":
+		var remaining_vips := get_vips_on_force(from_id).size() - vip_ids.size()
+		if remaining_vips > 0 and GlobalUnits.total_men(forces[from_id]["units"]) < GlobalUnits.MIN_SPLIT_MEN:
+			return
+	apply_transfer_vips.rpc(from_id, to_id, vip_ids)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_transfer_vips(from_id: String, to_id: String, vip_ids: Array) -> void:
+	_ensure_force_exists(to_id)
+	if not forces.has(to_id):
+		return
+	move_vips_to_force(vip_ids, to_id)
+	refresh_vip_crown_for_force(from_id)
+	refresh_vip_crown_for_force(to_id)
+	if is_instance_valid(gui_node):
+		if gui_node.has_method("refresh_army_menu_if_force"):
+			gui_node.refresh_army_menu_if_force(from_id)
+			gui_node.refresh_army_menu_if_force(to_id)
+		if gui_node.has_method("refresh_force_menu_if_open"):
+			gui_node.refresh_force_menu_if_open()
+
+
+func do_put_vip_to_sword(force_id: String, vip_id: String) -> void:
+	request_put_vip_to_sword.rpc_id(1, force_id, vip_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_put_vip_to_sword(force_id: String, vip_id: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var v := get_vip(vip_id)
+	if v.is_empty() or not bool(v.get("alive", false)):
+		return
+	if str(v.get("force_id", "")) != force_id:
+		return
+	var owner_id := int(v.get("owner", -1))
+	var holder := holder_of_vip(vip_id)
+	if holder < 0 or holder == owner_id:
+		return  # cannot sword your own VIP
+	apply_put_vip_to_sword.rpc(force_id, vip_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_put_vip_to_sword(force_id: String, vip_id: String) -> void:
+	var v := get_vip(vip_id)
+	if v.is_empty():
+		return
+	var owner_id := int(v.get("owner", -1))
+	var role_txt := GlobalVips.role_name(int(v.get("role", 0)))
+	var actor := holder_of_vip(vip_id)
+	kill_vip(vip_id)
+	refresh_vip_crown_for_force(force_id)
+	if owner_id >= 0:
+		_make_vip_message_event(
+			"sword",
+			"Your %s was put to death." % role_txt,
+			owner_id,
+			actor
+		)
+	if is_instance_valid(gui_node) and gui_node.has_method("refresh_army_menu_if_force"):
+		gui_node.refresh_army_menu_if_force(force_id)
+
+
+func do_propose_vip_trade(to_pid: int, offer_vip_ids: Array, offer_marks: int, request_marks: int) -> void:
+	request_propose_vip_trade.rpc_id(1, my_pl_id, to_pid, offer_vip_ids, offer_marks, request_marks)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_propose_vip_trade(from_pid: int, to_pid: int, offer_vip_ids: Array, offer_marks: int, request_marks: int) -> void:
+	if not multiplayer.is_server():
+		return
+	if not players.has(from_pid) or not players.has(to_pid):
+		return
+	if int(players[to_pid].status) != GlobalStuff.PLAYER_STATUS.PLAYING:
+		return
+	if offer_marks < 0 or request_marks < 0:
+		return
+	if offer_vip_ids.is_empty() and offer_marks <= 0:
+		return
+	if int(players[from_pid].game_data.get("marks", 0)) < offer_marks:
+		return
+	for vid in offer_vip_ids:
+		if not player_holds_vip(from_pid, str(vid)):
+			return
+		var v := get_vip(str(vid))
+		if v.is_empty() or not bool(v.get("alive", false)):
+			return
+	# Receiver must have somewhere to put VIPs if any are offered.
+	if not offer_vip_ids.is_empty():
+		var from_cell := Vector2i.ZERO
+		var fv := get_vip(str(offer_vip_ids[0]))
+		if not fv.is_empty():
+			from_cell = _force_anchor_cell(str(fv.get("force_id", "")))
+		var dest := find_closest_vip_destination(to_pid, from_cell, true)
+		if dest == "":
+			return
+	apply_propose_vip_trade.rpc(from_pid, to_pid, offer_vip_ids, offer_marks, request_marks)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_propose_vip_trade(from_pid: int, to_pid: int, offer_vip_ids: Array, offer_marks: int, request_marks: int) -> void:
+	var tid := "vt_%d" % _next_vip_trade_id
+	_next_vip_trade_id += 1
+	vip_trades[tid] = {
+		"id": tid,
+		"from": from_pid,
+		"to": to_pid,
+		"offer_vip_ids": offer_vip_ids.duplicate(),
+		"offer_marks": offer_marks,
+		"request_marks": request_marks,
+	}
+	var vip_txt := ""
+	for vid in offer_vip_ids:
+		if vip_txt != "":
+			vip_txt += ", "
+		vip_txt += vip_display_name(str(vid))
+	if vip_txt == "":
+		vip_txt = "no VIP"
+	var msg := "%s offers you a trade: %s + %d marks, requesting %d marks. Open War → Diplomacy to respond." % [
+		player_display_name(from_pid),
+		vip_txt,
+		offer_marks,
+		request_marks,
+	]
+	_make_vip_message_event("trade_propose", msg, to_pid, from_pid)
+	if is_instance_valid(gui_node) and gui_node.has_method("on_vip_trade_proposed"):
+		gui_node.on_vip_trade_proposed(self, tid)
+
+
+func do_respond_vip_trade(trade_id: String, accept: bool) -> void:
+	request_respond_vip_trade.rpc_id(1, my_pl_id, trade_id, accept)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_respond_vip_trade(responder: int, trade_id: String, accept: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	if not vip_trades.has(trade_id):
+		return
+	var t: Dictionary = vip_trades[trade_id]
+	if int(t.get("to", -1)) != responder:
+		return
+	if not accept:
+		apply_respond_vip_trade.rpc(trade_id, false, "ok")
+		return
+	# Validate still holds VIPs and marks.
+	var from_pid := int(t.get("from", -1))
+	var to_pid := int(t.get("to", -1))
+	var offer_vips: Array = t.get("offer_vip_ids", [])
+	var offer_marks := int(t.get("offer_marks", 0))
+	var request_marks := int(t.get("request_marks", 0))
+	for vid in offer_vips:
+		if not player_holds_vip(from_pid, str(vid)):
+			apply_respond_vip_trade.rpc(trade_id, false, "missing_vip")
+			return
+	if int(players[from_pid].game_data.get("marks", 0)) < offer_marks:
+		apply_respond_vip_trade.rpc(trade_id, false, "missing_marks")
+		return
+	if int(players[to_pid].game_data.get("marks", 0)) < request_marks:
+		apply_respond_vip_trade.rpc(trade_id, false, "missing_marks")
+		return
+	var dest := ""
+	if not offer_vips.is_empty():
+		var from_cell := Vector2i.ZERO
+		var first_v := get_vip(str(offer_vips[0]))
+		if not first_v.is_empty():
+			from_cell = _force_anchor_cell(str(first_v.get("force_id", "")))
+		dest = find_closest_vip_destination(to_pid, from_cell, true)
+		if dest == "":
+			apply_respond_vip_trade.rpc(trade_id, false, "no_dest")
+			return
+	apply_respond_vip_trade.rpc(trade_id, true, "ok")
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_respond_vip_trade(trade_id: String, accepted: bool, reason: String = "ok") -> void:
+	if not vip_trades.has(trade_id):
+		return
+	var t: Dictionary = vip_trades[trade_id]
+	var from_pid := int(t.get("from", -1))
+	var to_pid := int(t.get("to", -1))
+	vip_trades.erase(trade_id)
+
+	if not accepted:
+		if reason == "missing_vip":
+			# Receiver saw disabled accept — still notify sender on reject path from UI.
+			pass
+		_make_vip_message_event(
+			"trade_reject",
+			"Your trade offer to %s was rejected." % player_display_name(to_pid),
+			from_pid,
+			to_pid
+		)
+		if is_instance_valid(gui_node) and gui_node.has_method("on_vip_trade_resolved"):
+			gui_node.on_vip_trade_resolved(self, trade_id, false, reason)
+		return
+
+	var offer_vips: Array = t.get("offer_vip_ids", [])
+	var offer_marks := int(t.get("offer_marks", 0))
+	var request_marks := int(t.get("request_marks", 0))
+
+	if offer_marks > 0 and players.has(from_pid) and players.has(to_pid):
+		players[from_pid].game_data["marks"] = int(players[from_pid].game_data.get("marks", 0)) - offer_marks
+		players[to_pid].game_data["marks"] = int(players[to_pid].game_data.get("marks", 0)) + offer_marks
+	if request_marks > 0 and players.has(from_pid) and players.has(to_pid):
+		players[to_pid].game_data["marks"] = int(players[to_pid].game_data.get("marks", 0)) - request_marks
+		players[from_pid].game_data["marks"] = int(players[from_pid].game_data.get("marks", 0)) + request_marks
+
+	if not offer_vips.is_empty():
+		var from_cell := Vector2i.ZERO
+		var first_v := get_vip(str(offer_vips[0]))
+		if not first_v.is_empty():
+			from_cell = _force_anchor_cell(str(first_v.get("force_id", "")))
+		var dest := find_closest_vip_destination(to_pid, from_cell, true)
+		if dest != "":
+			move_vips_to_force(offer_vips, dest)
+			refresh_all_vip_crowns()
+
+	_make_vip_message_event(
+		"trade_accept",
+		"Trade with %s completed." % player_display_name(to_pid),
+		from_pid,
+		to_pid
+	)
+	_make_vip_message_event(
+		"trade_accept",
+		"Trade with %s completed." % player_display_name(from_pid),
+		to_pid,
+		from_pid
+	)
+	update_player_data.rpc(players)
+	if is_instance_valid(gui_node):
+		if gui_node.has_method("on_vip_trade_resolved"):
+			gui_node.on_vip_trade_resolved(self, trade_id, true, "ok")
+		if gui_node.has_method("update_visuals_and_stats") == false and has_method("update_visuals_and_stats"):
+			update_visuals_and_stats()
+
+
+func get_pending_vip_trades_for(pid: int) -> Array:
+	var out: Array = []
+	for tid in vip_trades:
+		var t: Dictionary = vip_trades[tid]
+		if int(t.get("to", -1)) == pid or int(t.get("from", -1)) == pid:
+			out.append(t)
+	return out
+
+
+func expire_vip_trades_for_player(pid: int) -> void:
+	var to_expire: Array = []
+	for tid in vip_trades:
+		var t: Dictionary = vip_trades[tid]
+		if int(t.get("to", -1)) == pid:
+			to_expire.append(tid)
+	for tid in to_expire:
+		apply_respond_vip_trade.rpc(tid, false, "expired")
 
 
 # --- Merchants --------------------------------------------------------------
@@ -2737,6 +3650,12 @@ func apply_disband_force(
 	refund_weapons: Dictionary = {},
 	refund_player_id: int = -1
 ) -> void:
+	var disbander := refund_player_id
+	if disbander < 0 and forces.has(force_id):
+		disbander = get_force_controller(force_id)
+	if force_has_any_vip(force_id):
+		relocate_vips_from_disbanded_force(force_id, disbander)
+
 	# Remove the disbanding army.
 	if forces.has(force_id):
 		forces.erase(force_id)
@@ -2771,6 +3690,7 @@ func apply_disband_force(
 
 	pathfinding.rebuild_occupancy()
 	update_all_army_visuals()
+	refresh_all_vip_crowns()
 	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
 		gui_node.update_economy_menu(self)
 
@@ -2863,6 +3783,7 @@ func player_ended_turn(player_id):
 	if !multiplayer.is_server():
 		return
 	players[player_id].ended_turn = true
+	expire_vip_trades_for_player(int(player_id))
 	
 	# update player data
 	update_player_data.rpc(players)
@@ -3211,6 +4132,49 @@ func apply_build_economy(building_key: String, subtype: int, player_id: int, cos
 		update_menus()
 
 
+func do_set_blacksmith_recipe(building: Node, weapon_key: String) -> void:
+	if building == null:
+		return
+	request_set_blacksmith_recipe.rpc_id(1, _building_key(building), weapon_key, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_set_blacksmith_recipe(building_key: String, weapon_key: String, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var building = _building_from_key(building_key)
+	if building == null or building.get("type_") == null:
+		return
+	if int(building.type_) != GlobalStuff.BUILDING_TYPE.ECONOMY:
+		return
+	if not building.has_method("is_blacksmith") or not building.is_blacksmith():
+		return
+	if int(building.player_owner) != player_id:
+		return
+	var prov := find_province_for_building(building)
+	if prov == null or not prov.has_dejure(player_id):
+		return
+	if weapon_key != "" and weapon_key not in GlobalUnits.BLACKSMITH_CRAFTABLE:
+		return
+	apply_set_blacksmith_recipe.rpc(building_key, weapon_key)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_set_blacksmith_recipe(building_key: String, weapon_key: String) -> void:
+	var building = _building_from_key(building_key)
+	if building == null or not building.has_method("set_craft_weapon"):
+		return
+	building.set_craft_weapon(weapon_key)
+	var prov := find_province_for_building(building)
+	if prov != null and prov.has_method("_update_material_will"):
+		prov._update_material_will()
+	if is_instance_valid(gui_node):
+		if gui_node.has_method("refresh_economy_building_popup_if"):
+			gui_node.refresh_economy_building_popup_if(self, building)
+		if gui_node.has_method("update_economy_menu"):
+			gui_node.update_economy_menu(self)
+
+
 func do_demolish_economy(building: Node) -> void:
 	if building == null:
 		return
@@ -3364,4 +4328,6 @@ func center_camera_on_current_player_home() -> void:
 	for s in prov.settlements.get_children():
 		if s.get("type_") != null and s.type_ == GlobalStuff.BUILDING_TYPE.TOWN:
 			camera.position = s.global_position
+			_last_camera_focus_cell = Vector2i(999999, 999999)
+			set_province_focus(home_id, false)
 			return

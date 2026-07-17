@@ -10,6 +10,7 @@ const ECON_SUBTYPE_FOR_LABOR := {
 	"iron": 1, # IRONMINE
 	"silver": 3, # SILVERMINE
 	"stone": 4, # STONEQUARRY
+	"blacksmith": 5, # BLACKSMITH
 }
 
 var resources
@@ -345,6 +346,11 @@ func ensure_holding(player_id: int) -> Dictionary:
 			# Migrate old single slider into grain.
 			labor2["grain"] = int(h.get("labor_assigned", 0))
 			h["labor"] = labor2
+		else:
+			var labor_exist: Dictionary = h["labor"]
+			for cat in GlobalUnits.LABOR_CATEGORIES:
+				if not labor_exist.has(cat):
+					labor_exist[cat] = 0
 		if not h.has("pending_marks"):
 			h["pending_marks"] = 0
 	return holdings[player_id]
@@ -435,7 +441,7 @@ func labor_category_cap(player_id: int, category: String, season: int) -> int:
 			return grain_labor_required(player_id, season)
 		"horses":
 			return horse_labor_required(player_id, season)
-		"wood", "stone", "iron", "silver":
+		"wood", "stone", "iron", "silver", "blacksmith":
 			return economy_worker_cap(player_id, category)
 		_:
 			return 0
@@ -772,6 +778,7 @@ func get_holding_summary(player_id: int, season: int) -> Dictionary:
 		"has_stone": economy_worker_cap(player_id, "stone") > 0,
 		"has_iron": economy_worker_cap(player_id, "iron") > 0,
 		"has_silver": economy_worker_cap(player_id, "silver") > 0,
+		"has_blacksmith": economy_worker_cap(player_id, "blacksmith") > 0,
 		"has_grain_work": count_planted_grain_fields(player_id) > 0 or count_fields_by_crop(player_id, 1) > 0,
 		"has_horse_work": count_fields_by_crop(player_id, 2) > 0,
 	}
@@ -857,11 +864,118 @@ func _economy_controllers() -> Array:
 
 
 func preview_economy_output(player_id: int) -> Dictionary:
+	var wood_prod := get_labor_category(player_id, "wood") * GlobalUnits.ECONOMY_WOOD_PER_WORKER
+	var stone_prod := get_labor_category(player_id, "stone") * GlobalUnits.ECONOMY_STONE_PER_WORKER
+	var iron_prod := get_labor_category(player_id, "iron") * GlobalUnits.ECONOMY_IRON_PER_WORKER
+	var marks := get_labor_category(player_id, "silver") * GlobalUnits.ECONOMY_SILVER_MARKS_PER_WORKER
+	# Simulate craft after production (same order as the season tick).
+	var sim_wood := get_player_material(player_id, "wood") + wood_prod
+	var sim_iron := get_player_material(player_id, "iron") + iron_prod
+	var craft := _simulate_blacksmith_crafts(player_id, sim_wood, sim_iron)
 	return {
-		"wood": get_labor_category(player_id, "wood") * GlobalUnits.ECONOMY_WOOD_PER_WORKER,
-		"stone": get_labor_category(player_id, "stone") * GlobalUnits.ECONOMY_STONE_PER_WORKER,
-		"iron": get_labor_category(player_id, "iron") * GlobalUnits.ECONOMY_IRON_PER_WORKER,
-		"marks": get_labor_category(player_id, "silver") * GlobalUnits.ECONOMY_SILVER_MARKS_PER_WORKER,
+		"wood": wood_prod - int(craft.get("wood_cost", 0)),
+		"stone": stone_prod,
+		"iron": iron_prod - int(craft.get("iron_cost", 0)),
+		"marks": marks,
+		"weapons": craft.get("weapons", {}),
+		"weapon_crafts": int(craft.get("crafts", 0)),
+		"wood_cost": int(craft.get("wood_cost", 0)),
+		"iron_cost": int(craft.get("iron_cost", 0)),
+		"blacksmith": craft,
+	}
+
+
+func _max_crafts_for_recipe(wood_have: int, iron_have: int, recipe: Dictionary) -> int:
+	if recipe.is_empty():
+		return 0
+	var max_n := 999999
+	var need_wood := int(recipe.get("wood", 0))
+	var need_iron := int(recipe.get("iron", 0))
+	if need_wood > 0:
+		max_n = mini(max_n, int(wood_have / need_wood))
+	if need_iron > 0:
+		max_n = mini(max_n, int(iron_have / need_iron))
+	if max_n >= 999999:
+		return 0
+	return maxi(0, max_n)
+
+
+## Distribute blacksmith labor across owned smiths; returns weapons/costs (no mutation).
+func _simulate_blacksmith_crafts(player_id: int, wood_have: int, iron_have: int) -> Dictionary:
+	var worker_cap := economy_worker_cap(player_id, "blacksmith")
+	var workers_raw := get_labor_category(player_id, "blacksmith")
+	var workers := mini(workers_raw, worker_cap)
+	var weapons := GlobalUnits.empty_weapon_stock()
+	var wood_cost := 0
+	var iron_cost := 0
+	var crafts := 0
+	var labor_crafts := 0
+	var idle_workers := 0
+	var has_recipe := false
+	var people_per := 1
+	var remainder_workers := 0
+	var wood_left := wood_have
+	var iron_left := iron_have
+	var workers_left := workers
+	for b in get_economy_buildings_for(player_id, "blacksmith"):
+		if workers_left <= 0:
+			break
+		var assigned := mini(workers_left, int(b.worker_cap()))
+		workers_left -= assigned
+		var wkey := str(b.get_craft_weapon()) if b.has_method("get_craft_weapon") else ""
+		if wkey == "" or wkey not in GlobalUnits.BLACKSMITH_CRAFTABLE:
+			idle_workers += assigned
+			continue
+		has_recipe = true
+		var pp := GlobalUnits.blacksmith_people_per(wkey)
+		people_per = pp
+		var recipe: Dictionary = GlobalUnits.blacksmith_recipe(wkey)
+		var by_labor := int(assigned / pp)
+		remainder_workers = assigned % pp
+		labor_crafts += by_labor
+		var by_mat := _max_crafts_for_recipe(wood_left, iron_left, recipe)
+		var n := mini(by_labor, by_mat)
+		if n <= 0:
+			continue
+		var use_wood := int(recipe.get("wood", 0)) * n
+		var use_iron := int(recipe.get("iron", 0)) * n
+		wood_left -= use_wood
+		iron_left -= use_iron
+		wood_cost += use_wood
+		iron_cost += use_iron
+		weapons[wkey] = int(weapons.get(wkey, 0)) + n
+		crafts += n
+	var free_slots := maxi(0, worker_cap - workers)
+	var people_to_next := (people_per - remainder_workers) if remainder_workers > 0 else people_per
+	var bottleneck := "ok"
+	if worker_cap <= 0:
+		bottleneck = "none"
+	elif workers <= 0:
+		bottleneck = "no_workers"
+	elif not has_recipe or idle_workers >= workers:
+		bottleneck = "idle_recipe"
+	elif crafts < labor_crafts:
+		bottleneck = "materials"
+	elif free_slots >= people_per:
+		bottleneck = "can_expand"
+	elif remainder_workers > 0 and free_slots > 0:
+		bottleneck = "partial_team"
+	elif free_slots == 0 and crafts == labor_crafts:
+		bottleneck = "full"
+	return {
+		"weapons": weapons,
+		"wood_cost": wood_cost,
+		"iron_cost": iron_cost,
+		"crafts": crafts,
+		"labor_crafts": labor_crafts,
+		"workers": workers,
+		"worker_cap": worker_cap,
+		"free_slots": free_slots,
+		"idle_workers": idle_workers,
+		"has_recipe": has_recipe,
+		"bottleneck": bottleneck,
+		"people_per_weapon": people_per,
+		"people_to_next": people_to_next,
 	}
 
 
@@ -887,6 +1001,25 @@ func _tick_holding_economy(player_id: int) -> void:
 		var players: Dictionary = base_map.players
 		if players.has(player_id):
 			players[player_id].game_data["marks"] = int(players[player_id].game_data.get("marks", 0)) + marks_gain
+	# Craft after materials land this season.
+	_tick_blacksmith_crafts(player_id)
+
+
+func _tick_blacksmith_crafts(player_id: int) -> void:
+	var result := _simulate_blacksmith_crafts(
+		player_id,
+		get_player_material(player_id, "wood"),
+		get_player_material(player_id, "iron")
+	)
+	var wood_cost := int(result.get("wood_cost", 0))
+	var iron_cost := int(result.get("iron_cost", 0))
+	if wood_cost > 0:
+		add_player_material(player_id, "wood", -wood_cost)
+	if iron_cost > 0:
+		add_player_material(player_id, "iron", -iron_cost)
+	var weapons: Dictionary = result.get("weapons", {})
+	if not weapons.is_empty():
+		add_weapons_for(player_id, weapons)
 
 
 func _update_material_will() -> void:

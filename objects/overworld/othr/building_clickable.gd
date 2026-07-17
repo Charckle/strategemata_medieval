@@ -32,8 +32,11 @@ func _get_base_map() -> Node:
 
 func _on_mouse_entered() -> void:
 	var bm := _get_base_map()
-	if bm != null:
-		bm.on_building_hover_start(_building)
+	if bm == null:
+		return
+	if bm.has_method("is_mouse_over_gui") and bm.is_mouse_over_gui():
+		return
+	bm.on_building_hover_start(_building)
 
 
 func _on_mouse_exited() -> void:
@@ -46,6 +49,9 @@ func _on_input_event(_viewport: Node, event: InputEvent, _shape_idx: int) -> voi
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		var bm := _get_base_map()
 		if bm == null:
+			return
+		if bm.has_method("is_mouse_over_gui") and bm.is_mouse_over_gui():
+			get_viewport().set_input_as_handled()
 			return
 		if bm.on_building_clicked(_building):
 			get_viewport().set_input_as_handled()

@@ -8,14 +8,20 @@ extends Node2D
 ## Dashed lines: within a province, all buildings compete by player owner
 ## (same multi-source BFS as solid borders). Only claims by players other than
 ## province.player_owner are drawn, dashed, and clipped to solid province tiles.
+##
+## Inset only when a shared edge needs two different colors visible.
+## Focused province uses a thicker outline drawn on top.
 
 const MAX_RANGE := 5
-const LINE_WIDTH := 2.0
+const LINE_WIDTH := 1.0
+const FOCUS_LINE_WIDTH := 2.0
 const LINE_ALPHA := 0.5
+const FOCUS_LINE_ALPHA := 0.85
 const DASH_LEN := 5.0
 # Pixels each border segment is nudged toward its own tile's center so that a
-# shared edge between two provinces shows both colors instead of overlapping.
+# shared edge between two differently-colored holdings shows both colors.
 const INSET := 3.0
+const OCC_INSET := 5.0
 const DEFAULT_GRAY := Color8(128, 128, 128)
 
 const EDGE_DIRS := [
@@ -31,12 +37,15 @@ const EDGE_DIRS := [
 var owner_of: Dictionary = {}
 # Vector2i -> settled BFS distance (province pass)
 var _dist: Dictionary = {}
-# [{a: Vector2, b: Vector2, color: Color, dashed: bool}]
+# [{a: Vector2, b: Vector2, color: Color, dashed: bool, width: float}]
 var _segments: Array = []
+var _focus_segments: Array = []
 
 # Occupation pass: Vector2i -> player_id (null = contested)
 var _occ_owner: Dictionary = {}
 var _occ_dist: Dictionary = {}
+
+var focused_province = null
 
 
 func rebuild() -> void:
@@ -45,6 +54,7 @@ func rebuild() -> void:
 	_occ_owner.clear()
 	_occ_dist.clear()
 	_segments.clear()
+	_focus_segments.clear()
 
 	var pathfinding = base_map.get_node_or_null("pathfinding")
 	var provinces = base_map.get_node_or_null("provinces")
@@ -58,6 +68,19 @@ func rebuild() -> void:
 	_rebuild_province_territory(provinces, ml, walkable)
 	_rebuild_occupation_territory(provinces, ml, walkable)
 	_build_segments(ml)
+	_rebuild_focus_segments(ml)
+	queue_redraw()
+
+
+func set_focused_province(prov) -> void:
+	if focused_province == prov:
+		return
+	focused_province = prov
+	var pathfinding = base_map.get_node_or_null("pathfinding") if base_map != null else null
+	if pathfinding != null and pathfinding.map_layer != null:
+		_rebuild_focus_segments(pathfinding.map_layer)
+	else:
+		_focus_segments.clear()
 	queue_redraw()
 
 
@@ -219,6 +242,25 @@ func _edge_corners(ml: TileMapLayer) -> Dictionary:
 	}
 
 
+func _neighbor_solid_color_id(neighbor_prov) -> int:
+	if neighbor_prov == null or not is_instance_valid(neighbor_prov):
+		return -1
+	return int(neighbor_prov.player_owner)
+
+
+func _neighbor_occ_color_id(neighbor_cell: Vector2i) -> int:
+	if not _occ_owner.has(neighbor_cell):
+		# Outside occupation claim: use province owner color if any.
+		var nprov = owner_of.get(neighbor_cell)
+		if nprov == null or not is_instance_valid(nprov):
+			return -1
+		return int(nprov.player_owner)
+	var npid = _occ_owner[neighbor_cell]
+	if npid == null:
+		return -1
+	return int(npid)
+
+
 func _build_segments(ml: TileMapLayer) -> void:
 	var edge_corners := _edge_corners(ml)
 
@@ -227,26 +269,34 @@ func _build_segments(ml: TileMapLayer) -> void:
 		var prov = owner_of[cell]
 		if prov == null:
 			continue
+		var my_pid := int(prov.player_owner)
 		var center: Vector2 = to_local(ml.to_global(ml.map_to_local(cell)))
-		var col := _player_color(int(prov.player_owner))
+		var col := _player_color(my_pid)
 		for d in EDGE_DIRS:
-			if owner_of.get(cell + d, null) == prov:
+			var ncell: Vector2i = cell + d
+			if owner_of.get(ncell, null) == prov:
 				continue
+			var neighbor = owner_of.get(ncell, null)
+			var inset := 0.0
+			if _neighbor_solid_color_id(neighbor) != my_pid and _neighbor_solid_color_id(neighbor) >= 0:
+				inset = INSET
 			var pair = edge_corners[d]
 			var a: Vector2 = center + pair[0]
 			var b: Vector2 = center + pair[1]
-			var edge_mid := (a + b) * 0.5
-			var inward := (center - edge_mid).normalized() * INSET
+			if inset > 0.0:
+				var edge_mid := (a + b) * 0.5
+				var inward := (center - edge_mid).normalized() * inset
+				a += inward
+				b += inward
 			_segments.append({
-				"a": a + inward,
-				"b": b + inward,
+				"a": a,
+				"b": b,
 				"color": col,
 				"dashed": false,
+				"width": LINE_WIDTH,
 			})
 
 	# Dashed occupation borders: only foreign claims (not province.player_owner).
-	# Rival buildings compete in the BFS above, so the dashed edge sits between them.
-	var occ_inset := INSET + 2.0
 	for cell in _occ_owner:
 		var pid = _occ_owner[cell]
 		if pid == null:
@@ -256,21 +306,81 @@ func _build_segments(ml: TileMapLayer) -> void:
 			continue
 		if int(pid) == int(prov.player_owner):
 			continue  # province owner's share stays solid-only
+		var my_pid2 := int(pid)
 		var center2: Vector2 = to_local(ml.to_global(ml.map_to_local(cell)))
+		var col2 := _player_color(my_pid2)
+		for d in EDGE_DIRS:
+			var ncell2: Vector2i = cell + d
+			if _occ_owner.get(ncell2, null) == pid:
+				continue
+			var inset2 := 0.0
+			var n_color := _neighbor_occ_color_id(ncell2)
+			if n_color != my_pid2 and n_color >= 0:
+				inset2 = OCC_INSET
+			var pair2 = edge_corners[d]
+			var a2: Vector2 = center2 + pair2[0]
+			var b2: Vector2 = center2 + pair2[1]
+			if inset2 > 0.0:
+				var edge_mid2 := (a2 + b2) * 0.5
+				var inward2 := (center2 - edge_mid2).normalized() * inset2
+				a2 += inward2
+				b2 += inward2
+			_segments.append({
+				"a": a2,
+				"b": b2,
+				"color": col2,
+				"dashed": true,
+				"width": LINE_WIDTH,
+			})
+
+
+func _rebuild_focus_segments(ml: TileMapLayer) -> void:
+	_focus_segments.clear()
+	if focused_province == null or not is_instance_valid(focused_province):
+		return
+	var edge_corners := _edge_corners(ml)
+	var focus_col := _player_color(int(focused_province.player_owner))
+	focus_col.a = FOCUS_LINE_ALPHA
+
+	# Thick solid outline of the focused province.
+	for cell in owner_of:
+		if owner_of[cell] != focused_province:
+			continue
+		var center: Vector2 = to_local(ml.to_global(ml.map_to_local(cell)))
+		for d in EDGE_DIRS:
+			if owner_of.get(cell + d, null) == focused_province:
+				continue
+			var pair = edge_corners[d]
+			_focus_segments.append({
+				"a": center + pair[0],
+				"b": center + pair[1],
+				"color": focus_col,
+				"dashed": false,
+				"width": FOCUS_LINE_WIDTH,
+			})
+
+	# Thick dashed outline for foreign occupation edges inside the focus province.
+	for cell in _occ_owner:
+		var pid = _occ_owner[cell]
+		if pid == null:
+			continue
+		if owner_of.get(cell) != focused_province:
+			continue
+		if int(pid) == int(focused_province.player_owner):
+			continue
 		var col2 := _player_color(int(pid))
+		col2.a = FOCUS_LINE_ALPHA
+		var center2: Vector2 = to_local(ml.to_global(ml.map_to_local(cell)))
 		for d in EDGE_DIRS:
 			if _occ_owner.get(cell + d, null) == pid:
 				continue
 			var pair2 = edge_corners[d]
-			var a2: Vector2 = center2 + pair2[0]
-			var b2: Vector2 = center2 + pair2[1]
-			var edge_mid2 := (a2 + b2) * 0.5
-			var inward2 := (center2 - edge_mid2).normalized() * occ_inset
-			_segments.append({
-				"a": a2 + inward2,
-				"b": b2 + inward2,
+			_focus_segments.append({
+				"a": center2 + pair2[0],
+				"b": center2 + pair2[1],
 				"color": col2,
 				"dashed": true,
+				"width": FOCUS_LINE_WIDTH,
 			})
 
 
@@ -292,9 +402,21 @@ func _province_color(prov) -> Color:
 	return _player_color(int(prov.player_owner))
 
 
+## Border segments in this node's local space (solid + occupation dashes).
+func get_minimap_border_segments() -> Array:
+	return _segments
+
+
 func _draw() -> void:
 	for s in _segments:
+		var w: float = float(s.get("width", LINE_WIDTH))
 		if s.get("dashed", false):
-			draw_dashed_line(s["a"], s["b"], s["color"], LINE_WIDTH, DASH_LEN, true)
+			draw_dashed_line(s["a"], s["b"], s["color"], w, DASH_LEN, true)
 		else:
-			draw_line(s["a"], s["b"], s["color"], LINE_WIDTH, true)
+			draw_line(s["a"], s["b"], s["color"], w, true)
+	for s in _focus_segments:
+		var w2: float = float(s.get("width", FOCUS_LINE_WIDTH))
+		if s.get("dashed", false):
+			draw_dashed_line(s["a"], s["b"], s["color"], w2, DASH_LEN, true)
+		else:
+			draw_line(s["a"], s["b"], s["color"], w2, true)

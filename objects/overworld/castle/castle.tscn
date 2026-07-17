@@ -3,8 +3,9 @@
 [ext_resource type="Texture2D" uid="uid://bc1ouly624a1c" path="res://sprites/overworld/objects/province/base_ground_castle.png" id="1_70b0n"]
 [ext_resource type="Script" uid="uid://cty56xh0e1l4l" path="res://objects/overworld/castle/castle.gd" id="1_hcklk"]
 [ext_resource type="Texture2D" uid="uid://corxitg5mhaj3" path="res://sprites/overworld/objects/province/castle/wooden_fort.png" id="2_hcklk"]
-[ext_resource type="Script" uid="uid://c8bldclick2xyzq" path="res://objects/overworld/othr/building_clickable.gd" id="3_clk"]
+[ext_resource type="Script" uid="uid://di3ird3vker3o" path="res://objects/overworld/othr/building_clickable.gd" id="3_clk"]
 [ext_resource type="PackedScene" uid="uid://bumabll72sky" path="res://objects/overworld/othr/flag/flag.tscn" id="4_flag"]
+[ext_resource type="Texture2D" uid="uid://bf4lc3xg1gns5" path="res://sprites/overworld/objects/othr/army/crown.png" id="4_ilts1"]
 
 [sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_70b0n"]
 points = PackedVector2Array(64, 0, 0, 32, 64, 64, 128, 32)
@@ -26,5 +27,10 @@ script = ExtResource("3_clk")
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Area2D" unique_id=1667754029]
 shape = SubResource("ConvexPolygonShape2D_70b0n")
 
-[node name="Flag" parent="." instance=ExtResource("4_flag")]
+[node name="Flag" parent="." unique_id=1751259942 instance=ExtResource("4_flag")]
 position = Vector2(65, 4)
+
+[node name="crown" type="Sprite2D" parent="." unique_id=1979882948]
+visible = false
+position = Vector2(65, 1)
+texture = ExtResource("4_ilts1")

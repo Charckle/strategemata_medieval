@@ -334,6 +334,8 @@ func _update_reachable_overlay() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if selected_army == null:
 		return
+	if base_map != null and base_map.has_method("is_mouse_over_gui") and base_map.is_mouse_over_gui():
+		return
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			deselect_army()

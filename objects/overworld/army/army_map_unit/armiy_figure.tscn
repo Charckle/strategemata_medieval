@@ -4,6 +4,7 @@
 [ext_resource type="Script" uid="uid://b2uhrpqjk4ffu" path="res://objects/overworld/army/army_map_unit/armiy_figure.gd" id="1_dc735"]
 [ext_resource type="Texture2D" uid="uid://c885rvo22k4ub" path="res://sprites/overworld/map_tiles/summer/grass_01.png" id="1_ft7hr"]
 [ext_resource type="Texture2D" uid="uid://cy55lp0uxujli" path="res://sprites/overworld/objects/othr/army/army_figure.png" id="2_2cagq"]
+[ext_resource type="Texture2D" uid="uid://bf4lc3xg1gns5" path="res://sprites/overworld/objects/othr/army/crown.png" id="5_0436l"]
 
 [sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_ft7hr"]
 points = PackedVector2Array(32, 0, 0, 16, 32, 32, 64, 16)
@@ -22,6 +23,11 @@ texture = ExtResource("1_ft7hr")
 [node name="figure" type="Sprite2D" parent="." unique_id=2030019386]
 position = Vector2(30, 4)
 texture = ExtResource("2_2cagq")
+
+[node name="crown" type="Sprite2D" parent="." unique_id=387266348]
+visible = false
+position = Vector2(31, -12)
+texture = ExtResource("5_0436l")
 
 [node name="Area2D" type="Area2D" parent="." unique_id=394389457]
 

@@ -56,6 +56,17 @@ func set_flags() -> void:
 	var flag := get_node_or_null("Flag")
 	if flag != null:
 		flag.setup_flag()
+	refresh_vip_crown()
+
+
+func refresh_vip_crown() -> void:
+	var crown := get_node_or_null("crown")
+	if crown == null:
+		return
+	var show := false
+	if base_map != null and base_map.has_method("building_has_any_vip"):
+		show = base_map.building_has_any_vip(self)
+	crown.visible = show
 
 
 func get_garrison_units() -> Array:

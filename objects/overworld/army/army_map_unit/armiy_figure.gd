@@ -56,6 +56,17 @@ func refresh_from_force() -> void:
 		set_flags()
 	# Roster changes (wounds, merges) can lower max MP mid-turn.
 	clamp_movement_to_max()
+	refresh_vip_crown()
+
+
+func refresh_vip_crown() -> void:
+	var crown := get_node_or_null("crown")
+	if crown == null:
+		return
+	var show := false
+	if base_map != null and force_id != "" and base_map.has_method("force_has_any_vip"):
+		show = base_map.force_has_any_vip(force_id)
+	crown.visible = show
 
 
 func get_controller() -> int:

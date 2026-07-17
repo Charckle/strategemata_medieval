@@ -115,8 +115,8 @@ const FOAL_MIN := 1
 const FOAL_MAX := 3
 const STARTING_GRAIN := 40
 
-# Labor category keys shared by fields + economy (blacksmith production later).
-const LABOR_CATEGORIES := ["grain", "horses", "wood", "stone", "iron", "silver"]
+# Labor category keys shared by fields + economy.
+const LABOR_CATEGORIES := ["grain", "horses", "wood", "stone", "iron", "silver", "blacksmith"]
 
 # --- Economy buildings ------------------------------------------------------
 const ECONOMY_COST_WOODCUTTER := 100
@@ -130,6 +130,26 @@ const ECONOMY_WOOD_PER_WORKER := 1
 const ECONOMY_STONE_PER_WORKER := 1
 const ECONOMY_IRON_PER_WORKER := 1
 const ECONOMY_SILVER_MARKS_PER_WORKER := 2
+
+# Blacksmith: one recipe per smith. Labor + materials per finished weapon.
+const BLACKSMITH_CRAFTABLE := ["maces", "pikes", "bows", "swords", "crossbows", "armour"]
+const BLACKSMITH_LABOR := {
+	"bows": 1,
+	"maces": 2,
+	"pikes": 2,
+	"swords": 3,
+	"crossbows": 6,
+	"armour": 10,
+}
+# Materials consumed per weapon crafted.
+const BLACKSMITH_RECIPES := {
+	"bows": {"wood": 10},
+	"pikes": {"wood": 3, "iron": 7},
+	"armour": {"iron": 28},
+	"maces": {"wood": 3, "iron": 3},
+	"swords": {"wood": 10, "iron": 3},
+	"crossbows": {"wood": 10, "iron": 15},
+}
 
 const WOUND_RECOVER_SEASONS := 2
 const HOSTAGE_RECOVER_SEASONS := 2
@@ -157,6 +177,28 @@ func weapon_name(key: String) -> String:
 		"horses": return "Horses"
 		"armour": return "Armour"
 	return key.capitalize()
+
+
+func blacksmith_recipe(weapon_key: String) -> Dictionary:
+	return BLACKSMITH_RECIPES.get(weapon_key, {}).duplicate()
+
+
+func blacksmith_people_per(weapon_key: String) -> int:
+	return maxi(1, int(BLACKSMITH_LABOR.get(weapon_key, 1)))
+
+
+func blacksmith_recipe_label(weapon_key: String) -> String:
+	var recipe: Dictionary = BLACKSMITH_RECIPES.get(weapon_key, {})
+	if recipe.is_empty() and weapon_key not in BLACKSMITH_LABOR:
+		return weapon_name(weapon_key)
+	var parts: PackedStringArray = []
+	for mat in MATERIAL_KEYS:
+		var amt := int(recipe.get(mat, 0))
+		if amt > 0:
+			parts.append("%d %s" % [amt, material_name(mat)])
+	var people := blacksmith_people_per(weapon_key)
+	parts.append("%d %s" % [people, "person" if people == 1 else "people"])
+	return "%s (%s)" % [weapon_name(weapon_key), ", ".join(parts)]
 
 
 ## Base marks price for one weapon (strength × mult). Horses/armour use knight strength.
