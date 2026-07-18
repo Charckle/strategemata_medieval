@@ -234,6 +234,7 @@ start_outside = [{
 }]
 
 [node name="Province2" parent="provinces" parent_id_path=PackedInt32Array(1550993670) index="1" unique_id=851865952 instance=ExtResource("3_yormb")]
+p_name = "Gondor"
 home_province = true
 
 [node name="Town" parent="provinces/Province2/settlements" parent_id_path=PackedInt32Array(851865952, 1960527604) index="0" unique_id=1638598210 instance=ExtResource("4_enhbj")]
@@ -321,6 +322,7 @@ start_inside = [{
 }]
 
 [node name="Province3" parent="provinces" parent_id_path=PackedInt32Array(1550993670) index="2" unique_id=303602224 instance=ExtResource("3_yormb")]
+p_name = "Mordor"
 home_province = true
 
 [node name="Town" parent="provinces/Province3/settlements" parent_id_path=PackedInt32Array(303602224, 1960527604) index="0" unique_id=1885949969 instance=ExtResource("4_enhbj")]
@@ -385,10 +387,10 @@ position = Vector2(320, 672)
 position = Vector2(352, 656)
 
 [node name="EmptyPlot" parent="provinces/Province3/economy" parent_id_path=PackedInt32Array(303602224, 967963434) index="0" unique_id=1276035410 instance=ExtResource("7_a34qs")]
-position = Vector2(-832, 544)
+position = Vector2(-64, 912)
 
 [node name="IronDeposit" parent="provinces/Province3/economy" parent_id_path=PackedInt32Array(303602224, 967963434) index="1" unique_id=582739289 instance=ExtResource("7_a34qs")]
-position = Vector2(-640, 704)
+position = Vector2(0, 976)
 slot_kind = 1
 deposit_type = 2
 
@@ -398,7 +400,7 @@ slot_kind = 1
 deposit_type = 3
 
 [node name="Castle" parent="provinces/Province3/defense" parent_id_path=PackedInt32Array(303602224, 1932121289) index="0" unique_id=1870684875 instance=ExtResource("7_qq3c3")]
-position = Vector2(-736, 544)
+position = Vector2(64, 560)
 castle_type = 2
 start_inside = [{
 "count": 80,
@@ -431,7 +433,7 @@ start_units = [{
 "type": 0
 }]
 
-[node name="WalkableOverlay" parent="." index="7" unique_id=901285694]
+[node name="WalkableOverlay" parent="." index="9" unique_id=901285694]
 enabled = false
 
 [editable path="provinces/Province"]

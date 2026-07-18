@@ -15,7 +15,7 @@ const ECON_SUBTYPE_FOR_LABOR := {
 
 var resources
 
-@export var p_name = "Mordor"
+@export var p_name = "noname"
 @export var player_owner = 1
 @export var home_province = false
 var dejure
@@ -731,6 +731,39 @@ func count_planted_grain_fields(player_id: int) -> int:
 	return n
 
 
+## Expected harvest share for one planted grain field (labor-adjusted).
+func grain_share_for_field(field: Node) -> float:
+	if field == null or int(field.crop) != 1 or not bool(field.planted):
+		return 0.0
+	var pid = field.get_controller_id() if field.has_method("get_controller_id") else -1
+	if pid < 0:
+		return 0.0
+	var n := count_planted_grain_fields(pid)
+	if n <= 0:
+		return 0.0
+	return float(ensure_holding(pid).get("grain_potential", 0.0)) / float(n)
+
+
+func remove_grain_potential(player_id: int, amount: float) -> void:
+	if player_id < 0 or amount <= 0.0:
+		return
+	var h := ensure_holding(player_id)
+	h["grain_potential"] = maxf(0.0, float(h.get("grain_potential", 0.0)) - amount)
+
+
+## Horses currently attributed to this pasture via distribute order.
+func horses_on_field(field: Node) -> int:
+	if field == null or int(field.crop) != 2:
+		return 0
+	var pid = field.get_controller_id() if field.has_method("get_controller_id") else -1
+	if pid < 0:
+		return 0
+	for entry in distribute_horses_to_pastures(pid):
+		if entry.get("field") == field:
+			return int(entry.get("horses", 0))
+	return 0
+
+
 func player_has_holding(player_id: int) -> bool:
 	return not get_owned_settlements(player_id).is_empty()
 
@@ -902,8 +935,8 @@ func tick_agriculture(ended_season: int, new_season: int, rng: RandomNumberGener
 	for pid in get_holding_controllers():
 		ensure_holding(pid)
 		_tick_holding_agriculture(pid, ended_season, new_season, rng)
-	# Plant grain for anyone with GRAIN crop when entering winter.
-	if new_season == 0:
+	# Confirm winter grain plan: spend seed when leaving winter (end of winter turn).
+	if ended_season == 0:
 		for pid in get_holding_controllers():
 			_plant_grain_for_holding(pid)
 	# Economy produces every season (based on labor assigned during ended season).
@@ -1106,7 +1139,7 @@ func _update_material_will() -> void:
 		resources[key]["will"] = will
 
 
-## Auto-sow assigned grain fields when winter begins (spends seed until stock runs out).
+## Sow planned grain fields when leaving winter (spends seed until stock runs out).
 func _plant_grain_for_holding(player_id: int) -> void:
 	for f in get_fields_for_player(player_id):
 		if int(f.crop) == 1 and not bool(f.planted):
@@ -1131,7 +1164,7 @@ func try_sow_field(field: Node, player_id: int) -> bool:
 	return true
 
 
-## Refund seed when unsowing a planted grain field (e.g. change crop in winter).
+## Refund seed when unsowing a field that already had seed spent.
 func unsow_field(field: Node, player_id: int) -> void:
 	if field == null or player_id < 0:
 		return

@@ -8,7 +8,7 @@ enum CROP { EMPTY, GRAIN, HORSES }
 @export var grown_stage = GROWN_STAGES.EMPTY
 @export var crop: CROP = CROP.EMPTY
 
-## True once grain seed was spent in winter; false until next sow.
+## True once grain seed was spent (confirmed at end of winter); false until next sow.
 var planted: bool = false
 ## Visual-only: underworked grain fields look idle but keep their crop assignment.
 var neglected: bool = false
@@ -69,15 +69,18 @@ func update_visuals_for_season(season: int) -> void:
 	elif crop == CROP.HORSES:
 		grown_stage = GROWN_STAGES.SPRING
 	elif crop == CROP.GRAIN:
-		if not planted:
-			grown_stage = GROWN_STAGES.EMPTY
-		else:
+		if planted:
 			match season:
 				0: grown_stage = GROWN_STAGES.WINTER
 				1: grown_stage = GROWN_STAGES.SPRING
 				2: grown_stage = GROWN_STAGES.SUMMER
 				3: grown_stage = GROWN_STAGES.AUTUMN
 				_: grown_stage = GROWN_STAGES.EMPTY
+		elif int(season) == 0:
+			# Winter plan marker: looks sown; seed spent when leaving winter.
+			grown_stage = GROWN_STAGES.WINTER
+		else:
+			grown_stage = GROWN_STAGES.EMPTY
 	update_visuals()
 
 

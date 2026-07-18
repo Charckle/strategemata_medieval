@@ -39,6 +39,9 @@ extends CanvasLayer
 
 @onready var alliances_list := $war_menu/margin/vbox/tabs/Alliances/ScrollContainer/alliances_list
 @onready var diplomacy_list := $war_menu/margin/vbox/tabs/Diplomacy/ScrollContainer/diplomacy_list
+@onready var military_upkeep_lbl := $war_menu/margin/vbox/tabs/Military/upkeep_summary_lbl
+@onready var military_strikes_lbl := $war_menu/margin/vbox/tabs/Military/strikes_lbl
+@onready var military_list := $war_menu/margin/vbox/tabs/Military/ScrollContainer/military_list
 
 var selected_province_id: String = ""
 var _refreshing_alliances := false
@@ -92,9 +95,11 @@ var _cv_cap_panel: PanelContainer = null
 var _cv_cap_info: Label = null
 var _cv_cap_base = null
 var _cv_cap_caravan: Node2D = null
+var _cv_cap_force_id: String = ""
 
 # Merchant shop panel (tabbed: Weapons + Materials).
 var _ms_panel: PanelContainer = null
+var _ms_title: Label = null
 var _ms_info_lbl: Label = null
 var _ms_weapons_body: VBoxContainer = null
 var _ms_materials_body: VBoxContainer = null
@@ -104,6 +109,20 @@ var _ms_merchant: Node = null
 var _ms_weapon_spinboxes: Dictionary = {}  # weapon key -> SpinBox
 var _ms_material_spinboxes: Dictionary = {}  # material key -> SpinBox
 var _ms_competition := false
+
+# Merchant raid confirm panel.
+var _mr_panel: PanelContainer = null
+var _mr_info: Label = null
+var _mr_base = null
+var _mr_force_id: String = ""
+var _mr_merchant: Node = null
+
+# Field raid confirm panel.
+var _fr_panel: PanelContainer = null
+var _fr_info: Label = null
+var _fr_base = null
+var _fr_force_id: String = ""
+var _fr_field: Node = null
 
 # Sellswords hire panel (all-or-nothing).
 var _ss_panel: PanelContainer = null
@@ -128,6 +147,23 @@ var _db_info_lbl: Label = null
 var _db_confirm_btn: Button = null
 var _db_base = null
 var _db_army: Node2D = null
+var _db_loot_send_btn: Button = null
+var _db_discard_btn: Button = null
+
+# Force cargo panel (deposit / withdraw / send-from-army / disband-send).
+var _fc_panel: PanelContainer = null
+var _fc_title: Label = null
+var _fc_info_lbl: Label = null
+var _fc_body: VBoxContainer = null
+var _fc_dest: OptionButton = null
+var _fc_dest_row: HBoxContainer = null
+var _fc_confirm_btn: Button = null
+var _fc_base = null
+var _fc_force_id: String = ""
+var _fc_mode: String = ""  # deposit | withdraw | send | disband_send
+var _fc_spinboxes: Dictionary = {}  # weapon key -> SpinBox
+var _fc_dest_ids: Array = []
+var _fc_after_disband_army: Node2D = null
 
 # Force transfer menu (army<->army merge/split, army<->garrison), built at runtime.
 var _fm_panel: PanelContainer = null
@@ -147,6 +183,9 @@ var _fm_left_spinboxes: Array = []
 var _fm_right_spinboxes: Array = []
 var _fm_left_vip_checks: Dictionary = {}  # vip_id -> CheckBox
 var _fm_right_vip_checks: Dictionary = {}
+var _fm_left_loot_spinboxes: Dictionary = {}  # weapon key -> SpinBox
+var _fm_right_loot_spinboxes: Dictionary = {}
+var _fm_split_loot_spinboxes: Dictionary = {}
 
 # Building info popup (built at runtime): header with title + X, plus a body.
 var _building_popup: PanelContainer = null
@@ -168,6 +207,7 @@ var _field_popup_base = null
 # Province fields / labor UI.
 var _prov_manage_root: VBoxContainer = null
 var _prov_fields_lbl: Label = null
+var _prov_populate_idle_btn: Button = null
 var _prov_stock_lbl: Label = null
 var _prov_labor_lbl: Label = null
 var _prov_agri_lbl: Label = null
@@ -176,6 +216,11 @@ var _prov_smith_lbl: Label = null
 var _prov_labor_box: VBoxContainer = null
 var _prov_labor_sliders: Dictionary = {} # category -> HSlider
 var _prov_labor_updating := false
+var _prov_idle_field_count: int = 0
+
+# Populate idle fields popup.
+var _populate_idle_popup: PanelContainer = null
+var _populate_idle_body: Label = null
 
 # Economy building popup (build / demolish).
 var _econ_popup: PanelContainer = null
@@ -193,6 +238,14 @@ var _bt_base = null
 var _bt_attacker_id: String = ""
 var _bt_defender_id: String = ""
 var _bt_building: Node = null
+
+# First-contact castle siege prompt (start engines / assault now).
+var _sg_panel: PanelContainer = null
+var _sg_body: VBoxContainer = null
+var _sg_title: Label = null
+var _sg_base = null
+var _sg_force_id: String = ""
+var _sg_building: Node = null
 
 # Hostage decision after a won battle.
 var _hs_panel: PanelContainer = null
@@ -331,6 +384,7 @@ func blocks_camera_pan() -> bool:
 func _on_war_btn_pressed() -> void:
 	_toggle_menu(war_menu)
 	if war_menu.visible:
+		refresh_military_tab()
 		refresh_alliances_list()
 		refresh_vip_trade_ui()
 
@@ -623,6 +677,87 @@ func _on_field_crop_pressed(crop: int) -> void:
 		_field_popup_base.do_set_field_crop(_field_popup_field, crop)
 
 
+func _ensure_populate_idle_popup() -> void:
+	if _populate_idle_popup != null:
+		return
+	_populate_idle_popup = PanelContainer.new()
+	_populate_idle_popup.top_level = true
+	_populate_idle_popup.z_index = 130
+	_populate_idle_popup.mouse_filter = Control.MOUSE_FILTER_STOP
+	_populate_idle_popup.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var header := HBoxContainer.new()
+	var title := Label.new()
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 16)
+	title.text = "Populate idle fields"
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.pressed.connect(hide_populate_idle_popup)
+	header.add_child(title)
+	header.add_child(close_btn)
+	_populate_idle_body = Label.new()
+	_populate_idle_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var btns := HBoxContainer.new()
+	btns.add_theme_constant_override("separation", 6)
+	var grain_btn := Button.new()
+	grain_btn.text = "Make grain fields"
+	grain_btn.pressed.connect(_on_populate_idle_crop_pressed.bind(1))
+	var horse_btn := Button.new()
+	horse_btn.text = "Make horse pastures"
+	horse_btn.pressed.connect(_on_populate_idle_crop_pressed.bind(2))
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.pressed.connect(hide_populate_idle_popup)
+	btns.add_child(grain_btn)
+	btns.add_child(horse_btn)
+	btns.add_child(cancel_btn)
+	vbox.add_child(header)
+	vbox.add_child(HSeparator.new())
+	vbox.add_child(_populate_idle_body)
+	vbox.add_child(btns)
+	margin.add_child(vbox)
+	_populate_idle_popup.add_child(margin)
+	add_child(_populate_idle_popup)
+
+
+func show_populate_idle_popup() -> void:
+	_ensure_populate_idle_popup()
+	_populate_idle_body.text = "Convert %d idle fields" % _prov_idle_field_count
+	_populate_idle_popup.visible = true
+	_populate_idle_popup.reset_size()
+	var mouse_pos := get_viewport().get_mouse_position()
+	var pos := mouse_pos + Vector2(14, 0)
+	var vp := get_viewport().get_visible_rect().size
+	var sz := _populate_idle_popup.size
+	pos.x = clampf(pos.x, 0.0, maxf(0.0, vp.x - sz.x))
+	pos.y = clampf(pos.y, 0.0, maxf(0.0, vp.y - sz.y))
+	_populate_idle_popup.position = pos
+
+
+func hide_populate_idle_popup() -> void:
+	if _populate_idle_popup != null:
+		_populate_idle_popup.visible = false
+
+
+func _on_populate_idle_fields_pressed() -> void:
+	if _prov_idle_field_count <= 0:
+		return
+	show_populate_idle_popup()
+
+
+func _on_populate_idle_crop_pressed(crop: int) -> void:
+	hide_populate_idle_popup()
+	if selected_province_id == "" or not is_instance_valid(parent_n):
+		return
+	if parent_n.has_method("do_populate_idle_fields"):
+		parent_n.do_populate_idle_fields(selected_province_id, crop)
+
+
 func _ensure_economy_building_popup() -> void:
 	if _econ_popup != null:
 		return
@@ -786,6 +921,8 @@ func close_all_popups() -> void:
 	_close_recruit_menu()
 	close_caravan_menus()
 	_close_merchant_shop()
+	_close_merchant_raid_menu()
+	_close_field_raid_menu()
 	_close_sellswords_hire()
 	for menu in [map_menu, economy_menu, war_menu, msg_menu, settings_menu]:
 		if menu != null:
@@ -953,6 +1090,52 @@ func _rebuild_army_menu() -> void:
 	disband_btn.pressed.connect(_on_am_disband_pressed)
 	_am_body.add_child(disband_btn)
 
+	# Army loot / cargo stock (weapons + materials)
+	var cargo: Dictionary = _am_base.get_force_cargo(_am_army.force_id) if _am_base.has_method("get_force_cargo") else {}
+	_am_body.add_child(HSeparator.new())
+	if _am_base.has_method("force_food_status_text"):
+		var food_lbl := Label.new()
+		food_lbl.text = _am_base.force_food_status_text(str(_am_army.force_id))
+		food_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		food_lbl.custom_minimum_size = Vector2(280, 0)
+		_am_body.add_child(food_lbl)
+	if _am_base.has_method("force_siege_status_text"):
+		var siege_txt := str(_am_base.force_siege_status_text(str(_am_army.force_id)))
+		if siege_txt != "":
+			var siege_lbl := Label.new()
+			siege_lbl.text = siege_txt
+			siege_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			siege_lbl.custom_minimum_size = Vector2(280, 0)
+			_am_body.add_child(siege_lbl)
+	var loot_hdr := Label.new()
+	loot_hdr.text = "Loot: %s" % GlobalUnits.caravan_cargo_summary(cargo)
+	loot_hdr.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	loot_hdr.custom_minimum_size = Vector2(280, 0)
+	_am_body.add_child(loot_hdr)
+	var loot_row := HBoxContainer.new()
+	var deposit_btn := Button.new()
+	deposit_btn.text = "Deposit"
+	deposit_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var prov_under = _am_base.province_under_force(_am_army.force_id) if _am_base.has_method("province_under_force") else null
+	deposit_btn.disabled = prov_under == null or not GlobalUnits.caravan_cargo_has_any(cargo)
+	deposit_btn.pressed.connect(_on_am_deposit_loot)
+	loot_row.add_child(deposit_btn)
+	var withdraw_btn := Button.new()
+	withdraw_btn.text = "Withdraw"
+	withdraw_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var can_withdraw = prov_under != null and prov_under.has_method("has_dejure") and prov_under.has_dejure(_am_base.my_pl_id)
+	withdraw_btn.disabled = not can_withdraw
+	withdraw_btn.pressed.connect(_on_am_withdraw_loot)
+	loot_row.add_child(withdraw_btn)
+	_am_body.add_child(loot_row)
+	var send_loot_btn := Button.new()
+	send_loot_btn.text = "Send loot home"
+	send_loot_btn.disabled = not GlobalUnits.caravan_cargo_has_any(cargo)
+	if _am_base.has_method("list_dejure_province_ids"):
+		send_loot_btn.disabled = send_loot_btn.disabled or _am_base.list_dejure_province_ids(_am_base.my_pl_id).is_empty()
+	send_loot_btn.pressed.connect(_on_am_send_loot)
+	_am_body.add_child(send_loot_btn)
+
 	# VIP slot
 	if _am_base.has_method("get_vips_on_force"):
 		var vip_ids: Array = _am_base.get_vips_on_force(_am_army.force_id)
@@ -1067,6 +1250,254 @@ func _on_am_disband_pressed() -> void:
 	_open_disband_confirm(base, army)
 
 
+func _on_am_deposit_loot() -> void:
+	if _am_base == null or _am_army == null:
+		return
+	var base = _am_base
+	var fid = _am_army.force_id
+	_close_army_menu()
+	_open_force_cargo_panel(base, fid, "deposit")
+
+
+func _on_am_withdraw_loot() -> void:
+	if _am_base == null or _am_army == null:
+		return
+	var base = _am_base
+	var fid = _am_army.force_id
+	_close_army_menu()
+	_open_force_cargo_panel(base, fid, "withdraw")
+
+
+func _on_am_send_loot() -> void:
+	if _am_base == null or _am_army == null:
+		return
+	var base = _am_base
+	var fid = _am_army.force_id
+	_close_army_menu()
+	_open_force_cargo_panel(base, fid, "send")
+
+
+# --- Force cargo panel (deposit / withdraw / send) --------------------------
+
+func _ensure_force_cargo_panel() -> void:
+	if _fc_panel != null:
+		return
+	_fc_panel = PanelContainer.new()
+	_fc_panel.top_level = true
+	_fc_panel.z_index = 145
+	_fc_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_fc_panel.visible = false
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var hbox := HBoxContainer.new()
+	_fc_title = Label.new()
+	_fc_title.text = "Loot"
+	_fc_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(_fc_title)
+	var close_btn := Button.new()
+	close_btn.text = "✕"
+	close_btn.pressed.connect(_close_force_cargo_panel)
+	hbox.add_child(close_btn)
+	vbox.add_child(hbox)
+	_fc_info_lbl = Label.new()
+	_fc_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_fc_info_lbl.custom_minimum_size = Vector2(320, 0)
+	vbox.add_child(_fc_info_lbl)
+	_fc_dest_row = HBoxContainer.new()
+	var dest_lbl := Label.new()
+	dest_lbl.text = "Destination:"
+	_fc_dest_row.add_child(dest_lbl)
+	_fc_dest = OptionButton.new()
+	_fc_dest.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_fc_dest_row.add_child(_fc_dest)
+	vbox.add_child(_fc_dest_row)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(320, 180)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_fc_body = VBoxContainer.new()
+	_fc_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_fc_body)
+	vbox.add_child(scroll)
+	var btn_row := HBoxContainer.new()
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel_btn.pressed.connect(_close_force_cargo_panel)
+	btn_row.add_child(cancel_btn)
+	var all_btn := Button.new()
+	all_btn.text = "ALL"
+	all_btn.pressed.connect(_on_fc_all_pressed)
+	btn_row.add_child(all_btn)
+	_fc_confirm_btn = Button.new()
+	_fc_confirm_btn.text = "Confirm"
+	_fc_confirm_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_fc_confirm_btn.pressed.connect(_on_fc_confirm_pressed)
+	btn_row.add_child(_fc_confirm_btn)
+	vbox.add_child(btn_row)
+	margin.add_child(vbox)
+	_fc_panel.add_child(margin)
+	add_child(_fc_panel)
+
+
+func _open_force_cargo_panel(base_map, force_id: String, mode: String, after_disband_army: Node2D = null) -> void:
+	_ensure_force_cargo_panel()
+	_fc_base = base_map
+	_fc_force_id = force_id
+	_fc_mode = mode
+	_fc_after_disband_army = after_disband_army
+	match mode:
+		"deposit":
+			_fc_title.text = "Deposit loot"
+			_fc_info_lbl.text = "Deposit into the province under this force."
+			_fc_confirm_btn.text = "Deposit"
+		"withdraw":
+			_fc_title.text = "Withdraw loot"
+			_fc_info_lbl.text = "Pull weapons and materials from this de jure province into the army."
+			_fc_confirm_btn.text = "Withdraw"
+		"send", "disband_send":
+			_fc_title.text = "Send loot home"
+			_fc_info_lbl.text = "Create a caravan from this force to a de jure province."
+			_fc_confirm_btn.text = "Send caravan" if mode == "send" else "Send & disband"
+		_:
+			_fc_title.text = "Loot"
+			_fc_confirm_btn.text = "Confirm"
+	_fc_dest_row.visible = mode == "send" or mode == "disband_send"
+	_fc_dest.clear()
+	_fc_dest_ids.clear()
+	if _fc_dest_row.visible:
+		var from_cell: Vector2i = base_map.get_force_anchor_cell(force_id) if base_map.has_method("get_force_anchor_cell") else Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+		var closest := ""
+		if base_map.has_method("find_closest_dejure_province_id"):
+			closest = str(base_map.find_closest_dejure_province_id(base_map.my_pl_id, from_cell))
+		var prefer_idx := 0
+		for pid in base_map.list_dejure_province_ids(base_map.my_pl_id):
+			var pdata: Dictionary = base_map.get_province_data(str(pid))
+			_fc_dest.add_item(str(pdata.get("name", pid)))
+			if str(pid) == closest:
+				prefer_idx = _fc_dest_ids.size()
+			_fc_dest_ids.append(str(pid))
+		if _fc_dest_ids.is_empty():
+			_close_force_cargo_panel()
+			show_info_popup("No de jure provinces to send loot to")
+			return
+		_fc_dest.select(prefer_idx)
+	for c in _fc_body.get_children():
+		c.queue_free()
+	_fc_spinboxes.clear()
+	var available := GlobalUnits.empty_caravan_cargo()
+	if mode == "withdraw":
+		var prov = base_map.province_under_force(force_id)
+		if prov != null:
+			if prov.has_method("get_weapons_for"):
+				available = GlobalUnits.add_caravan_stocks(available, prov.get_weapons_for(base_map.my_pl_id))
+			for mk in GlobalUnits.MATERIAL_KEYS:
+				available[mk] = int(prov.get_player_material(base_map.my_pl_id, mk)) if prov.has_method("get_player_material") else 0
+	else:
+		available = base_map.get_force_cargo(force_id)
+	for k in GlobalUnits.WEAPON_KEYS:
+		var have := int(available.get(k, 0))
+		var row := HBoxContainer.new()
+		var lbl := Label.new()
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl.text = "%s (have %d)" % [GlobalUnits.weapon_name(k), have]
+		row.add_child(lbl)
+		var spin := SpinBox.new()
+		spin.min_value = 0
+		spin.max_value = maxi(0, have)
+		spin.step = 1
+		spin.value = 0
+		spin.custom_minimum_size = Vector2(90, 0)
+		row.add_child(spin)
+		row.add_child(_make_spin_all_button(spin))
+		_fc_body.add_child(row)
+		_fc_spinboxes[k] = spin
+	_fc_body.add_child(HSeparator.new())
+	for k in GlobalUnits.MATERIAL_KEYS:
+		var have_m := int(available.get(k, 0))
+		var row_m := HBoxContainer.new()
+		var lbl_m := Label.new()
+		lbl_m.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl_m.text = "%s (have %d)" % [GlobalUnits.material_name(k), have_m]
+		row_m.add_child(lbl_m)
+		var spin_m := SpinBox.new()
+		spin_m.min_value = 0
+		spin_m.max_value = maxi(0, have_m)
+		spin_m.step = 1
+		spin_m.value = 0
+		spin_m.custom_minimum_size = Vector2(90, 0)
+		row_m.add_child(spin_m)
+		row_m.add_child(_make_spin_all_button(spin_m))
+		_fc_body.add_child(row_m)
+		_fc_spinboxes[k] = spin_m
+	_fc_panel.visible = true
+	_fc_panel.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_fc_panel.size = Vector2(minf(400, vp.x * 0.9), minf(480, vp.y * 0.85))
+	_fc_panel.position = (vp - _fc_panel.size) * 0.5
+
+
+func _on_fc_all_pressed() -> void:
+	for k in _fc_spinboxes:
+		var spin: SpinBox = _fc_spinboxes[k]
+		spin.value = spin.max_value
+
+
+func _fc_collect_cargo() -> Dictionary:
+	var cargo := GlobalUnits.empty_caravan_cargo()
+	for k in _fc_spinboxes:
+		cargo[k] = int(_fc_spinboxes[k].value)
+	return cargo
+
+
+func _close_force_cargo_panel() -> void:
+	if _fc_panel != null:
+		_fc_panel.visible = false
+	_fc_base = null
+	_fc_force_id = ""
+	_fc_mode = ""
+	_fc_spinboxes.clear()
+	_fc_dest_ids.clear()
+	_fc_after_disband_army = null
+
+
+func _on_fc_confirm_pressed() -> void:
+	var base = _fc_base
+	var force_id := _fc_force_id
+	var mode := _fc_mode
+	var cargo := _fc_collect_cargo()
+	var dest_id := ""
+	var dest_idx := _fc_dest.selected if _fc_dest != null else -1
+	if dest_idx >= 0 and dest_idx < _fc_dest_ids.size():
+		dest_id = str(_fc_dest_ids[dest_idx])
+	var disband_army := _fc_after_disband_army
+	_close_force_cargo_panel()
+	if base == null or force_id == "":
+		return
+	if not GlobalUnits.caravan_cargo_has_any(cargo):
+		show_info_popup("Select at least one item")
+		return
+	match mode:
+		"deposit":
+			base.do_force_deposit_cargo(force_id, cargo)
+		"withdraw":
+			base.do_force_withdraw_cargo(force_id, cargo)
+		"send":
+			if dest_id == "":
+				show_info_popup("Pick a destination province")
+				return
+			base.do_force_send_caravan(force_id, dest_id, cargo)
+		"disband_send":
+			if dest_id == "":
+				show_info_popup("Pick a destination province")
+				return
+			base.do_force_send_caravan(force_id, dest_id, cargo)
+			if disband_army != null:
+				base.request_disband_force.rpc_id(1, disband_army.force_id)
+
+
 # --- Disband confirmation panel ---------------------------------------------
 
 func _ensure_disband_panel() -> void:
@@ -1110,6 +1541,16 @@ func _ensure_disband_panel() -> void:
 	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cancel_btn.pressed.connect(_close_disband_panel)
 	btn_row.add_child(cancel_btn)
+	_db_loot_send_btn = Button.new()
+	_db_loot_send_btn.text = "Send loot & disband"
+	_db_loot_send_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_db_loot_send_btn.pressed.connect(_on_disband_send_loot_pressed)
+	btn_row.add_child(_db_loot_send_btn)
+	_db_discard_btn = Button.new()
+	_db_discard_btn.text = "Discard loot & disband"
+	_db_discard_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_db_discard_btn.pressed.connect(_on_disband_confirm_pressed)
+	btn_row.add_child(_db_discard_btn)
 	_db_confirm_btn = Button.new()
 	_db_confirm_btn.text = "Disband"
 	_db_confirm_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1168,6 +1609,21 @@ func _open_disband_confirm(base_map, army: Node2D) -> void:
 	else:
 		_db_confirm_btn.text = "Disband"
 
+	var cargo: Dictionary = base_map.get_force_cargo(army.force_id) if base_map.has_method("get_force_cargo") else {}
+	var has_loot := GlobalUnits.caravan_cargo_has_any(cargo)
+	var has_dests := false
+	if has_loot and base_map.has_method("list_dejure_province_ids"):
+		has_dests = not base_map.list_dejure_province_ids(my_id).is_empty()
+	if has_loot:
+		lines.append("Carried loot: %s" % GlobalUnits.caravan_cargo_summary(cargo))
+		if has_dests:
+			lines.append("Send loot home as a caravan, or discard it.")
+		else:
+			lines.append("No de jure provinces — loot will be discarded.")
+	_db_loot_send_btn.visible = has_loot and has_dests
+	_db_discard_btn.visible = has_loot
+	_db_confirm_btn.visible = not has_loot
+
 	_db_info_lbl.text = "\n".join(lines) if lines.size() > 0 else "Army will be removed."
 
 	_db_panel.visible = true
@@ -1181,6 +1637,15 @@ func _close_disband_panel() -> void:
 		_db_panel.visible = false
 	_db_base = null
 	_db_army = null
+
+
+func _on_disband_send_loot_pressed() -> void:
+	var base = _db_base
+	var army := _db_army
+	_close_disband_panel()
+	if base == null or army == null:
+		return
+	_open_force_cargo_panel(base, army.force_id, "disband_send", army)
 
 
 func _on_disband_confirm_pressed() -> void:
@@ -1463,6 +1928,9 @@ func _close_force_menu() -> void:
 	_fm_right_spinboxes.clear()
 	_fm_left_vip_checks.clear()
 	_fm_right_vip_checks.clear()
+	_fm_left_loot_spinboxes.clear()
+	_fm_right_loot_spinboxes.clear()
+	_fm_split_loot_spinboxes.clear()
 
 
 func refresh_force_menu_if_open() -> void:
@@ -1549,13 +2017,31 @@ func _rebuild_force_menu() -> void:
 		spot_row.add_child(opt)
 		_fm_body.add_child(spot_row)
 
+	if _fm_base.has_method("force_food_status_text"):
+		var food_left := Label.new()
+		food_left.text = _fm_base.force_food_status_text(_fm_left_id)
+		food_left.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		food_left.custom_minimum_size = Vector2(480, 0)
+		_fm_body.add_child(food_left)
+		var right_fid := _fm_right_force_id()
+		if right_fid != "" and _fm_base.forces.has(right_fid):
+			var food_right := Label.new()
+			food_right.text = _fm_base.force_food_status_text(right_fid)
+			food_right.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			food_right.custom_minimum_size = Vector2(480, 0)
+			_fm_body.add_child(food_right)
+		_fm_body.add_child(HSeparator.new())
+
 	if _fm_split_mode:
 		_fm_split_spinboxes.clear()
+		_fm_split_loot_spinboxes.clear()
 		if _fm_withdraw_mode:
 			_fm_title.text = "Withdraw your troops from %s" % left_name
 		else:
 			_fm_title.text = "Split: %s" % left_name
 		_fm_body.add_child(_build_split_column())
+		_fm_body.add_child(HSeparator.new())
+		_fm_body.add_child(_build_loot_transfer_block(true, true))
 		_fm_body.add_child(HSeparator.new())
 		if not _fm_withdraw_mode:
 			var half_btn := Button.new()
@@ -1569,6 +2055,8 @@ func _rebuild_force_menu() -> void:
 	else:
 		_fm_left_spinboxes.clear()
 		_fm_right_spinboxes.clear()
+		_fm_left_loot_spinboxes.clear()
+		_fm_right_loot_spinboxes.clear()
 		var hint := Label.new()
 		hint.text = "Set amounts to move, then confirm (→ left to right, ← right to left):"
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1583,6 +2071,13 @@ func _rebuild_force_menu() -> void:
 		columns.add_child(_build_force_column(false))
 		_fm_body.add_child(columns)
 		_fm_body.add_child(HSeparator.new())
+		var loot_cols := HBoxContainer.new()
+		loot_cols.add_theme_constant_override("separation", 20)
+		loot_cols.add_child(_build_loot_transfer_block(true, false))
+		loot_cols.add_child(VSeparator.new())
+		loot_cols.add_child(_build_loot_transfer_block(false, false))
+		_fm_body.add_child(loot_cols)
+		_fm_body.add_child(HSeparator.new())
 		var confirm_btn := Button.new()
 		confirm_btn.text = "Confirm Transfer"
 		confirm_btn.pressed.connect(_on_fm_transfer_confirm)
@@ -1594,6 +2089,24 @@ func _rebuild_force_menu() -> void:
 			merge_btn.text = "Merge all into %s" % right_name
 			merge_btn.pressed.connect(_on_fm_merge_all)
 			_fm_body.add_child(merge_btn)
+		else:
+			# Manage garrison stock without needing a second army.
+			var gfid := _fm_right_force_id()
+			if gfid != "" and _fm_base.forces.has(gfid):
+				var g_manage := HBoxContainer.new()
+				var dep := Button.new()
+				dep.text = "Deposit garrison loot"
+				dep.pressed.connect(_on_fm_manage_garrison_loot.bind("deposit"))
+				g_manage.add_child(dep)
+				var wit := Button.new()
+				wit.text = "Withdraw to garrison"
+				wit.pressed.connect(_on_fm_manage_garrison_loot.bind("withdraw"))
+				g_manage.add_child(wit)
+				var snd := Button.new()
+				snd.text = "Send garrison loot"
+				snd.pressed.connect(_on_fm_manage_garrison_loot.bind("send"))
+				g_manage.add_child(snd)
+				_fm_body.add_child(g_manage)
 
 	_fm_panel.visible = true
 	_fit_force_menu_panel()
@@ -1645,6 +2158,94 @@ func _make_spin_all_button(spin: SpinBox) -> Button:
 	btn.tooltip_text = "Select all of this type"
 	btn.pressed.connect(func(): spin.value = spin.max_value)
 	return btn
+
+
+## Loot transfer sliders. `split_mode`: amounts move with the split-off army (default 0).
+func _build_loot_transfer_block(is_left: bool, split_mode: bool) -> VBoxContainer:
+	var col := VBoxContainer.new()
+	col.custom_minimum_size = Vector2(240, 0)
+	var fid := _fm_left_id
+	if not split_mode and not is_left:
+		fid = _fm_right_force_id()
+	var cargo: Dictionary = GlobalUnits.empty_caravan_cargo()
+	if _fm_base != null and _fm_base.has_method("get_force_cargo") and fid != "":
+		cargo = _fm_base.get_force_cargo(fid)
+	var head := Label.new()
+	head.add_theme_font_size_override("font_size", 13)
+	if split_mode:
+		head.text = "Loot to move with split (default none):"
+	elif is_left:
+		head.text = "Loot → right (default none):"
+	else:
+		head.text = "Loot → left (default none):"
+	head.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	head.custom_minimum_size = Vector2(220, 0)
+	col.add_child(head)
+	if not GlobalUnits.caravan_cargo_has_any(cargo):
+		var empty := Label.new()
+		empty.text = "(no loot)"
+		col.add_child(empty)
+		return col
+	var target: Dictionary = _fm_split_loot_spinboxes if split_mode else (
+		_fm_left_loot_spinboxes if is_left else _fm_right_loot_spinboxes
+	)
+	for k in GlobalUnits.WEAPON_KEYS:
+		var have := int(cargo.get(k, 0))
+		if have <= 0:
+			continue
+		var row := HBoxContainer.new()
+		var lbl := Label.new()
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl.text = "%s (%d)" % [GlobalUnits.weapon_name(k), have]
+		row.add_child(lbl)
+		var spin := SpinBox.new()
+		spin.min_value = 0
+		spin.max_value = have
+		spin.step = 1
+		spin.value = 0
+		spin.custom_minimum_size = Vector2(80, 0)
+		row.add_child(spin)
+		row.add_child(_make_spin_all_button(spin))
+		col.add_child(row)
+		target[k] = spin
+	for k in GlobalUnits.MATERIAL_KEYS:
+		var have_m := int(cargo.get(k, 0))
+		if have_m <= 0:
+			continue
+		var row_m := HBoxContainer.new()
+		var lbl_m := Label.new()
+		lbl_m.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl_m.text = "%s (%d)" % [GlobalUnits.material_name(k), have_m]
+		row_m.add_child(lbl_m)
+		var spin_m := SpinBox.new()
+		spin_m.min_value = 0
+		spin_m.max_value = have_m
+		spin_m.step = 1
+		spin_m.value = 0
+		spin_m.custom_minimum_size = Vector2(80, 0)
+		row_m.add_child(spin_m)
+		row_m.add_child(_make_spin_all_button(spin_m))
+		col.add_child(row_m)
+		target[k] = spin_m
+	return col
+
+
+func _fm_collect_loot(spinboxes: Dictionary) -> Dictionary:
+	var cargo := GlobalUnits.empty_caravan_cargo()
+	for k in spinboxes:
+		cargo[k] = int(spinboxes[k].value)
+	return cargo
+
+
+func _on_fm_manage_garrison_loot(mode: String) -> void:
+	if _fm_base == null:
+		return
+	var gfid := _fm_right_force_id()
+	if gfid == "" or not _fm_base.forces.has(gfid):
+		return
+	var base = _fm_base
+	_close_force_menu()
+	_open_force_cargo_panel(base, gfid, mode)
 
 
 func _on_fm_split_half() -> void:
@@ -1704,10 +2305,13 @@ func _on_fm_transfer_confirm() -> void:
 
 	var left_to_right := _collect_out_units(_fm_left_spinboxes)
 	var right_to_left := _collect_out_units(_fm_right_spinboxes)
+	var cargo_l2r := _fm_collect_loot(_fm_left_loot_spinboxes)
+	var cargo_r2l := _fm_collect_loot(_fm_right_loot_spinboxes)
 	var vips_l2r := _fm_collect_checked_vips(_fm_left_vip_checks)
 	var vips_r2l := _fm_collect_checked_vips(_fm_right_vip_checks)
-	if left_to_right.is_empty() and right_to_left.is_empty() and vips_l2r.is_empty() and vips_r2l.is_empty():
-		show_info_popup("Select at least one unit or VIP to transfer")
+	var any_loot := GlobalUnits.caravan_cargo_has_any(cargo_l2r) or GlobalUnits.caravan_cargo_has_any(cargo_r2l)
+	if left_to_right.is_empty() and right_to_left.is_empty() and vips_l2r.is_empty() and vips_r2l.is_empty() and not any_loot:
+		show_info_popup("Select at least one unit, VIP, or loot to transfer")
 		return
 
 	if (not vips_l2r.is_empty() or not vips_r2l.is_empty()) and _fm_right_is_garrison and not _fm_building_accepts_vip():
@@ -1751,8 +2355,10 @@ func _on_fm_transfer_confirm() -> void:
 		var building_key = base.get_building_key(_fm_building)
 		var bldg = _fm_building
 		_close_force_menu()
-		if not left_to_right.is_empty() or not right_to_left.is_empty():
-			base.request_batch_garrison_units.rpc_id(1, left_id, building_key, _fm_spot, left_to_right, right_to_left)
+		if not left_to_right.is_empty() or not right_to_left.is_empty() or any_loot:
+			base.request_batch_garrison_units.rpc_id(
+				1, left_id, building_key, _fm_spot, left_to_right, right_to_left, cargo_l2r, cargo_r2l
+			)
 		if not vips_l2r.is_empty():
 			var vip_dest = base.garrison_force_id_for(bldg, base.vip_garrison_spot_for(bldg))
 			base.do_transfer_vips(left_id, vip_dest, vips_l2r)
@@ -1793,8 +2399,10 @@ func _on_fm_transfer_confirm() -> void:
 			return
 
 		_close_force_menu()
-		if not left_to_right.is_empty() or not right_to_left.is_empty():
-			base.request_batch_transfer_units.rpc_id(1, left_id, right_id, left_to_right, right_to_left)
+		if not left_to_right.is_empty() or not right_to_left.is_empty() or any_loot:
+			base.request_batch_transfer_units.rpc_id(
+				1, left_id, right_id, left_to_right, right_to_left, cargo_l2r, cargo_r2l
+			)
 		if not vips_l2r.is_empty():
 			base.do_transfer_vips(left_id, right_id, vips_l2r)
 		if not vips_r2l.is_empty():
@@ -1827,6 +2435,7 @@ func _on_fm_split_confirm() -> void:
 	var source_id := _fm_left_id
 	var withdraw := _fm_withdraw_mode
 	var withdraw_player = base.my_pl_id if withdraw else -1
+	var cargo_out := _fm_collect_loot(_fm_split_loot_spinboxes)
 	var fig = base.armies.get_node_or_null(source_id)
 	if fig == null:
 		return
@@ -1836,7 +2445,9 @@ func _on_fm_split_confirm() -> void:
 		show_info_popup("No free adjacent tile to place split army")
 		return
 	_close_force_menu()
-	base.request_split_force.rpc_id(1, source_id, out_units, free_cell.x, free_cell.y, withdraw, withdraw_player)
+	base.request_split_force.rpc_id(
+		1, source_id, out_units, free_cell.x, free_cell.y, withdraw, withdraw_player, cargo_out
+	)
 
 
 func _build_force_column(is_left: bool) -> VBoxContainer:
@@ -1846,8 +2457,19 @@ func _build_force_column(is_left: bool) -> VBoxContainer:
 
 	var head := Label.new()
 	head.add_theme_font_size_override("font_size", 14)
+	var loot_fid := _fm_left_id if is_left else (_fm_right_force_id() if _fm_right_is_garrison else _fm_right_id)
+	var loot_txt := ""
+	if _fm_base != null and _fm_base.has_method("get_force_cargo") and loot_fid != "":
+		var fcargo: Dictionary = _fm_base.get_force_cargo(loot_fid)
+		if GlobalUnits.caravan_cargo_has_any(fcargo):
+			loot_txt = "\nLoot: %s" % GlobalUnits.caravan_cargo_summary(fcargo)
 	if is_left:
-		head.text = "%s\n%d men · str %d" % [_fm_force_label(_fm_left_id, false), GlobalUnits.total_men(units), GlobalUnits.total_strength(units)]
+		head.text = "%s\n%d men · str %d%s" % [
+			_fm_force_label(_fm_left_id, false),
+			GlobalUnits.total_men(units),
+			GlobalUnits.total_strength(units),
+			loot_txt,
+		]
 	else:
 		var cap_txt := ""
 		if _fm_right_is_garrison:
@@ -1856,7 +2478,11 @@ func _build_force_column(is_left: bool) -> VBoxContainer:
 			cap_txt = "%d/%d men · str %d" % [GlobalUnits.total_men(units), cap, GlobalUnits.total_strength(units, mult)]
 		else:
 			cap_txt = "%d men · str %d" % [GlobalUnits.total_men(units), GlobalUnits.total_strength(units)]
-		head.text = "%s\n%s" % ["Garrison" if _fm_right_is_garrison else _fm_force_label(_fm_right_id, false), cap_txt]
+		head.text = "%s\n%s%s" % [
+			"Garrison" if _fm_right_is_garrison else _fm_force_label(_fm_right_id, false),
+			cap_txt,
+			loot_txt,
+		]
 	col.add_child(head)
 	col.add_child(HSeparator.new())
 
@@ -1973,6 +2599,108 @@ func update_money(m_value):
 
 func update_pname(player_name):
 	$top_panel/MarginContainer/HBoxContainer/player_name_lbl.text = player_name
+
+
+func refresh_military_tab_if_open() -> void:
+	if war_menu != null and war_menu.visible:
+		refresh_military_tab()
+
+
+func refresh_military_tab() -> void:
+	if military_list == null:
+		return
+	var base_map = parent_n
+	if not is_instance_valid(base_map) or not base_map.has_method("get_player_upkeep_preview"):
+		return
+	var my_id: int = int(base_map.my_pl_id)
+	var preview: Dictionary = base_map.get_player_upkeep_preview(my_id)
+	var total := int(preview.get("total", 0))
+	var levy := int(preview.get("levy", 0))
+	var sellsword := int(preview.get("sellsword", 0))
+	if military_upkeep_lbl != null:
+		military_upkeep_lbl.text = (
+			"Projected upkeep: %d marks  (levies %d · sellswords %d)"
+			% [total, levy, sellsword]
+		)
+	var strikes := int(preview.get("strikes", 0))
+	var streak := int(preview.get("pay_streak", 0))
+	if military_strikes_lbl != null:
+		if strikes <= 0:
+			military_strikes_lbl.text = "Pay status: clear"
+		else:
+			var next := ""
+			match strikes:
+				1:
+					next = "Next miss: sellswords disband."
+				2:
+					next = "Next miss: levies desert 10% per stack."
+				_:
+					next = "Levies desert each unpaid season; sellswords leave on miss."
+			var clear_txt := ""
+			if streak > 0:
+				clear_txt = " Paid %d/%d seasons toward clearing strikes." % [
+					streak, GlobalUnits.UPKEEP_CLEAR_PAYS
+				]
+			else:
+				clear_txt = " Pay in full %d seasons in a row to clear strikes." % GlobalUnits.UPKEEP_CLEAR_PAYS
+			military_strikes_lbl.text = "Strikes: %d/%d. %s%s" % [
+				strikes, GlobalUnits.UPKEEP_STRIKES_MAX, next, clear_txt
+			]
+
+	for child in military_list.get_children():
+		military_list.remove_child(child)
+		child.queue_free()
+
+	var rows: Array = preview.get("forces", [])
+	if rows.is_empty():
+		var empty_lbl := Label.new()
+		empty_lbl.text = "No forces"
+		military_list.add_child(empty_lbl)
+		return
+
+	for entry in rows:
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 2)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		var name_btn := Button.new()
+		name_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		name_btn.text = "%s (%d men)" % [str(entry.get("name", "?")), int(entry.get("men", 0))]
+		var fid := str(entry.get("force_id", ""))
+		name_btn.pressed.connect(_on_military_force_pressed.bind(fid))
+		var cost_lbl := Label.new()
+		cost_lbl.text = "%d marks" % int(entry.get("total", 0))
+		cost_lbl.custom_minimum_size = Vector2(72, 0)
+		cost_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		row.add_child(name_btn)
+		row.add_child(cost_lbl)
+		col.add_child(row)
+		var food_lbl := Label.new()
+		food_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		if bool(entry.get("in_dejure", false)):
+			food_lbl.text = "  Food: de jure supply · %d grain held" % int(entry.get("grain", 0))
+		else:
+			var seasons := int(entry.get("food_seasons", -1))
+			var tag := ""
+			if bool(entry.get("starving", false)):
+				tag = " · STARVING"
+			elif bool(entry.get("food_warning", false)):
+				tag = " · warning"
+			food_lbl.text = "  Food: %d grain · need %d/season · %s season(s)%s" % [
+				int(entry.get("grain", 0)),
+				int(entry.get("grain_need", 0)),
+				str(seasons) if seasons >= 0 else "—",
+				tag,
+			]
+		col.add_child(food_lbl)
+		military_list.add_child(col)
+
+
+func _on_military_force_pressed(force_id: String) -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("jump_camera_to_force"):
+		return
+	parent_n.jump_camera_to_force(force_id)
 
 
 func refresh_alliances_list() -> void:
@@ -2370,8 +3098,18 @@ func _ensure_province_levy_widgets() -> void:
 	left.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	columns.add_child(left)
 
+	var fields_row := HBoxContainer.new()
+	fields_row.add_theme_constant_override("separation", 8)
+	fields_row.mouse_filter = Control.MOUSE_FILTER_STOP
 	_prov_fields_lbl = _make_prov_section_label("Fields: —")
-	left.add_child(_prov_fields_lbl)
+	_prov_fields_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fields_row.add_child(_prov_fields_lbl)
+	_prov_populate_idle_btn = Button.new()
+	_prov_populate_idle_btn.text = "Populate idle fields"
+	_prov_populate_idle_btn.disabled = true
+	_prov_populate_idle_btn.pressed.connect(_on_populate_idle_fields_pressed)
+	fields_row.add_child(_prov_populate_idle_btn)
+	left.add_child(fields_row)
 	_prov_stock_lbl = _make_prov_section_label("Stock: —")
 	left.add_child(_prov_stock_lbl)
 	left.add_child(HSeparator.new())
@@ -2634,8 +3372,10 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 		province_tab_towns.text = "Towns: — / —"
 		province_tab_castles.text = "Castles: — / —"
 		province_tab_economy.text = "Economy: — / —"
+		_prov_idle_field_count = 0
 		if _prov_manage_root != null:
 			_prov_manage_root.visible = false
+		hide_populate_idle_popup()
 		return
 	province_tab_name.text = data.get("name", "—")
 	province_tab_status.text = "Status: %s" % data.get("status_name", "—")
@@ -2664,21 +3404,42 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	if _prov_manage_root != null:
 		_prov_manage_root.visible = can_manage
 	if not can_manage:
+		_prov_idle_field_count = 0
+		hide_populate_idle_popup()
 		return
 
 	var holding: Dictionary = data.get("holding", {})
 	if _prov_fields_lbl != null:
 		if has_holding and not holding.is_empty():
 			var preview: Dictionary = holding.get("economy_preview", {})
-			_prov_fields_lbl.text = (
-				"Fields: %d grain (%d sown), %d horse, %d idle"
-				% [
-					int(holding.get("grain_fields", 0)),
-					int(holding.get("planted_grain", 0)),
-					int(holding.get("horse_fields", 0)),
-					int(holding.get("idle_fields", 0)),
-				]
-			)
+			_prov_idle_field_count = int(holding.get("idle_fields", 0))
+			var grain_n := int(holding.get("grain_fields", 0))
+			var planted_n := int(holding.get("planted_grain", 0))
+			var season_i := int(parent_n.season) if is_instance_valid(parent_n) else -1
+			var in_winter := season_i == 0
+			if in_winter:
+				_prov_fields_lbl.text = (
+					"Fields: %d grain (%d planned), %d horse, %d idle"
+					% [
+						grain_n,
+						grain_n,
+						int(holding.get("horse_fields", 0)),
+						_prov_idle_field_count,
+					]
+				)
+			else:
+				_prov_fields_lbl.text = (
+					"Fields: %d grain (%d sown), %d horse, %d idle"
+					% [
+						grain_n,
+						planted_n,
+						int(holding.get("horse_fields", 0)),
+						_prov_idle_field_count,
+					]
+				)
+			if _prov_populate_idle_btn != null:
+				_prov_populate_idle_btn.visible = true
+				_prov_populate_idle_btn.disabled = _prov_idle_field_count <= 0
 			_prov_stock_lbl.text = (
 				"Stock: grain %d · wood %d · stone %d · iron %d · horses %d · grain pot %.0f"
 				% [
@@ -2697,14 +3458,29 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			var grain_need := int(holding.get("grain_labor_need", 0))
 			var horse_need := int(holding.get("horse_labor_need", 0))
 			var labor_map: Dictionary = holding.get("labor", {})
-			_prov_agri_lbl.text = (
-				"Agriculture: grain coverage %.0f%% (%d / %d workers) · horse pastures %d / %d workers"
-				% [
-					cov,
-					int(labor_map.get("grain", 0)), grain_need,
-					int(labor_map.get("horses", 0)), horse_need,
-				]
-			)
+			if in_winter:
+				var seed_each := int(holding.get("seed_per_field", GlobalUnits.GRAIN_SEED_PER_FIELD))
+				var stock := int(holding.get("grain_stock", 0))
+				var needed := grain_n * seed_each
+				var can_sow := 0
+				if seed_each > 0:
+					can_sow = mini(grain_n, int(stock / seed_each))
+				_prov_agri_lbl.text = (
+					"Grain plan: %d fields · seed %d needed / %d stock → %d will sow · horse pastures %d / %d workers"
+					% [
+						grain_n, needed, stock, can_sow,
+						int(labor_map.get("horses", 0)), horse_need,
+					]
+				)
+			else:
+				_prov_agri_lbl.text = (
+					"Agriculture: grain coverage %.0f%% (%d / %d workers) · horse pastures %d / %d workers"
+					% [
+						cov,
+						int(labor_map.get("grain", 0)), grain_need,
+						int(labor_map.get("horses", 0)), horse_need,
+					]
+				)
 			_prov_prod_lbl.text = (
 				"Next season production: wood %+d · stone %+d · iron %+d · marks %+d"
 				% [
@@ -2717,13 +3493,18 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			_prov_smith_lbl.text = _blacksmith_status_text(preview, holding)
 			_rebuild_labor_sliders(holding)
 		else:
+			_prov_idle_field_count = 0
 			_prov_fields_lbl.text = "Fields: (no settlement holding here)"
+			if _prov_populate_idle_btn != null:
+				_prov_populate_idle_btn.visible = false
+				_prov_populate_idle_btn.disabled = true
 			_prov_stock_lbl.text = "Stock: —"
 			_prov_labor_lbl.text = "Labor pool: —"
 			_prov_agri_lbl.text = "Agriculture: —"
 			_prov_prod_lbl.text = "Next season production: —"
 			_prov_smith_lbl.text = "Blacksmith: —"
 			_rebuild_labor_sliders({})
+			hide_populate_idle_popup()
 
 	_prov_happiness_lbl.text = "Happiness: %.0f" % float(data.get("happiness", 100))
 	_prov_levy_lbl.text = "Levy this season: %d / remaining %d (cap 80%% of %d)" % [
@@ -2776,6 +3557,7 @@ func _ensure_battle_menu() -> void:
 
 
 func open_battle_menu(base_map, attacker_id: String, defender_army_id: String, building: Node) -> void:
+	_close_siege_prompt()
 	_ensure_battle_menu()
 	_bt_base = base_map
 	_bt_attacker_id = attacker_id
@@ -2807,11 +3589,15 @@ func _rebuild_battle_menu() -> void:
 	var def_str := 0
 	var def_men := 0
 	var def_name := "Enemy"
+	var siege_lvl := -1
 	if _bt_building != null:
-		def_str = _bt_base.get_building_battle_strength(_bt_building)
+		def_str = _bt_base.get_building_battle_strength(_bt_building, _bt_attacker_id)
 		def_men = GlobalUnits.fighting_men(_bt_base.get_all_building_garrison(_bt_building))
 		def_name = _bt_base._building_display_name(_bt_building) if _bt_base.has_method("_building_display_name") else "Building"
 		_bt_title.text = "Assault"
+		if _bt_building.get("type_") != null and _bt_building.type_ == GlobalStuff.BUILDING_TYPE.CASTLE \
+				and _bt_base.has_method("get_force_siege_level_vs"):
+			siege_lvl = int(_bt_base.get_force_siege_level_vs(_bt_attacker_id, _bt_building))
 	else:
 		if not _bt_base.forces.has(_bt_defender_id):
 			_close_battle_menu()
@@ -2848,6 +3634,17 @@ func _rebuild_battle_menu() -> void:
 	them.custom_minimum_size = Vector2(360, 0)
 	_bt_body.add_child(them)
 
+	if siege_lvl >= 0:
+		var siege_lbl := Label.new()
+		var bonus := GlobalUnits.siege_inside_bonus(siege_lvl)
+		siege_lbl.text = "Siege engines: %d/%d (castle inside ×%.1f)" % [
+			siege_lvl, GlobalUnits.SIEGE_MAX_LEVEL, bonus
+		]
+		siege_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		siege_lbl.custom_minimum_size = Vector2(360, 0)
+		siege_lbl.add_theme_font_size_override("font_size", 12)
+		_bt_body.add_child(siege_lbl)
+
 	var hint := Label.new()
 	hint.text = "Strength is modified by luck when you attack. Stand ground leaves both armies in place."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2883,6 +3680,119 @@ func _on_bt_attack() -> void:
 	var building = _bt_building
 	_close_battle_menu()
 	base.do_battle_attack(atk, def, building)
+
+
+# --- Siege prompt (first castle assault) ------------------------------------
+
+func _ensure_siege_prompt() -> void:
+	if _sg_panel != null:
+		return
+	_sg_panel = PanelContainer.new()
+	_sg_panel.top_level = true
+	_sg_panel.z_index = 145
+	_sg_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_sg_panel.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	_sg_title = Label.new()
+	_sg_title.text = "Siege"
+	_sg_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(_sg_title)
+	vbox.add_child(HSeparator.new())
+	_sg_body = VBoxContainer.new()
+	_sg_body.add_theme_constant_override("separation", 6)
+	vbox.add_child(_sg_body)
+	margin.add_child(vbox)
+	_sg_panel.add_child(margin)
+	add_child(_sg_panel)
+
+
+func open_siege_prompt(base_map, force_id: String, building: Node) -> void:
+	_close_battle_menu()
+	_ensure_siege_prompt()
+	_sg_base = base_map
+	_sg_force_id = force_id
+	_sg_building = building
+	_rebuild_siege_prompt()
+
+
+func _close_siege_prompt() -> void:
+	if _sg_panel != null:
+		_sg_panel.visible = false
+	_sg_base = null
+	_sg_force_id = ""
+	_sg_building = null
+
+
+func _rebuild_siege_prompt() -> void:
+	if _sg_base == null or not _sg_base.forces.has(_sg_force_id) \
+			or _sg_building == null or not is_instance_valid(_sg_building):
+		_close_siege_prompt()
+		return
+	for c in _sg_body.get_children():
+		_sg_body.remove_child(c)
+		c.queue_free()
+
+	var bname := "Castle"
+	if _sg_base.has_method("_building_display_name") and _sg_building is Node2D:
+		bname = _sg_base._building_display_name(_sg_building)
+	_sg_title.text = "Assault %s" % bname
+
+	var info := Label.new()
+	info.text = (
+		"Build siege engines while camped here. Engines improve each season "
+		+ "(up to %d), lowering the defenders' castle bonus.\n\n"
+		+ "Assault now with no engines — the garrison fights at ×%.1f inside."
+	) % [GlobalUnits.SIEGE_MAX_LEVEL, GlobalUnits.siege_inside_bonus(0)]
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.custom_minimum_size = Vector2(360, 0)
+	_sg_body.add_child(info)
+	_sg_body.add_child(HSeparator.new())
+
+	var build_btn := Button.new()
+	build_btn.text = "Start building siege engines"
+	build_btn.pressed.connect(_on_sg_start_building)
+	_sg_body.add_child(build_btn)
+
+	var assault_btn := Button.new()
+	assault_btn.text = "Assault now"
+	assault_btn.pressed.connect(_on_sg_assault_now)
+	_sg_body.add_child(assault_btn)
+
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.pressed.connect(_close_siege_prompt)
+	_sg_body.add_child(cancel_btn)
+
+	_sg_panel.visible = true
+	_sg_panel.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_sg_panel.size = Vector2(minf(420, vp.x * 0.9), _sg_panel.get_combined_minimum_size().y)
+	_sg_panel.position = (vp - _sg_panel.size) * 0.5
+
+
+func _on_sg_start_building() -> void:
+	if _sg_base == null or _sg_building == null:
+		return
+	var base = _sg_base
+	var fid := _sg_force_id
+	var building = _sg_building
+	_close_siege_prompt()
+	if base.has_method("do_start_siege"):
+		base.do_start_siege(fid, building)
+
+
+func _on_sg_assault_now() -> void:
+	if _sg_base == null or _sg_building == null:
+		return
+	var base = _sg_base
+	var fid := _sg_force_id
+	var building = _sg_building
+	_close_siege_prompt()
+	open_battle_menu(base, fid, "", building)
 
 
 func on_battle_resolved(base_map, attacker_id: String, building: Node, attacker_won: bool, hostage_pool: Array, event_id: String = "") -> void:
@@ -3146,33 +4056,47 @@ func open_building_actions_menu(base_map, force_id: String, building: Node) -> v
 	var type_ = building.get("type_")
 	var is_castle = type_ == GlobalStuff.BUILDING_TYPE.CASTLE
 	var is_economy = type_ == GlobalStuff.BUILDING_TYPE.ECONOMY
+	var raid_mp := int(base_map.RAID_MP_COST) if base_map.get("RAID_MP_COST") != null else 2
+	var capt_mp := int(base_map.CAPTURE_MP_COST) if base_map.get("CAPTURE_MP_COST") != null else 2
+	var raze_mp := int(base_map.RAZE_MP_COST) if base_map.get("RAZE_MP_COST") != null else 4
+	var has_raid_mp = base_map.force_has_movement(force_id, raid_mp) if base_map.has_method("force_has_movement") else true
+	var has_capt_mp = base_map.force_has_movement(force_id, capt_mp) if base_map.has_method("force_has_movement") else true
+	var has_raze_mp = base_map.force_has_movement(force_id, raze_mp) if base_map.has_method("force_has_movement") else true
 
 	var loot = base_map.compute_raid_loot(building)
 	var can_raid = base_map.can_raid_building(building)
 	var is_razed = base_map.is_building_razed(building) if base_map.has_method("is_building_razed") else false
 
 	var capt_btn := Button.new()
-	capt_btn.text = "Capture"
+	capt_btn.text = "Capture (%d MP)" % capt_mp
+	capt_btn.disabled = not has_capt_mp
+	if not has_capt_mp:
+		capt_btn.text = "Capture (need %d MP)" % capt_mp
 	capt_btn.pressed.connect(_on_ba_capture)
 	_ba_body.add_child(capt_btn)
 
 	var raid_btn := Button.new()
-	raid_btn.text = "Raid (%d marks)" % loot
-	raid_btn.disabled = not can_raid or loot <= 0
+	raid_btn.text = "Raid (%d marks, %d MP)" % [loot, raid_mp]
+	raid_btn.disabled = not can_raid or loot <= 0 or not has_raid_mp
 	if is_razed:
 		raid_btn.text = "Raid (razed)"
 		raid_btn.disabled = true
 	elif not can_raid:
 		raid_btn.text = "Raid (already raided this season)"
+	elif not has_raid_mp:
+		raid_btn.text = "Raid (need %d MP)" % raid_mp
 	raid_btn.pressed.connect(_on_ba_raid)
 	_ba_body.add_child(raid_btn)
 
 	if not is_castle:
 		var raze_btn := Button.new()
-		raze_btn.text = "Raze"
+		raze_btn.text = "Raze (%d MP)" % raze_mp
 		if is_razed or (base_map.has_method("can_raze_building") and not base_map.can_raze_building(building)):
 			raze_btn.disabled = true
 			raze_btn.text = "Raze (already razed)" if is_razed else "Raze"
+		elif not has_raze_mp:
+			raze_btn.disabled = true
+			raze_btn.text = "Raze (need %d MP)" % raze_mp
 		raze_btn.pressed.connect(_on_ba_raze)
 		_ba_body.add_child(raze_btn)
 
@@ -3821,10 +4745,11 @@ func _ensure_caravan_capture_menu() -> void:
 	add_child(_cv_cap_panel)
 
 
-func open_caravan_capture_menu(base_map: Node, _army: Node2D, caravan: Node2D) -> void:
+func open_caravan_capture_menu(base_map: Node, army: Node2D, caravan: Node2D) -> void:
 	_ensure_caravan_capture_menu()
 	_cv_cap_base = base_map
 	_cv_cap_caravan = caravan
+	_cv_cap_force_id = str(army.force_id) if army != null and army.get("force_id") != null else ""
 	var owner_name := "?"
 	if base_map.players.has(caravan.player_owner):
 		owner_name = str(base_map.players[caravan.player_owner].name)
@@ -3843,22 +4768,193 @@ func _close_caravan_capture_menu() -> void:
 		_cv_cap_panel.visible = false
 	_cv_cap_base = null
 	_cv_cap_caravan = null
+	_cv_cap_force_id = ""
 
 
 func _on_caravan_capture_take() -> void:
 	var base = _cv_cap_base
 	var c = _cv_cap_caravan
+	var fid := _cv_cap_force_id
 	_close_caravan_capture_menu()
 	if base != null and c != null and is_instance_valid(c):
+		if fid != "" and base.has_method("do_clear_force_siege"):
+			base.do_clear_force_siege(fid)
 		base.do_capture_caravan(String(c.name))
 
 
 func _on_caravan_capture_destroy() -> void:
 	var base = _cv_cap_base
 	var c = _cv_cap_caravan
+	var fid := _cv_cap_force_id
 	_close_caravan_capture_menu()
 	if base != null and c != null and is_instance_valid(c):
+		if fid != "" and base.has_method("do_clear_force_siege"):
+			base.do_clear_force_siege(fid)
 		base.do_destroy_caravan(String(c.name))
+
+
+# --- Merchant raid ----------------------------------------------------------
+
+func _ensure_merchant_raid_menu() -> void:
+	if _mr_panel != null:
+		return
+	_mr_panel = PanelContainer.new()
+	_mr_panel.top_level = true
+	_mr_panel.z_index = 142
+	_mr_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_mr_panel.visible = false
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	var title := Label.new()
+	title.text = "Raid merchant"
+	title.add_theme_font_size_override("font_size", 16)
+	vbox.add_child(title)
+	_mr_info = Label.new()
+	_mr_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_mr_info.custom_minimum_size = Vector2(300, 0)
+	vbox.add_child(_mr_info)
+	var btn_row := HBoxContainer.new()
+	var no_btn := Button.new()
+	no_btn.text = "No"
+	no_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	no_btn.pressed.connect(_close_merchant_raid_menu)
+	btn_row.add_child(no_btn)
+	var yes_btn := Button.new()
+	yes_btn.text = "Yes"
+	yes_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	yes_btn.pressed.connect(_on_merchant_raid_confirm)
+	btn_row.add_child(yes_btn)
+	vbox.add_child(btn_row)
+	margin.add_child(vbox)
+	_mr_panel.add_child(margin)
+	add_child(_mr_panel)
+
+
+func open_merchant_raid_menu(base_map: Node, force_id: String, merchant: Node) -> void:
+	_ensure_merchant_raid_menu()
+	_mr_base = base_map
+	_mr_force_id = force_id
+	_mr_merchant = merchant
+	var mname := str(merchant.get("display_name") if merchant.get("display_name") != null else "Merchant")
+	var raid_mp := int(base_map.RAID_MP_COST) if base_map.get("RAID_MP_COST") != null else 2
+	_mr_info.text = "Raid %s?\nCosts %d movement points." % [mname, raid_mp]
+	_mr_panel.visible = true
+	_mr_panel.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_mr_panel.size = Vector2(minf(340, vp.x * 0.9), _mr_panel.get_combined_minimum_size().y)
+	_mr_panel.position = (vp - _mr_panel.size) * 0.5
+
+
+func _close_merchant_raid_menu() -> void:
+	if _mr_panel != null:
+		_mr_panel.visible = false
+	_mr_base = null
+	_mr_force_id = ""
+	_mr_merchant = null
+
+
+func _on_merchant_raid_confirm() -> void:
+	var base = _mr_base
+	var force_id := _mr_force_id
+	var merchant = _mr_merchant
+	_close_merchant_raid_menu()
+	if base == null or force_id == "" or merchant == null or not is_instance_valid(merchant):
+		return
+	base.do_raid_merchant(force_id, String(merchant.name))
+
+
+# --- Field raid -------------------------------------------------------------
+
+func _ensure_field_raid_menu() -> void:
+	if _fr_panel != null:
+		return
+	_fr_panel = PanelContainer.new()
+	_fr_panel.top_level = true
+	_fr_panel.z_index = 142
+	_fr_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_fr_panel.visible = false
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	var title := Label.new()
+	title.text = "Raid field"
+	title.add_theme_font_size_override("font_size", 16)
+	vbox.add_child(title)
+	_fr_info = Label.new()
+	_fr_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_fr_info.custom_minimum_size = Vector2(300, 0)
+	vbox.add_child(_fr_info)
+	var btn_row := HBoxContainer.new()
+	var no_btn := Button.new()
+	no_btn.text = "No"
+	no_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	no_btn.pressed.connect(_close_field_raid_menu)
+	btn_row.add_child(no_btn)
+	var yes_btn := Button.new()
+	yes_btn.name = "YesBtn"
+	yes_btn.text = "Raid"
+	yes_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	yes_btn.pressed.connect(_on_field_raid_confirm)
+	btn_row.add_child(yes_btn)
+	vbox.add_child(btn_row)
+	margin.add_child(vbox)
+	_fr_panel.add_child(margin)
+	add_child(_fr_panel)
+
+
+func open_field_raid_menu(base_map: Node, force_id: String, field: Node) -> void:
+	_ensure_field_raid_menu()
+	_fr_base = base_map
+	_fr_force_id = force_id
+	_fr_field = field
+	var preview := {"summary": "Raid this field?", "ok": true}
+	if base_map.has_method("field_raid_preview"):
+		preview = base_map.field_raid_preview(field)
+	var raid_mp := int(base_map.RAID_MP_COST) if base_map.get("RAID_MP_COST") != null else 2
+	var crop_name = field.get_crop_name() if field.has_method("get_crop_name") else "Field"
+	_fr_info.text = "%s\n%s\nCosts %d movement points." % [
+		crop_name,
+		str(preview.get("summary", "Raid this field?")),
+		raid_mp,
+	]
+	var yes_btn: Button = _fr_panel.find_child("YesBtn", true, false)
+	if yes_btn != null:
+		var can := bool(preview.get("ok", false))
+		if base_map.has_method("force_has_movement") and not base_map.force_has_movement(force_id, raid_mp):
+			can = false
+			yes_btn.text = "Need %d MP" % raid_mp
+		else:
+			yes_btn.text = "Raid"
+		yes_btn.disabled = not can
+	_fr_panel.visible = true
+	_fr_panel.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_fr_panel.size = Vector2(minf(340, vp.x * 0.9), _fr_panel.get_combined_minimum_size().y)
+	_fr_panel.position = (vp - _fr_panel.size) * 0.5
+
+
+func _close_field_raid_menu() -> void:
+	if _fr_panel != null:
+		_fr_panel.visible = false
+	_fr_base = null
+	_fr_force_id = ""
+	_fr_field = null
+
+
+func _on_field_raid_confirm() -> void:
+	var base = _fr_base
+	var force_id := _fr_force_id
+	var field = _fr_field
+	_close_field_raid_menu()
+	if base == null or force_id == "" or field == null or not is_instance_valid(field):
+		return
+	if base.has_method("do_raid_field"):
+		base.do_raid_field(force_id, field)
 
 
 # --- Merchant shop ----------------------------------------------------------
@@ -3877,11 +4973,11 @@ func _ensure_merchant_shop() -> void:
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 8)
 	var header := HBoxContainer.new()
-	var title := Label.new()
-	title.text = "Merchant"
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.add_theme_font_size_override("font_size", 16)
-	header.add_child(title)
+	_ms_title = Label.new()
+	_ms_title.text = "Merchant"
+	_ms_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ms_title.add_theme_font_size_override("font_size", 16)
+	header.add_child(_ms_title)
 	var close_btn := Button.new()
 	close_btn.text = "✕"
 	close_btn.pressed.connect(_close_merchant_shop)
@@ -3942,6 +5038,9 @@ func open_merchant_shop(base_map: Node, merchant: Node) -> void:
 	_ensure_merchant_shop()
 	_ms_base = base_map
 	_ms_merchant = merchant
+	var mname := str(merchant.get("display_name") if merchant.get("display_name") != null else "Merchant")
+	if _ms_title != null:
+		_ms_title.text = mname
 	var prov = merchant.get("province")
 	var pname := "Province"
 	if prov != null and prov.get("p_name") != null:

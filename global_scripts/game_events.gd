@@ -4,7 +4,7 @@ class_name GameEvents
 ## Shared helpers for the global event log + per-player message inbox.
 ## Events are plain Dictionaries so they survive RPC / JSON.
 
-enum KIND { BATTLE, JOIN, BUILDING_CAPTURE, VIP }
+enum KIND { BATTLE, JOIN, BUILDING_CAPTURE, VIP, UPKEEP, FOOD, SIEGE }
 
 const INBOX_CAP := 30
 
@@ -17,6 +17,9 @@ static func kind_name(kind: int) -> String:
 		KIND.JOIN: return "Join offer"
 		KIND.BUILDING_CAPTURE: return "Building"
 		KIND.VIP: return "VIP"
+		KIND.UPKEEP: return "Upkeep"
+		KIND.FOOD: return "Food"
+		KIND.SIEGE: return "Siege"
 	return "Event"
 
 
@@ -43,6 +46,26 @@ static func inbox_label(event: Dictionary, reader_id: int) -> String:
 			if vk == "trade_accept":
 				return "Trade completed"
 			return "VIP"
+		KIND.UPKEEP:
+			match str(event.get("upkeep_kind", "")):
+				"cleared":
+					return "Army pay restored"
+				"desertion":
+					return "Levy desertion"
+				"sellswords":
+					return "Sellswords disbanded"
+				_:
+					return "Army pay warning"
+		KIND.FOOD:
+			match str(event.get("food_kind", "")):
+				"starving":
+					return "One of your armies is starving"
+				"warning":
+					return "One of your armies is out of food"
+				_:
+					return "Army food"
+		KIND.SIEGE:
+			return "Siege engines completed — %s" % place
 	return kind_name(int(event.get("kind", -1)))
 
 
@@ -67,6 +90,18 @@ static func report_title(event: Dictionary, reader_id: int) -> String:
 				"sword":
 					return "VIP executed"
 			return "VIP report"
+		KIND.UPKEEP:
+			return "Army pay"
+		KIND.FOOD:
+			match str(event.get("food_kind", "")):
+				"starving":
+					return "One of your armies is starving"
+				"warning":
+					return "One of your armies is out of food"
+				_:
+					return "Army food"
+		KIND.SIEGE:
+			return "Siege engines completed"
 	return "Status report"
 
 
@@ -76,7 +111,9 @@ static func report_body(event: Dictionary, reader_id: int, player_name_cb: Calla
 	var season := int(event.get("season", 0))
 	var season_txt = SEASON_NAMES[season] if season >= 0 and season < SEASON_NAMES.size() else str(season)
 	lines.append("%s, turn %d" % [season_txt, turn])
-	lines.append("Location: %s" % str(event.get("place_name", "Unknown")))
+	var place := str(event.get("place_name", ""))
+	if place != "":
+		lines.append("Location: %s" % place)
 	lines.append("")
 
 	match int(event.get("kind", -1)):
@@ -92,6 +129,24 @@ static func report_body(event: Dictionary, reader_id: int, player_name_cb: Calla
 				lines.append(txt)
 			else:
 				lines.append("VIP update.")
+		KIND.UPKEEP:
+			var ut := str(event.get("text", ""))
+			if ut != "":
+				lines.append(ut)
+			else:
+				lines.append("Army pay update.")
+		KIND.FOOD:
+			var ft := str(event.get("text", ""))
+			if ft != "":
+				lines.append(ft)
+			else:
+				lines.append("Army food update.")
+		KIND.SIEGE:
+			var st := str(event.get("text", ""))
+			if st != "":
+				lines.append(st)
+			else:
+				lines.append("An army has completed all its siege engines.")
 		_:
 			lines.append("No details available.")
 	return "\n".join(lines)
@@ -132,16 +187,22 @@ static func _battle_body(event: Dictionary, reader_id: int, player_name_cb: Call
 		lines.append("Enemy dead: %d  Enemy wounded: %d" % [def_dead, def_wounded])
 		if attacker_won and hostages > 0:
 			lines.append(_hostage_fate_line(event, hostages, true))
+		if attacker_won:
+			_append_loot_line(lines, event)
+			_append_wages_line(lines, event)
 	elif on_def and not on_atk:
 		lines.append("Your dead: %d  Your wounded: %d" % [def_dead, def_wounded])
 		lines.append("Enemy dead: %d  Enemy wounded: %d" % [atk_dead, atk_wounded])
 		if attacker_won and hostages > 0:
 			lines.append(_hostage_fate_line(event, hostages, false))
+		if not attacker_won:
+			_append_loot_line(lines, event)
 	else:
 		lines.append("Attacker dead: %d  wounded: %d" % [atk_dead, atk_wounded])
 		lines.append("Defender dead: %d  wounded: %d" % [def_dead, def_wounded])
 		if attacker_won and hostages > 0:
 			lines.append(_hostage_fate_line(event, hostages, true))
+		_append_loot_line(lines, event)
 
 	var atk_names := _side_names(atk_side, player_name_cb)
 	var def_names := _side_names(def_side, player_name_cb)
@@ -169,6 +230,20 @@ static func _hostage_fate_line(event: Dictionary, hostages: int, attacker_view: 
 			return "Your wounded: %d — fate undecided" % hostages
 		_:
 			return "Enemy wounded: %d" % hostages
+
+
+static func _append_loot_line(lines: PackedStringArray, event: Dictionary) -> void:
+	var loot: Dictionary = event.get("loot", {})
+	if loot.is_empty() or not GlobalUnits.weapon_stock_has_any(loot):
+		return
+	lines.append("Loot: %s" % GlobalUnits.weapon_stock_summary(loot))
+
+
+static func _append_wages_line(lines: PackedStringArray, event: Dictionary) -> void:
+	var wages := int(event.get("captured_wages", 0))
+	if wages <= 0:
+		return
+	lines.append("You captured the army's wages (%d marks)." % wages)
 
 
 static func _join_body(event: Dictionary) -> PackedStringArray:

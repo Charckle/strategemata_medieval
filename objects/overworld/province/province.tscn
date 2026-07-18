@@ -3,20 +3,16 @@
 [ext_resource type="Script" uid="uid://dtmcg6jhlkpsm" path="res://objects/overworld/province/province.gd" id="1_hfq8b"]
 
 [sub_resource type="LabelSettings" id="LabelSettings_name"]
-font_size = 16
-font_color = Color(1, 1, 1, 1)
 outline_size = 6
 outline_color = Color(0, 0, 0, 1)
 
 [sub_resource type="LabelSettings" id="LabelSettings_status"]
 font_size = 12
-font_color = Color(1, 1, 1, 1)
 outline_size = 5
 outline_color = Color(0, 0, 0, 1)
 
 [sub_resource type="LabelSettings" id="LabelSettings_owner"]
 font_size = 13
-font_color = Color(1, 1, 1, 1)
 outline_size = 5
 outline_color = Color(0, 0, 0, 1)
 
@@ -36,19 +32,16 @@ visible = false
 z_index = 10
 
 [node name="name_label" type="Label" parent="map_labels" unique_id=1283746502]
+label_settings = SubResource("LabelSettings_name")
 horizontal_alignment = 1
 vertical_alignment = 1
-text = ""
-label_settings = SubResource("LabelSettings_name")
 
 [node name="status_label" type="Label" parent="map_labels" unique_id=1283746503]
+label_settings = SubResource("LabelSettings_status")
 horizontal_alignment = 1
 vertical_alignment = 1
-text = ""
-label_settings = SubResource("LabelSettings_status")
 
 [node name="owner_label" type="Label" parent="map_labels" unique_id=1283746504]
+label_settings = SubResource("LabelSettings_owner")
 horizontal_alignment = 1
 vertical_alignment = 1
-text = ""
-label_settings = SubResource("LabelSettings_owner")

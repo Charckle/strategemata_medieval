@@ -326,10 +326,10 @@ theme_override_constants/separation = 6
 
 [node name="war_menu" type="PanelContainer" parent="." unique_id=1949477651]
 visible = false
-offset_left = 420.0
-offset_top = 200.0
-offset_right = 860.0
-offset_bottom = 520.0
+offset_left = 380.0
+offset_top = 120.0
+offset_right = 980.0
+offset_bottom = 620.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 script = ExtResource("2_draggable")
 menu_title = "War"
@@ -366,11 +366,31 @@ current_tab = 0
 
 [node name="Military" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=1830100081]
 layout_mode = 2
+theme_override_constants/separation = 8
 metadata/_tab_index = 0
 
-[node name="Label" type="Label" parent="war_menu/margin/vbox/tabs/Military" unique_id=332577333]
+[node name="upkeep_summary_lbl" type="Label" parent="war_menu/margin/vbox/tabs/Military" unique_id=332577333]
 layout_mode = 2
-text = "Military content"
+autowrap_mode = 3
+text = "Projected upkeep: —"
+
+[node name="strikes_lbl" type="Label" parent="war_menu/margin/vbox/tabs/Military" unique_id=332577334]
+layout_mode = 2
+autowrap_mode = 3
+text = ""
+
+[node name="armies_header" type="Label" parent="war_menu/margin/vbox/tabs/Military" unique_id=332577335]
+layout_mode = 2
+text = "Forces"
+
+[node name="ScrollContainer" type="ScrollContainer" parent="war_menu/margin/vbox/tabs/Military" unique_id=332577336]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="military_list" type="VBoxContainer" parent="war_menu/margin/vbox/tabs/Military/ScrollContainer" unique_id=332577337]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
 
 [node name="Alliances" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=1449656036]
 visible = false

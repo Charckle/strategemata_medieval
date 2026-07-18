@@ -4,10 +4,10 @@
 [ext_resource type="PackedScene" uid="uid://cqsfl6wcfmb6j" path="res://menus/gui/base_bottom/basebottomGUI.tscn" id="1_pughb"]
 [ext_resource type="Script" uid="uid://b22ouhcqa77e" path="res://maps/overworld/o_base_map/tile_coords_debug.gd" id="2_0n9kl"]
 [ext_resource type="Script" uid="uid://7qwk2ti8nt2h" path="res://maps/overworld/o_base_map/camera_pan.gd" id="2_camera"]
-[ext_resource type="Script" uid="uid://c8kprovlabelmgr01" path="res://maps/overworld/o_base_map/province_labels.gd" id="3_provlabels"]
+[ext_resource type="Script" uid="uid://cqyg05i5s5r1p" path="res://maps/overworld/o_base_map/province_labels.gd" id="3_provlabels"]
 [ext_resource type="Script" uid="uid://dtcjcihojfayb" path="res://maps/overworld/o_base_map/pathfinding.gd" id="5_b2dcw"]
 [ext_resource type="Script" uid="uid://ryetjsmixaeu" path="res://maps/overworld/o_base_map/walkable_overlay.gd" id="6_walkable"]
-[ext_resource type="Script" uid="uid://cpb0rd3rgen4yz" path="res://maps/overworld/o_base_map/province_borders.gd" id="7_brdr"]
+[ext_resource type="Script" uid="uid://b5ghywg5jfq2x" path="res://maps/overworld/o_base_map/province_borders.gd" id="7_brdr"]
 
 [node name="OBaseMap" type="Node2D" unique_id=1673006526]
 script = ExtResource("1_i7m4o")
@@ -16,13 +16,16 @@ script = ExtResource("1_i7m4o")
 
 [node name="provinces" type="Node2D" parent="." unique_id=1550993670]
 
+[node name="ProvinceBorders" type="Node2D" parent="." unique_id=1122334455]
+script = ExtResource("7_brdr")
+
 [node name="armies" type="Node2D" parent="." unique_id=1470001019]
 
-[node name="caravans" type="Node2D" parent="."]
+[node name="caravans" type="Node2D" parent="." unique_id=262908393]
 
-[node name="merchants" type="Node2D" parent="."]
+[node name="merchants" type="Node2D" parent="." unique_id=906083699]
 
-[node name="sellswords" type="Node2D" parent="."]
+[node name="sellswords" type="Node2D" parent="." unique_id=835177033]
 
 [node name="PathLine" type="Line2D" parent="." unique_id=405438521]
 width = 2.0
@@ -43,6 +46,3 @@ script = ExtResource("3_provlabels")
 
 [node name="pathfinding" type="Node" parent="." unique_id=356620741]
 script = ExtResource("5_b2dcw")
-
-[node name="ProvinceBorders" type="Node2D" parent="." unique_id=1122334455]
-script = ExtResource("7_brdr")

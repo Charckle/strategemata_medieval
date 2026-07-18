@@ -16,8 +16,7 @@ extends Node
 
 enum UNIT_TYPE { PEASANT, MACEMEN, PIKEMEN, ARCHER, SWORDSMEN, CROSSBOWMEN, KNIGHTS }
 
-# LEVY = raised from the population, SELLSWORD = hired. Same strength for now;
-# this flag is where pay/desertion rules will hook in later.
+# LEVY = raised from the population, SELLSWORD = hired.
 enum SOURCE { LEVY, SELLSWORD }
 
 # Where inside a building a garrison force sits.
@@ -39,10 +38,20 @@ const UNIT_STATS := {
 	UNIT_TYPE.KNIGHTS:     {"name": "Knights",     "strength": 16},
 }
 
-# Units stationed INSIDE a castle fight at this multiplier; OUTSIDE units don't.
+# Units stationed INSIDE a castle fight at this multiplier when listing garrisons
+# (equals siege engines level 2). Battle uses siege_inside_bonus() instead.
 const CASTLE_INSIDE_BONUS := 3.0
-# Outside garrison multiplier used in battle resolution.
+# Outside garrison multiplier used in battle resolution (not affected by siege engines).
 const CASTLE_OUTSIDE_BATTLE_BONUS := 1.5
+# Max siege-engine level an army can build while Sieging a castle.
+const SIEGE_MAX_LEVEL := 3
+# Inside bonus by attacker siege-engine level (0 = none … 3 = complete).
+const SIEGE_INSIDE_BONUS := [5.0, 4.0, 3.0, 2.5]
+
+
+func siege_inside_bonus(level: int) -> float:
+	var i := clampi(level, 0, SIEGE_MAX_LEVEL)
+	return float(SIEGE_INSIDE_BONUS[i])
 
 # Minimum men that must remain in both the original and the split-off army.
 const MIN_SPLIT_MEN := 20
@@ -57,6 +66,9 @@ const LEVY_HAPPINESS_PER_PERCENT := 0.5
 const CARAVAN_MOVEMENT_POINTS := 10
 # Notify owner once after this many consecutive seasons with no path.
 const CARAVAN_PATH_FAIL_NOTIFY := 3
+# Battle loot: fraction of dead men's kit recovered (rolled per weapon type).
+const LOOT_FRAC_MIN := 0.20
+const LOOT_FRAC_MAX := 0.40
 
 # Movement: all-knights armies get this multiplier on base MP.
 const KNIGHT_ONLY_MP_MULT := 1.5
@@ -85,7 +97,7 @@ const WEAPON_PRICE_STRENGTH_MULT := 4
 const MERCHANT_COMPETITION_DISCOUNT := 0.15
 
 # Sellsword hire price = unit strength * count * this (tweak later).
-const SELLSWORD_PRICE_STRENGTH_MULT := 5
+const SELLSWORD_PRICE_STRENGTH_MULT := 3
 const SELLSWORD_STACK_MIN := 50
 const SELLSWORD_STACK_MAX := 200
 # Hireable types (no peasants).
@@ -97,6 +109,27 @@ const SELLSWORD_UNIT_POOL := [
 	UNIT_TYPE.CROSSBOWMEN,
 	UNIT_TYPE.KNIGHTS,
 ]
+
+# Seasonal upkeep (marks per man). Player total is ceiled.
+const UPKEEP_LEVY_PEASANT := 0.5
+const UPKEEP_LEVY_KNIGHT := 2.0
+const UPKEEP_LEVY_OTHER := 1.0
+const UPKEEP_SELLSWORD_KNIGHT := 5.0
+const UPKEEP_SELLSWORD_OTHER := 3.0
+# Missed pays: strike 1 warn, 2 sellswords leave, 3+ levy desertion.
+const UPKEEP_STRIKES_MAX := 3
+const UPKEEP_CLEAR_PAYS := 10
+# Fraction of each unpaid levy stack that deserts (ceil).
+const UPKEEP_DESERT_FRACTION := 0.10
+# Attacker wage loot: one roll per battle × next-season upkeep of wiped side.
+const WAGE_CAPTURE_MIN := 0.60
+const WAGE_CAPTURE_MAX := 0.80
+
+# Campaign foraging: grain per man per season outside controller de jure.
+const FOOD_GRAIN_PER_MAN_MOBILE := 1.0
+const FOOD_GRAIN_PER_MAN_GARRISON := 0.5
+# After one warning season, this fraction of each stack dies (ceil).
+const FOOD_ATTRITION_FRACTION := 0.10
 
 # Weapon key -> unit type whose strength sets the mark price.
 const WEAPON_PRICE_UNIT := {
@@ -122,8 +155,8 @@ const MATERIAL_MARK_PRICES := {
 }
 
 # --- Fields / agriculture ---------------------------------------------------
-# Plant winter (costs GRAIN_SEED_PER_FIELD from holding stock). Labor scales with
-# planted fields. Harvest when leaving autumn.
+# Winter: plan grain fields (map looks sown). Seed (GRAIN_SEED_PER_FIELD) is spent
+# when leaving winter. Labor scales with planted fields. Harvest when leaving autumn.
 # Horses: each pasture hosts up to HORSES_PER_FIELD; labor need is per occupied
 # pasture; foals scale with (horses/cap)×(workers/need) every season incl. winter.
 const GRAIN_SEED_PER_FIELD := 5
@@ -191,6 +224,46 @@ func empty_weapon_stock() -> Dictionary:
 	return out
 
 
+func sanitize_weapon_stock(stock: Dictionary) -> Dictionary:
+	var clean := empty_weapon_stock()
+	for k in WEAPON_KEYS:
+		clean[k] = maxi(0, int(stock.get(k, 0)))
+	return clean
+
+
+func weapon_stock_has_any(stock: Dictionary) -> bool:
+	for k in WEAPON_KEYS:
+		if int(stock.get(k, 0)) > 0:
+			return true
+	return false
+
+
+func weapon_stock_summary(stock: Dictionary) -> String:
+	var bits: PackedStringArray = []
+	for k in WEAPON_KEYS:
+		var amt := int(stock.get(k, 0))
+		if amt > 0:
+			bits.append("%d %s" % [amt, weapon_name(k)])
+	if bits.is_empty():
+		return "(none)"
+	return ", ".join(bits)
+
+
+func add_weapon_stocks(a: Dictionary, b: Dictionary) -> Dictionary:
+	var out := sanitize_weapon_stock(a)
+	for k in WEAPON_KEYS:
+		out[k] = int(out.get(k, 0)) + maxi(0, int(b.get(k, 0)))
+	return out
+
+
+## Clamp `want` so each key is at most what `available` holds.
+func clamp_weapon_stock(available: Dictionary, want: Dictionary) -> Dictionary:
+	var out := empty_weapon_stock()
+	for k in WEAPON_KEYS:
+		out[k] = mini(maxi(0, int(want.get(k, 0))), maxi(0, int(available.get(k, 0))))
+	return out
+
+
 func weapon_name(key: String) -> String:
 	match key:
 		"maces": return "Maces"
@@ -255,6 +328,99 @@ func sellsword_offer_mark_price(offer: Array) -> int:
 			int(entry.get("count", 0))
 		)
 	return total
+
+
+## Fighting and wounded need pay; hostages / captured / join_pending do not.
+func stack_needs_upkeep(stack: Dictionary) -> bool:
+	if bool(stack.get("join_pending", false)):
+		return false
+	var st := stack_status(stack)
+	return st == STATUS.FIGHTING or st == STATUS.WOUNDED
+
+
+## Marks per man for a payable stack (0.0 if unpaid status).
+func stack_upkeep_per_man(stack: Dictionary) -> float:
+	if not stack_needs_upkeep(stack):
+		return 0.0
+	var type_ := int(stack.get("type", UNIT_TYPE.PEASANT))
+	var source_ := int(stack.get("source", SOURCE.LEVY))
+	if source_ == SOURCE.SELLSWORD:
+		if type_ == UNIT_TYPE.KNIGHTS:
+			return UPKEEP_SELLSWORD_KNIGHT
+		return UPKEEP_SELLSWORD_OTHER
+	if type_ == UNIT_TYPE.PEASANT:
+		return UPKEEP_LEVY_PEASANT
+	if type_ == UNIT_TYPE.KNIGHTS:
+		return UPKEEP_LEVY_KNIGHT
+	return UPKEEP_LEVY_OTHER
+
+
+## Raw (uncapped) upkeep marks for stacks owned by owner.
+func upkeep_raw_for_owner(units: Array, owner: int) -> Dictionary:
+	var levy := 0.0
+	var sellsword := 0.0
+	for s in units:
+		if int(s.get("owner", -1)) != owner:
+			continue
+		var per := stack_upkeep_per_man(s)
+		if per <= 0.0:
+			continue
+		var cost := per * float(int(s.get("count", 0)))
+		if int(s.get("source", SOURCE.LEVY)) == SOURCE.SELLSWORD:
+			sellsword += cost
+		else:
+			levy += cost
+	return {"levy": levy, "sellsword": sellsword, "total": levy + sellsword}
+
+
+## Ceil of player-total upkeep (and breakdown ceils for display).
+func upkeep_marks_for_owner(units: Array, owner: int) -> Dictionary:
+	var raw := upkeep_raw_for_owner(units, owner)
+	return {
+		"levy": int(ceili(float(raw["levy"]))),
+		"sellsword": int(ceili(float(raw["sellsword"]))),
+		"total": int(ceili(float(raw["total"]))),
+		"levy_raw": float(raw["levy"]),
+		"sellsword_raw": float(raw["sellsword"]),
+		"total_raw": float(raw["total"]),
+	}
+
+
+## Ceil of (raw upkeep × fraction) for owner's stacks in units.
+func wage_capture_claim(units: Array, owner: int, fraction: float) -> int:
+	var raw := float(upkeep_raw_for_owner(units, owner)["total"])
+	if raw <= 0.0 or fraction <= 0.0:
+		return 0
+	return int(ceili(raw * fraction))
+
+
+## Men that desert from one unpaid levy stack (10% ceil).
+func desertion_from_stack(stack: Dictionary) -> int:
+	if int(stack.get("source", SOURCE.LEVY)) != SOURCE.LEVY:
+		return 0
+	if not stack_needs_upkeep(stack):
+		return 0
+	var n := int(stack.get("count", 0))
+	if n <= 0:
+		return 0
+	return int(ceili(float(n) * UPKEEP_DESERT_FRACTION))
+
+
+## Grain needed to feed `men` for one season (garrison half-rate, ceil).
+func force_grain_need(men: int, is_garrison: bool) -> int:
+	if men <= 0:
+		return 0
+	if is_garrison:
+		return int(ceili(float(men) * FOOD_GRAIN_PER_MAN_GARRISON))
+	return int(ceili(float(men) * FOOD_GRAIN_PER_MAN_MOBILE))
+
+
+## Men lost to starvation from one stack (10% ceil). Applies to every status.
+func starvation_from_stack(stack: Dictionary) -> int:
+	var n := int(stack.get("count", 0))
+	if n <= 0:
+		return 0
+	return int(ceili(float(n) * FOOD_ATTRITION_FRACTION))
 
 
 ## Roll a hire offer: 50%/30%/20% → 1/2/3 unique types; each stack 50–200 men.
@@ -330,6 +496,32 @@ func caravan_cargo_summary(cargo: Dictionary) -> String:
 	if bits.is_empty():
 		return "(empty)"
 	return ", ".join(bits)
+
+
+func add_caravan_stocks(a: Dictionary, b: Dictionary) -> Dictionary:
+	var out := sanitize_caravan_cargo(a)
+	for k in WEAPON_KEYS:
+		out[k] = int(out.get(k, 0)) + maxi(0, int(b.get(k, 0)))
+	for k in MATERIAL_KEYS:
+		out[k] = int(out.get(k, 0)) + maxi(0, int(b.get(k, 0)))
+	return out
+
+
+## Clamp `want` so each key is at most what `available` holds (weapons + materials).
+func clamp_caravan_stock(available: Dictionary, want: Dictionary) -> Dictionary:
+	var out := empty_caravan_cargo()
+	for k in WEAPON_KEYS:
+		out[k] = mini(maxi(0, int(want.get(k, 0))), maxi(0, int(available.get(k, 0))))
+	for k in MATERIAL_KEYS:
+		out[k] = mini(maxi(0, int(want.get(k, 0))), maxi(0, int(available.get(k, 0))))
+	return out
+
+
+func subtract_caravan_stock(stock: Dictionary, need: Dictionary) -> void:
+	for k in WEAPON_KEYS:
+		stock[k] = maxi(0, int(stock.get(k, 0)) - maxi(0, int(need.get(k, 0))))
+	for k in MATERIAL_KEYS:
+		stock[k] = maxi(0, int(stock.get(k, 0)) - maxi(0, int(need.get(k, 0))))
 
 
 func material_name(key: String) -> String:
@@ -431,6 +623,31 @@ func weapons_from_units(units: Array, owner_filter: int = -1) -> Dictionary:
 		for k in costs:
 			refund[k] = int(refund.get(k, 0)) + int(costs[k]) * n
 	return refund
+
+
+## Full kit implied by stacks for battle loot (levy + sellswords; peasants → nothing).
+func kit_weapons_from_units(units: Array) -> Dictionary:
+	var kit := empty_weapon_stock()
+	for s in units:
+		var costs: Dictionary = weapon_cost_for_type(int(s.get("type", UNIT_TYPE.PEASANT)))
+		var n := int(s.get("count", 0))
+		if n <= 0:
+			continue
+		for k in costs:
+			kit[k] = int(kit.get(k, 0)) + int(costs[k]) * n
+	return kit
+
+
+## Roll recovered loot from a full dead kit. Separate fraction per weapon; floor.
+func roll_loot_from_kit(full_kit: Dictionary, rng: RandomNumberGenerator) -> Dictionary:
+	var loot := empty_weapon_stock()
+	for k in WEAPON_KEYS:
+		var n := maxi(0, int(full_kit.get(k, 0)))
+		if n <= 0:
+			continue
+		var frac := rng.randf_range(LOOT_FRAC_MIN, LOOT_FRAC_MAX)
+		loot[k] = int(floor(float(n) * frac))
+	return loot
 
 
 func can_afford_weapons(stock: Dictionary, need: Dictionary) -> bool:
@@ -769,9 +986,11 @@ func roll_effective_strength(base_str: int, rng: RandomNumberGenerator) -> float
 
 # Split fighting men into remaining fighting + wounded stacks using dead/wound %.
 # Non-fighting stacks in `units` are preserved unchanged in `remaining`.
+# Also returns `dead_stacks` (by type/owner/source) for loot accounting.
 func apply_side_casualties(units: Array, dead_frac: float, wound_frac: float) -> Dictionary:
 	var remaining: Array = []
 	var wounded_out: Array = []
+	var dead_stacks: Array = []
 	var dead_total := 0
 	var wound_total := 0
 	for s in units:
@@ -786,6 +1005,8 @@ func apply_side_casualties(units: Array, dead_frac: float, wound_frac: float) ->
 		var live_n := n - dead_n - wound_n
 		dead_total += dead_n
 		wound_total += wound_n
+		if dead_n > 0:
+			add_stack(dead_stacks, make_stack(int(s["type"]), int(s["owner"]), int(s["source"]), dead_n))
 		if live_n > 0:
 			add_stack(remaining, make_stack(int(s["type"]), int(s["owner"]), int(s["source"]), live_n))
 		if wound_n > 0:
@@ -796,33 +1017,47 @@ func apply_side_casualties(units: Array, dead_frac: float, wound_frac: float) ->
 	return {
 		"remaining": remaining,
 		"wounded": wounded_out,
+		"dead_stacks": dead_stacks,
 		"dead": dead_total,
 		"wounded_men": wound_total,
 	}
 
 
 ## After a side is wiped from the map: leftover fighters → dead; wounded + other
-## non-fighting leftovers → hostage pool. Mutates `result` dead/wounded_men.
-## Returns the hostage pool array.
+## non-fighting leftovers → hostage pool. Mutates `result` dead/wounded_men
+## and appends wiped fighters to `dead_stacks`. Returns the hostage pool array.
 func account_wiped_side(result: Dictionary, capture_wounded: bool = true) -> Array:
 	var hostages: Array = []
 	var extra_dead := 0
+	var dead_stacks: Array = result.get("dead_stacks", [])
+	if dead_stacks == null:
+		dead_stacks = []
+	else:
+		dead_stacks = dead_stacks.duplicate(true)
 	for s in result.get("remaining", []):
 		var n := int(s.get("count", 0))
 		if n <= 0:
 			continue
 		if is_fighting_stack(s):
 			extra_dead += n
+			add_stack(dead_stacks, make_stack(int(s["type"]), int(s["owner"]), int(s["source"]), n))
 		elif capture_wounded:
 			add_stack(hostages, s)
 		else:
 			extra_dead += n
+			add_stack(dead_stacks, make_stack(int(s["type"]), int(s["owner"]), int(s["source"]), n))
 	if capture_wounded:
 		for s in result.get("wounded", []):
 			add_stack(hostages, s)
 	else:
-		extra_dead += total_men(result.get("wounded", []))
+		for s in result.get("wounded", []):
+			var wn := int(s.get("count", 0))
+			if wn <= 0:
+				continue
+			extra_dead += wn
+			add_stack(dead_stacks, make_stack(int(s["type"]), int(s["owner"]), int(s["source"]), wn))
 	result["dead"] = int(result.get("dead", 0)) + extra_dead
+	result["dead_stacks"] = dead_stacks
 	result["wounded_men"] = total_men(hostages) if capture_wounded else 0
 	result["remaining"] = []
 	result["wounded"] = hostages.duplicate(true) if capture_wounded else []

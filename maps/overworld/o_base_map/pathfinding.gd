@@ -563,11 +563,23 @@ func _confirm_move() -> bool:
 			return true
 		return confirm_move_to_army(target_unit)
 
-	# If the cursor is on a garrisonable building, prefer building interaction.
+	# If the cursor is on a garrisonable building, merchant, or field, prefer interaction.
 	# When already adjacent the path is often length < 2, so handle that before
 	# the empty-path early-out.
 	var building_under_cursor = blocked_cell_to_object.get(mouse_cell, null)
-	if building_under_cursor != null and building_under_cursor.has_method("get_garrison_capacity"):
+	var click_target = building_under_cursor != null and (
+		building_under_cursor.has_method("get_garrison_capacity")
+		or (
+			building_under_cursor.get("type_") != null
+			and building_under_cursor.type_ == GlobalStuff.BUILDING_TYPE.MERCHANT
+			and not bool(building_under_cursor.get("camp_hidden"))
+		)
+		or (
+			building_under_cursor.get("type_") != null
+			and building_under_cursor.type_ == GlobalStuff.BUILDING_TYPE.FIELD
+		)
+	)
+	if click_target:
 		if army_cell in get_approach_cells(building_under_cursor):
 			var consumed = base_map.on_building_clicked(building_under_cursor)
 			if consumed:
@@ -639,11 +651,20 @@ func _execute_move_along_path(garrison_building: Node, target_army: Node2D) -> b
 	var army_name := String(army.name)
 	var remaining_mp = army.movement_left - spent_mp
 
-	# Moving onto a building's approach with MP left to spend: open the garrison
-	# transfer UI once the move applies (avoids a second click that only shows
-	# an empty building info card).
-	if garrison_building != null and garrison_building.has_method("get_garrison_capacity") \
-			and end_cell in get_approach_cells(garrison_building) and remaining_mp > 0:
+	# Moving onto a building/merchant/field approach with MP left: open interaction UI.
+	var pending_ok = garrison_building != null and (
+		garrison_building.has_method("get_garrison_capacity")
+		or (
+			garrison_building.get("type_") != null
+			and garrison_building.type_ == GlobalStuff.BUILDING_TYPE.MERCHANT
+			and not bool(garrison_building.get("camp_hidden"))
+		)
+		or (
+			garrison_building.get("type_") != null
+			and garrison_building.type_ == GlobalStuff.BUILDING_TYPE.FIELD
+		)
+	)
+	if pending_ok and end_cell in get_approach_cells(garrison_building) and remaining_mp > 0:
 		base_map.set_pending_garrison(army_name, army.force_id, garrison_building)
 
 	# Same for army/caravan targets: arrive on approach with MP left → interact UI.
