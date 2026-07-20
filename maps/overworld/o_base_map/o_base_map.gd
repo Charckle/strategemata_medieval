@@ -15,6 +15,7 @@ var alliances := {}
 
 # Authoritative force registry (rosters). Keyed by force_id:
 #   { "units": Array[stack], "location": Dictionary, "controller": int,
+#     "display_name": String (mobile armies — nickname),
 #     "siege": optional { "building": key, "level": 0..3 } while Sieging a castle }
 # location = {"kind": "cell"}  -> a mobile army; the figure node holds its position
 #          | {"kind": "garrison", "building": <path String>, "spot": SPOT}
@@ -59,8 +60,19 @@ const ARMY_FIGURE_SCENE := preload("res://objects/overworld/army/army_map_unit/a
 const CARAVAN_SCENE := preload("res://objects/overworld/othr/caravan/caravan.tscn")
 const TRANSPORT_SHIP_SCENE := preload("res://objects/overworld/othr/transport_ship/transport_ship.tscn")
 const MERCHANT_SCENE := preload("res://objects/overworld/othr/merchant/merchant.tscn")
-const MERCHANT_COUNT := 2
-const MERCHANT_NAMES := ["Pipin", "Mery"]
+const ArmyNames := preload("res://global_scripts/army_names.gd")
+## One merchant per this many provinces (rounded up).
+const MERCHANTS_PER_PROVINCES := 5
+const MERCHANT_NAMES := [
+	# English
+	"Pipin", "Mery", "Aldric", "Godwin", "Eadric", "Wulfric",
+	# German
+	"Dietrich", "Gottfried", "Hartmann", "Wolfram", "Berthold", "Siegmund",
+	# Italian
+	"Cosimo", "Lorenzo", "Bartolo", "Niccolo", "Orlando", "Jacopo",
+	# Spanish
+	"Rodrigo", "Alvaro", "Diego", "Fernando", "Gonzalo", "Lope",
+]
 ## Players who have raided any merchant (dejure provinces become forbidden camps).
 var merchant_raiders: Dictionary = {}  # player_id -> true
 var _merchant_remnants: Node2D = null
@@ -80,6 +92,7 @@ var _next_fleet_id: int = 1
 @onready var camera: Camera2D = $Camera2D
 @onready var pathfinding = $pathfinding
 @onready var province_labels = $ProvinceLabels
+@onready var army_labels = $ArmyLabels
 @onready var province_borders = $ProvinceBorders
 
 @onready var gui_node = $BasebottomGUI
@@ -155,6 +168,13 @@ func initialize_map() -> void:
 	build_province_neighbors()
 	_sync_initial_province_focus()
 	refresh_all_vip_crowns()
+	_init_weather()
+
+
+func _init_weather() -> void:
+	var weather := get_node_or_null("WeatherObject")
+	if weather != null and weather.has_method("setup_and_roll"):
+		weather.setup_and_roll(int(season))
 
 
 # --- Province focus ---------------------------------------------------------
@@ -256,15 +276,18 @@ func build_forces_registry() -> void:
 		if fig.get("start_units") != null:
 			units = GlobalUnits.units_from_spec(fig.start_units)
 		var controller := GlobalUnits.primary_owner(units)
-		forces[String(fig.name)] = {
+		var fid := String(fig.name)
+		forces[fid] = {
 			"units": units,
 			"location": {"kind": "cell"},
 			"controller": controller,
 			"cargo": GlobalUnits.empty_caravan_cargo(),
 		}
+		_assign_force_display_name(fid)
 		fig.base_map = self
-		fig.bind_force(String(fig.name))
+		fig.bind_force(fid)
 		fig.reset_movement()
+	refresh_army_labels()
 
 
 func _register_building_start_garrison(b: Node) -> void:
@@ -1215,6 +1238,12 @@ func on_army_clicked(army: Node2D) -> void:
 	if selected == army:
 		open_selected_army_menu(army)
 		return
+	# Fleet selected → landing UI on the shore army's cell.
+	if selected != null and selected.has_method("is_fleet") and selected.is_fleet():
+		if pathfinding.are_armies_adjacent(selected, army):
+			pathfinding.deselect_army()
+			open_fleet_disembark_prompt(selected, pathfinding.get_army_cell(army))
+		return
 	# A different army is selected: interact if adjacent, else move to approach.
 	if selected != null and selected != army:
 		if pathfinding.are_armies_adjacent(selected, army):
@@ -1223,7 +1252,12 @@ func on_army_clicked(army: Node2D) -> void:
 			pathfinding.confirm_move_to_army(army)
 		return
 	if army.is_controllable_by(my_pl_id):
-		gui_node.open_army_menu(self, army)
+		# First click selects for movement; second click (selected == army) opens menu.
+		# No MP left → open menu with Move disabled.
+		if army.movement_left > 0:
+			pathfinding.select_army(army)
+		else:
+			gui_node.open_army_menu(self, army)
 	elif army.has_units_of(my_pl_id):
 		gui_node.open_withdraw_menu(self, army)
 	else:
@@ -1255,6 +1289,19 @@ func open_selected_army_menu(army: Node2D) -> void:
 
 func _on_army_interaction(mover: Node2D, target: Node2D) -> void:
 	if mover == null or target == null or not is_instance_valid(mover) or not is_instance_valid(target):
+		return
+	# Fleets land via the shore prompt, not army↔army interaction.
+	if mover.has_method("is_fleet") and mover.is_fleet():
+		if pathfinding.are_armies_adjacent(mover, target) \
+				and not (target.has_method("is_caravan") and target.is_caravan()) \
+				and not (target.has_method("is_fleet") and target.is_fleet()):
+			pathfinding.deselect_army()
+			open_fleet_disembark_prompt(mover, pathfinding.get_army_cell(target))
+		return
+	# Land army → adjacent fleet: embark (picker if stacked).
+	if target.has_method("is_fleet") and target.is_fleet():
+		pathfinding.deselect_army()
+		_try_open_army_embark(mover, target)
 		return
 	# Army approaching a caravan: capture menu for enemies; own/ally → inspect.
 	if target.has_method("is_caravan") and target.is_caravan():
@@ -1312,7 +1359,7 @@ func on_fleet_clicked(fleet: Node2D) -> void:
 	if is_mouse_over_gui() or fleet == null:
 		return
 	var selected = pathfinding.selected_army if pathfinding != null else null
-	# Fleet selected: let pathfinding handle embark / combine via confirm_move.
+	# Fleet selected: combine / move via confirm_move.
 	if selected != null and selected.has_method("is_fleet") and selected.is_fleet():
 		if selected == fleet:
 			open_selected_army_menu(fleet)
@@ -1325,11 +1372,18 @@ func on_fleet_clicked(fleet: Node2D) -> void:
 		# Move toward that sea tile.
 		pathfinding.confirm_move_to_army(fleet)
 		return
-	# Land army selected: fleets pick up armies, not the reverse.
+	# Land army selected: click fleet to embark (or approach if not adjacent).
 	if selected != null and not (selected.has_method("is_fleet") and selected.is_fleet()) \
 			and not (selected.has_method("is_caravan") and selected.is_caravan()):
-		if is_instance_valid(gui_node):
-			gui_node.show_info_popup("Select the fleet to pick up armies")
+		if not fleet.is_controllable_by(my_pl_id):
+			if is_instance_valid(gui_node):
+				gui_node.show_info_popup("Enemy transport fleet")
+			return
+		if pathfinding.are_armies_adjacent(selected, fleet):
+			pathfinding.deselect_army()
+			_try_open_army_embark(selected, fleet)
+		else:
+			pathfinding.confirm_move_to_army(fleet)
 		return
 
 	var cell = pathfinding.get_army_cell(fleet)
@@ -1344,6 +1398,34 @@ func on_fleet_clicked(fleet: Node2D) -> void:
 	else:
 		if is_instance_valid(gui_node):
 			gui_node.show_info_popup("Enemy transport fleet")
+
+
+## Own fleets on the same sea tile as `fleet`, for embark choice.
+func own_fleets_at_fleet_tile(fleet: Node2D) -> Array:
+	var out: Array = []
+	if fleet == null or pathfinding == null:
+		return out
+	for f in pathfinding.fleets_at_cell(pathfinding.get_army_cell(fleet)):
+		if f != null and is_instance_valid(f) and f.is_controllable_by(my_pl_id):
+			out.append(f)
+	return out
+
+
+func _try_open_army_embark(army: Node2D, fleet: Node2D) -> void:
+	if army == null or fleet == null:
+		return
+	if not fleet.is_controllable_by(my_pl_id):
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Enemy transport fleet")
+		return
+	var stack: Array = own_fleets_at_fleet_tile(fleet)
+	if stack.is_empty():
+		return
+	if stack.size() > 1 and is_instance_valid(gui_node) \
+			and gui_node.has_method("open_fleet_embark_picker"):
+		gui_node.open_fleet_embark_picker(self, army, stack)
+		return
+	open_fleet_embark_prompt(stack[0] if stack.size() == 1 else fleet, army)
 
 
 func open_fleet_embark_prompt(fleet: Node2D, army: Node2D) -> void:
@@ -1962,13 +2044,31 @@ func can_raze_building(building: Node) -> bool:
 	return true
 
 
-func do_battle_attack(attacker_id: String, defender_army_id: String, building: Node) -> void:
+func do_battle_attack(
+	attacker_id: String, defender_army_id: String, building: Node, landing_fleet_id: String = ""
+) -> void:
 	var bkey := _building_key(building) if building != null else ""
-	request_battle_attack.rpc_id(1, attacker_id, defender_army_id, bkey)
+	request_battle_attack.rpc_id(1, attacker_id, defender_army_id, bkey, landing_fleet_id)
+
+
+func get_landing_defender_battle_strength(defender_army_id: String, attacker_id: String) -> int:
+	if not forces.has(defender_army_id):
+		return 0
+	var base := GlobalUnits.fighting_strength(
+		forces[defender_army_id]["units"], GlobalUnits.LANDING_DEFENDER_BONUS
+	)
+	var ctrl := get_force_controller(defender_army_id)
+	var delta := vip_combat_delta_for_sides([defender_army_id], ctrl, [attacker_id])
+	return GlobalVips.apply_strength_multiplier(base, delta)
 
 
 @rpc("any_peer", "call_local", "reliable")
-func request_battle_attack(attacker_id: String, defender_army_id: String, building_key: String) -> void:
+func request_battle_attack(
+	attacker_id: String,
+	defender_army_id: String,
+	building_key: String,
+	landing_fleet_id: String = ""
+) -> void:
 	if not multiplayer.is_server():
 		return
 	if not forces.has(attacker_id):
@@ -1980,6 +2080,28 @@ func request_battle_attack(attacker_id: String, defender_army_id: String, buildi
 			return
 	elif defender_army_id == "" or not forces.has(defender_army_id):
 		return
+
+	var landing_cell := Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+	var is_landing := landing_fleet_id != ""
+	if is_landing:
+		if building != null:
+			return
+		var fleet = get_fleet_by_id(landing_fleet_id)
+		if fleet == null:
+			return
+		if not fleet.aboard_force_ids.has(attacker_id):
+			return
+		if fleet.movement_left < GlobalUnits.TRANSPORT_LANDING_MP:
+			return
+		var def_fig = armies.get_node_or_null(defender_army_id)
+		if def_fig == null:
+			return
+		landing_cell = pathfinding.get_army_cell(def_fig)
+		var fleet_cell = pathfinding.get_army_cell(fleet)
+		if not pathfinding._cells_edge_adjacent(fleet_cell, landing_cell):
+			return
+		if not pathfinding.walkable_cells.has(landing_cell):
+			return
 
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
@@ -1998,6 +2120,8 @@ func request_battle_attack(attacker_id: String, defender_army_id: String, buildi
 	var def_str := 0
 	if building != null:
 		def_str = get_building_battle_strength_with_vips(building, [attacker_id])
+	elif is_landing:
+		def_str = get_landing_defender_battle_strength(defender_army_id, attacker_id)
 	else:
 		def_str = get_force_battle_strength_with_vips(defender_army_id, [attacker_id])
 
@@ -2089,11 +2213,16 @@ func request_battle_attack(attacker_id: String, defender_army_id: String, buildi
 		battle_loot, loot_force_id, hostage_pool
 	)
 	battle_event["captured_vip_ids"] = captured_vip_ids.duplicate()
+	if is_landing:
+		battle_event["place_name"] = "Landing"
+		battle_event["is_landing"] = true
 	if attacker_won:
 		var wage_plan := _plan_wage_capture(def_units, get_force_controller(attacker_id), rng)
 		battle_event["captured_wages"] = int(wage_plan["total"])
 		battle_event["wage_transfers"] = wage_plan["transfers"]
 
+	var land_x := landing_cell.x if is_landing else 0
+	var land_y := landing_cell.y if is_landing else 0
 	apply_battle_result.rpc(
 		attacker_id,
 		defender_army_id,
@@ -2109,7 +2238,10 @@ func request_battle_attack(attacker_id: String, defender_army_id: String, buildi
 		captured_vip_ids,
 		battle_loot,
 		loot_force_id,
-		loser_force_ids
+		loser_force_ids,
+		landing_fleet_id,
+		land_x,
+		land_y
 	)
 
 
@@ -2129,12 +2261,25 @@ func apply_battle_result(
 	captured_vip_ids: Array = [],
 	battle_loot: Dictionary = {},
 	loot_force_id: String = "",
-	loser_force_ids: Array = []
+	loser_force_ids: Array = [],
+	landing_fleet_id: String = "",
+	landing_cell_x: int = 0,
+	landing_cell_y: int = 0
 ) -> void:
 	var building: Node = _building_from_key(building_key) if building_key != "" else null
 	var loot := GlobalUnits.sanitize_weapon_stock(battle_loot)
 	if loot_force_id == "":
 		loot_force_id = str(battle_event.get("loot_force_id", ""))
+	var is_landing := landing_fleet_id != ""
+	var landing_cell := Vector2i(landing_cell_x, landing_cell_y)
+
+	# Landing attack: spend fleet MP on confirm even if the landing force loses.
+	if is_landing:
+		var land_fleet = get_fleet_by_id(landing_fleet_id)
+		if land_fleet != null:
+			land_fleet.movement_left = maxi(
+				0, land_fleet.movement_left - GlobalUnits.TRANSPORT_LANDING_MP
+			)
 
 	# Move captured VIPs to the winner before wiping the loser, so cleanup does
 	# not treat them as a normal disband relocation.
@@ -2192,6 +2337,11 @@ func apply_battle_result(
 		var dfig = armies.get_node_or_null(defender_army_id)
 		if dfig != null and dfig.has_method("refresh_from_force"):
 			dfig.refresh_from_force()
+
+	# Winning a landing assault: survivors leave the ship onto the cleared shore cell.
+	if is_landing and attacker_won and forces.has(attacker_id) \
+			and GlobalUnits.total_men(forces[attacker_id]["units"]) > 0:
+		_land_force_from_fleet(landing_fleet_id, attacker_id, landing_cell, 0, false)
 
 	# Award battle loot (death kit + captured stock) to the surviving winner force.
 	if GlobalUnits.weapon_stock_has_any(loot) and loot_force_id != "":
@@ -3668,7 +3818,7 @@ func request_fleet_embark(fleet_id: String, army_force_id: String, player_id: in
 	var fleet = get_fleet_by_id(fleet_id)
 	if fleet == null or int(fleet.player_owner) != player_id:
 		return
-	if fleet.movement_left < GlobalUnits.TRANSPORT_EMBARK_MP:
+	if fleet.movement_left < GlobalUnits.TRANSPORT_EMBARK_FLEET_MP:
 		return
 	if not forces.has(army_force_id):
 		return
@@ -3678,10 +3828,12 @@ func request_fleet_embark(fleet_id: String, army_force_id: String, player_id: in
 	var army = armies.get_node_or_null(army_force_id)
 	if army == null:
 		return
+	if int(army.movement_left) < GlobalUnits.TRANSPORT_EMBARK_ARMY_MP:
+		return
 	if not pathfinding.are_armies_adjacent(fleet, army):
 		return
-	var army_ctrl := get_force_controller(army_force_id)
-	if not are_friendly_players(player_id, army_ctrl):
+	# Own fleet + own army only (army-initiated embark).
+	if get_force_controller(army_force_id) != player_id:
 		return
 	var men := GlobalUnits.total_men(forces[army_force_id]["units"])
 	if men <= 0 or men > fleet.free_capacity():
@@ -3696,12 +3848,13 @@ func apply_fleet_embark(fleet_id: String, army_force_id: String) -> void:
 		return
 	var fig = armies.get_node_or_null(army_force_id)
 	if fig != null:
+		fig.movement_left = maxi(0, int(fig.movement_left) - GlobalUnits.TRANSPORT_EMBARK_ARMY_MP)
 		armies.remove_child(fig)
 		fig.queue_free()
 	forces[army_force_id]["location"] = {"kind": "aboard", "fleet": fleet_id}
 	if not fleet.aboard_force_ids.has(army_force_id):
 		fleet.aboard_force_ids.append(army_force_id)
-	fleet.movement_left = maxi(0, fleet.movement_left - GlobalUnits.TRANSPORT_EMBARK_MP)
+	fleet.movement_left = maxi(0, fleet.movement_left - GlobalUnits.TRANSPORT_EMBARK_FLEET_MP)
 	clear_force_siege(army_force_id)
 	pathfinding.rebuild_occupancy()
 	update_all_army_visuals()
@@ -3722,7 +3875,7 @@ func request_fleet_disembark(
 	var fleet = get_fleet_by_id(fleet_id)
 	if fleet == null or int(fleet.player_owner) != player_id:
 		return
-	if fleet.movement_left < GlobalUnits.TRANSPORT_EMBARK_MP:
+	if fleet.movement_left < GlobalUnits.TRANSPORT_LANDING_MP:
 		return
 	if not forces.has(army_force_id):
 		return
@@ -3748,13 +3901,36 @@ func apply_fleet_disembark(
 	controller: int,
 	starting_mp: int
 ) -> void:
+	_land_force_from_fleet(
+		fleet_id, army_force_id, Vector2i(cell_x, cell_y), starting_mp, true, controller
+	)
+
+
+## Place an aboard force onto a shore cell. `spend_mp` charges TRANSPORT_LANDING_MP.
+func _land_force_from_fleet(
+	fleet_id: String,
+	army_force_id: String,
+	cell: Vector2i,
+	starting_mp: int,
+	spend_mp: bool,
+	controller: int = -1
+) -> void:
 	var fleet = get_fleet_by_id(fleet_id)
 	if fleet == null or not forces.has(army_force_id):
 		return
+	if str(forces[army_force_id].get("location", {}).get("kind", "")) != "aboard":
+		return
 	fleet.aboard_force_ids.erase(army_force_id)
-	fleet.movement_left = maxi(0, fleet.movement_left - GlobalUnits.TRANSPORT_EMBARK_MP)
+	if spend_mp:
+		fleet.movement_left = maxi(0, fleet.movement_left - GlobalUnits.TRANSPORT_LANDING_MP)
 	var cargo: Dictionary = forces[army_force_id].get("cargo", GlobalUnits.empty_caravan_cargo())
+	if controller < 0:
+		controller = get_force_controller(army_force_id)
 	# Re-spawn land figure; keep same force_id and cargo/VIPs.
+	var existing = armies.get_node_or_null(army_force_id)
+	if existing != null:
+		armies.remove_child(existing)
+		existing.queue_free()
 	var fig = ARMY_FIGURE_SCENE.instantiate()
 	fig.name = army_force_id
 	armies.add_child(fig)
@@ -3763,11 +3939,69 @@ func apply_fleet_disembark(
 	forces[army_force_id]["controller"] = controller
 	forces[army_force_id]["cargo"] = cargo
 	fig.bind_force(army_force_id)
-	pathfinding.place_army_at_cell(fig, Vector2i(cell_x, cell_y))
+	pathfinding.place_army_at_cell(fig, cell)
 	fig.movement_left = clampi(starting_mp, 0, fig.effective_max_mp())
 	pathfinding.rebuild_occupancy()
 	update_all_army_visuals()
 	_sync_force_hunger_fx(army_force_id)
+	refresh_all_vip_crowns()
+	refresh_army_labels()
+
+
+func do_fleet_landing_merge(fleet_id: String, army_force_id: String, shore_force_id: String) -> void:
+	request_fleet_landing_merge.rpc_id(1, fleet_id, army_force_id, shore_force_id, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_fleet_landing_merge(
+	fleet_id: String, army_force_id: String, shore_force_id: String, player_id: int
+) -> void:
+	if not multiplayer.is_server():
+		return
+	var fleet = get_fleet_by_id(fleet_id)
+	if fleet == null or int(fleet.player_owner) != player_id:
+		return
+	if fleet.movement_left < GlobalUnits.TRANSPORT_LANDING_MP:
+		return
+	if not forces.has(army_force_id) or not forces.has(shore_force_id):
+		return
+	if not fleet.aboard_force_ids.has(army_force_id):
+		return
+	var shore_fig = armies.get_node_or_null(shore_force_id)
+	if shore_fig == null:
+		return
+	var shore_cell = pathfinding.get_army_cell(shore_fig)
+	var fleet_cell = pathfinding.get_army_cell(fleet)
+	if not pathfinding._cells_edge_adjacent(fleet_cell, shore_cell):
+		return
+	if not are_friendly_players(player_id, get_force_controller(shore_force_id)):
+		return
+	if not are_friendly_players(player_id, get_force_controller(army_force_id)):
+		return
+	apply_fleet_landing_merge.rpc(fleet_id, army_force_id, shore_force_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_fleet_landing_merge(
+	fleet_id: String, army_force_id: String, shore_force_id: String
+) -> void:
+	var fleet = get_fleet_by_id(fleet_id)
+	if fleet == null or not forces.has(army_force_id) or not forces.has(shore_force_id):
+		return
+	fleet.aboard_force_ids.erase(army_force_id)
+	fleet.movement_left = maxi(0, fleet.movement_left - GlobalUnits.TRANSPORT_LANDING_MP)
+	forces[shore_force_id]["units"] = GlobalUnits.merge_units(
+		forces[shore_force_id]["units"], forces[army_force_id]["units"]
+	)
+	move_all_force_cargo(army_force_id, shore_force_id)
+	transfer_all_vips(army_force_id, shore_force_id)
+	forces.erase(army_force_id)
+	var tfig = armies.get_node_or_null(shore_force_id)
+	if tfig != null:
+		tfig.movement_left = 0
+		tfig.refresh_from_force()
+	pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
 	refresh_all_vip_crowns()
 
 
@@ -3948,6 +4182,7 @@ func apply_merge_forces(target_id: String, source_id: String) -> void:
 	pathfinding.rebuild_occupancy()
 	update_all_army_visuals()
 	refresh_all_vip_crowns()
+	refresh_army_labels()
 
 
 # Split out_units off source_id into a NEW mobile army placed at (cell).
@@ -4892,7 +5127,7 @@ func spawn_merchants() -> void:
 	if merchants == null:
 		return
 	for child in merchants.get_children():
-		child.queue_free()
+		child.free()
 	_clear_all_merchant_remnants()
 	merchant_raiders.clear()
 	_next_merchant_id = 1
@@ -4902,35 +5137,47 @@ func spawn_merchants() -> void:
 	prov_list.sort_custom(func(a, b) -> bool: return String(a.name) < String(b.name))
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 0x4D455243  # "MERC"
-	for i in MERCHANT_COUNT:
+	var count := int(ceili(float(prov_list.size()) / float(MERCHANTS_PER_PROVINCES)))
+	var name_pool: Array = MERCHANT_NAMES.duplicate()
+	for i in count:
+		var display := "Merchant"
+		if not name_pool.is_empty():
+			var nidx := rng.randi() % name_pool.size()
+			display = str(name_pool[nidx])
+			name_pool.remove_at(nidx)
 		var placed := false
-		# Prefer a random province; fall back through a deterministic shuffle.
-		var try_order: Array = []
+		# Prefer empty provinces first; then any valid province (deterministic shuffle).
+		var empty_first: Array = []
+		var occupied: Array = []
 		var pool: Array = prov_list.duplicate()
 		while not pool.is_empty():
 			var idx := rng.randi() % pool.size()
-			try_order.append(pool[idx])
+			var p = pool[idx]
 			pool.remove_at(idx)
+			if merchant_count_in_province(p) == 0:
+				empty_first.append(p)
+			else:
+				occupied.append(p)
+		var try_order: Array = empty_first + occupied
 		for prov in try_order:
 			if is_province_forbidden_for_merchants(prov):
 				continue
 			var cells := get_camp_placement_cells_in_province(prov)
 			if cells.is_empty():
 				continue
-			_spawn_merchant_at(prov, cells[rng.randi() % cells.size()], rng, i)
+			_spawn_merchant_at(prov, cells[rng.randi() % cells.size()], rng, display)
 			placed = true
 			break
 		if not placed:
 			push_warning("Could not place merchant %d — no free cells" % i)
 
 
-func _spawn_merchant_at(prov: Node, cell: Vector2i, rng: RandomNumberGenerator, name_index: int = -1) -> Node:
+func _spawn_merchant_at(prov: Node, cell: Vector2i, rng: RandomNumberGenerator, display: String = "") -> Node:
 	var m = MERCHANT_SCENE.instantiate()
 	m.name = "merchant_%d" % _next_merchant_id
-	var idx := name_index if name_index >= 0 else (_next_merchant_id - 1)
-	if idx >= 0 and idx < MERCHANT_NAMES.size():
-		m.display_name = MERCHANT_NAMES[idx]
 	_next_merchant_id += 1
+	if display != "":
+		m.display_name = display
 	m.base_map = self
 	merchants.add_child(m)
 	m.place_at_cell(cell, prov)
@@ -6461,12 +6708,14 @@ func _spawn_army_figure(new_id: String, units: Array, cell: Vector2i, starting_m
 		"controller": controller,
 		"cargo": GlobalUnits.empty_caravan_cargo(),
 	}
+	_assign_force_display_name(new_id)
 	fig.bind_force(new_id)
 	pathfinding.place_army_at_cell(fig, cell)
 	if starting_mp < 0:
 		fig.reset_movement()
 	else:
 		fig.movement_left = clampi(starting_mp, 0, fig.effective_max_mp())
+	refresh_army_labels()
 
 
 func reset_all_army_movement() -> void:
@@ -6769,6 +7018,9 @@ func bump_season_i_turn():
 		new_season = 0
 	
 	season = new_season as SEASONS
+	var weather := get_node_or_null("WeatherObject")
+	if weather != null and weather.has_method("roll_weather_for_season"):
+		weather.roll_weather_for_season(int(season))
 
 func refresh_all_settlement_visual_stages() -> void:
 	for prov in provinces.get_children():
@@ -6785,6 +7037,7 @@ func update_visuals_and_stats():
 	update_gui()
 	update_all_army_visuals()
 	refresh_province_labels()
+	refresh_army_labels()
 
 
 func refresh_province_labels() -> void:
@@ -6793,7 +7046,16 @@ func refresh_province_labels() -> void:
 			prov.refresh_map_label()
 	if province_labels:
 		province_labels.refresh()
-	
+
+
+func refresh_army_labels() -> void:
+	for army in armies.get_children():
+		if army.has_method("refresh_name_label"):
+			army.refresh_name_label()
+	if army_labels:
+		army_labels.refresh()
+
+
 func update_gui():
 	gui_node.update_season(season)
 	gui_node.update_pname(players[my_pl_id].name_)
@@ -6867,6 +7129,81 @@ func get_upkeep_pay_streak(pid: int) -> int:
 	return int(players[pid].game_data.get("upkeep_pay_streak", 0))
 
 
+func force_nickname(fid: String) -> String:
+	if not forces.has(fid):
+		return ""
+	return str(forces[fid].get("display_name", ""))
+
+
+func _used_army_display_names(except_fid: String = "") -> Dictionary:
+	var used := {}
+	for fid in forces.keys():
+		if str(fid) == except_fid:
+			continue
+		var n := str(forces[fid].get("display_name", ""))
+		if n != "":
+			used[n] = true
+	return used
+
+
+## Deterministic mint from force_id so every peer agrees without syncing the string.
+func _assign_force_display_name(fid: String) -> void:
+	if not forces.has(fid):
+		return
+	if str(forces[fid].get("display_name", "")) != "":
+		return
+	var used := _used_army_display_names(fid)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(fid)
+	rng.state = used.size()
+	forces[fid]["display_name"] = ArmyNames.mint_unique(used, rng) as String
+
+
+func do_rename_force(force_id: String, new_name: String) -> void:
+	request_rename_force.rpc_id(1, force_id, new_name, my_pl_id)
+
+
+func do_reroll_force_name(force_id: String) -> String:
+	## Client-side preview only (Confirm still goes through do_rename_force).
+	var used := _used_army_display_names(force_id)
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	return ArmyNames.mint_unique(used, rng) as String
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_rename_force(force_id: String, new_name: String, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	if not forces.has(force_id):
+		return
+	var loc: Dictionary = forces[force_id].get("location", {})
+	var kind := str(loc.get("kind", ""))
+	if kind != "cell" and kind != "aboard":
+		return
+	if get_force_controller(force_id) != player_id:
+		return
+	var cleaned: String = ArmyNames.sanitize(new_name)
+	if cleaned == "":
+		return
+	var used := _used_army_display_names(force_id)
+	var final_name: String = ArmyNames.uniquify_with_suffix(cleaned, used)
+	apply_rename_force.rpc(force_id, final_name)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_rename_force(force_id: String, new_name: String) -> void:
+	if not forces.has(force_id):
+		return
+	forces[force_id]["display_name"] = new_name
+	var fig = armies.get_node_or_null(force_id)
+	if fig != null and fig.has_method("refresh_name_label"):
+		fig.refresh_name_label()
+	refresh_army_labels()
+	if gui_node != null and gui_node.has_method("refresh_army_menu_if_force"):
+		gui_node.refresh_army_menu_if_force(force_id)
+
+
 func force_display_name(fid: String) -> String:
 	if not forces.has(fid):
 		return "Army"
@@ -6886,13 +7223,14 @@ func force_display_name(fid: String) -> String:
 		if prov_name != "":
 			return "%s garrison — %s%s" % [bname, prov_name, spot_txt]
 		return "%s garrison%s" % [bname, spot_txt]
+	var nick := force_nickname(fid)
+	if nick == "":
+		nick = "Army"
 	if kind == "aboard":
-		return "Army %s (aboard)" % fid
-	var fig = armies.get_node_or_null(fid)
-	var base_name := "Army %s" % str(fig.name) if fig != null else "Army %s" % fid
+		return "%s (aboard)" % nick
 	if is_force_sieging(fid):
-		return "%s — siege %d/%d" % [base_name, get_force_siege_level(fid), GlobalUnits.SIEGE_MAX_LEVEL]
-	return base_name
+		return "%s — siege %d/%d" % [nick, get_force_siege_level(fid), GlobalUnits.SIEGE_MAX_LEVEL]
+	return nick
 
 
 ## Projected upkeep for current troops owned by pid (includes all forces with your men).

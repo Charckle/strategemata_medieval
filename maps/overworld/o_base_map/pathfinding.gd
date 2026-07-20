@@ -575,7 +575,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 # Resolve the path to whatever is under the cursor: a free tile, a building's
-# approach tile, or an occupied (army/caravan) tile's approach tile.
+# approach tile, or an occupied (army/caravan/fleet) tile's approach tile.
 func _resolve_target_path(from_cell: Vector2i, cell: Vector2i) -> Array[Vector2i]:
 	# Hovering the selected army's own tile — stay put.
 	if cell == from_cell or occupancy.get(cell) == selected_army:
@@ -583,6 +583,9 @@ func _resolve_target_path(from_cell: Vector2i, cell: Vector2i) -> Array[Vector2i
 	if _is_fleet(selected_army):
 		if sea_cells.has(cell):
 			return _find_path_cells(from_cell, cell, selected_army)
+		# Shore tile (empty or occupied): path to an adjacent sea cell for landing.
+		if walkable_cells.has(cell):
+			return _best_path_to_cells(from_cell, _fleet_approach_sea_cells(cell), selected_army)
 		return []
 	# Free tile, or friendly pass-through tile we won't stop on as destination
 	# unless vacant — only allow direct path onto unoccupied cells.
@@ -590,10 +593,43 @@ func _resolve_target_path(from_cell: Vector2i, cell: Vector2i) -> Array[Vector2i
 		return _find_path_cells(from_cell, cell, selected_army)
 	if occupancy.has(cell) and occupancy[cell] != selected_army:
 		return _best_path_to_cells(from_cell, _approach_cells_of_cell(cell, selected_army), selected_army)
+	# Land army → fleet: approach shore tiles next to the fleet's sea cell.
+	if fleet_occupancy.has(cell):
+		return _best_path_to_cells(from_cell, _approach_cells_of_cell(cell, selected_army), selected_army)
 	var building = blocked_cell_to_object.get(cell, null)
 	if building != null:
 		return _best_path_to_cells(from_cell, get_approach_cells(building), selected_army)
 	return []
+
+
+## Cell the mover would interact with under the cursor, or null for a plain move.
+func _resolve_interact_cell(from_cell: Vector2i, cell: Vector2i):
+	if cell == from_cell or occupancy.get(cell) == selected_army:
+		return null
+	if _is_fleet(selected_army):
+		if sea_cells.has(cell) and fleet_occupancy.has(cell):
+			return cell
+		# Shore landing target (army on it, or empty beach with sea access).
+		if walkable_cells.has(cell) and not _fleet_approach_sea_cells(cell).is_empty():
+			return cell
+		return null
+	if occupancy.has(cell) and occupancy[cell] != selected_army:
+		return cell
+	if fleet_occupancy.has(cell):
+		return cell
+	if blocked_cell_to_object.has(cell):
+		return cell
+	return null
+
+
+## Sea tiles edge-adjacent to a shore cell — where a fleet would stop to land.
+func _fleet_approach_sea_cells(shore_cell: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for dir in EDGE_DIRS:
+		var n: Vector2i = shore_cell + dir
+		if sea_cells.has(n):
+			out.append(n)
+	return out
 
 
 func _update_hover_preview() -> void:
@@ -602,10 +638,10 @@ func _update_hover_preview() -> void:
 	var from_cell := get_army_cell(selected_army)
 	var cell := get_cell_at_mouse()
 	var path_cells := _resolve_target_path(from_cell, cell)
-	_render_path_preview(path_cells)
+	_render_path_preview(path_cells, _resolve_interact_cell(from_cell, cell))
 
 
-func _render_path_preview(path_cells: Array[Vector2i]) -> void:
+func _render_path_preview(path_cells: Array[Vector2i], interact_cell = null) -> void:
 	clear_path_preview()
 	if path_cells.is_empty():
 		return
@@ -620,7 +656,34 @@ func _render_path_preview(path_cells: Array[Vector2i]) -> void:
 			rest_line.add_point(base_map.to_local(_get_cell_center_global(path_cells[i])))
 
 	if reachable_overlay != null:
-		reachable_overlay.set_stop_cell(path_cells[stop_i])
+		var stop: Vector2i = path_cells[stop_i]
+		reachable_overlay.set_stop_cell(stop)
+		# Target marker when distinct from this turn's stop tile.
+		# Orange if interaction is possible this turn; gray if MP runs out short.
+		if interact_cell != null and interact_cell != stop:
+			reachable_overlay.set_interact_cell(
+				interact_cell, _can_interact_this_turn(path_cells, stop_i)
+			)
+
+
+## True when this turn's move reaches the path end with enough MP to interact
+## (land: need MP left after arriving on approach; fleet: reaching end is enough).
+func _can_interact_this_turn(path_cells: Array[Vector2i], stop_i: int) -> bool:
+	if path_cells.is_empty():
+		return false
+	# Already on the approach / in position — click interacts without moving.
+	if path_cells.size() == 1:
+		return true
+	if stop_i < path_cells.size() - 1:
+		return false
+	var spent := 0
+	for i in range(1, stop_i + 1):
+		spent += enter_cost(path_cells[i], selected_army)
+	var remaining: int = selected_army.movement_left - spent
+	if _is_fleet(selected_army):
+		return remaining >= 0
+	# Land units need leftover MP after arriving to open the interact UI.
+	return remaining > 0
 
 
 func _confirm_move() -> bool:
@@ -687,20 +750,20 @@ func _confirm_fleet_move(fleet: Node2D, fleet_cell: Vector2i, mouse_cell: Vector
 		base_map.open_selected_army_menu(fleet)
 		return true
 
-	# Adjacent land army → embark pickup.
-	if occupancy.has(mouse_cell) and _cells_edge_adjacent(fleet_cell, mouse_cell):
-		var target: Node2D = occupancy[mouse_cell]
-		if not _is_caravan(target) and not _is_fleet(target):
+	# Adjacent walkable shore: land (empty / merge / attack).
+	if walkable_cells.has(mouse_cell) and _cells_edge_adjacent(fleet_cell, mouse_cell):
+		if occupancy.has(mouse_cell):
+			var target: Node2D = occupancy[mouse_cell]
+			if _is_caravan(target) or _is_fleet(target):
+				pass
+			else:
+				deselect_army()
+				base_map.open_fleet_disembark_prompt(fleet, mouse_cell)
+				return true
+		else:
 			deselect_army()
-			base_map.open_fleet_embark_prompt(fleet, target)
+			base_map.open_fleet_disembark_prompt(fleet, mouse_cell)
 			return true
-
-	# Adjacent free land → disembark.
-	if walkable_cells.has(mouse_cell) and not occupancy.has(mouse_cell) \
-			and _cells_edge_adjacent(fleet_cell, mouse_cell):
-		deselect_army()
-		base_map.open_fleet_disembark_prompt(fleet, mouse_cell)
-		return true
 
 	# Adjacent own fleet on another sea tile → combine vs stack.
 	if sea_cells.has(mouse_cell) and _cells_edge_adjacent(fleet_cell, mouse_cell):
@@ -733,7 +796,11 @@ func confirm_move_to_building(building: Node) -> bool:
 	var path_cells := _best_path_to_cells(from_cell, get_approach_cells(building), selected_army)
 	if path_cells.size() < 2:
 		return false
-	_render_path_preview(path_cells)
+	var interact = null
+	var footprint: Array = object_to_footprint.get(building, [])
+	if not footprint.is_empty():
+		interact = footprint[0]
+	_render_path_preview(path_cells, interact)
 	return _execute_move_along_path(building, null)
 
 
@@ -754,7 +821,7 @@ func confirm_move_to_army(target: Node2D) -> bool:
 		)
 	if path_cells.size() < 2:
 		return false
-	_render_path_preview(path_cells)
+	_render_path_preview(path_cells, target_cell)
 	return _execute_move_along_path(null, target)
 
 

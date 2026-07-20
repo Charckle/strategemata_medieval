@@ -9,6 +9,11 @@
 [sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_ft7hr"]
 points = PackedVector2Array(32, 0, 0, 16, 32, 32, 64, 16)
 
+[sub_resource type="LabelSettings" id="LabelSettings_army_name"]
+font_size = 14
+outline_size = 5
+outline_color = Color(0, 0, 0, 1)
+
 [node name="ArmiyFigure" type="Node2D" unique_id=567632873]
 script = ExtResource("1_dc735")
 
@@ -28,6 +33,19 @@ texture = ExtResource("2_2cagq")
 visible = false
 position = Vector2(31, -12)
 texture = ExtResource("5_0436l")
+
+[node name="map_labels" type="Node2D" parent="."]
+visible = false
+z_index = 10
+position = Vector2(32, -18)
+
+[node name="name_label" type="Label" parent="map_labels"]
+offset_right = 40.0
+offset_bottom = 14.0
+mouse_filter = 2
+label_settings = SubResource("LabelSettings_army_name")
+horizontal_alignment = 1
+vertical_alignment = 1
 
 [node name="Area2D" type="Area2D" parent="." unique_id=394389457]
 

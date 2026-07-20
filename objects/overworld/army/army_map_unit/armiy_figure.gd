@@ -32,6 +32,7 @@ const NORMAL_MODULATE := Color(1, 1, 1, 1)
 func _ready() -> void:
 	# Read after the scene has applied the exported value.
 	movement_left = movement_points
+	_center_name_label()
 
 
 func setup_building() -> void:
@@ -57,6 +58,52 @@ func refresh_from_force() -> void:
 	# Roster changes (wounds, merges) can lower max MP mid-turn.
 	clamp_movement_to_max()
 	refresh_vip_crown()
+	refresh_name_label()
+
+
+func refresh_name_label() -> void:
+	var lbl := get_node_or_null("map_labels/name_label") as Label
+	if lbl == null:
+		return
+	var text := ""
+	if base_map != null and force_id != "" and base_map.has_method("force_nickname"):
+		text = str(base_map.force_nickname(force_id))
+	lbl.text = text
+	_center_name_label()
+
+
+func get_name_label_world_position() -> Vector2:
+	var labels := get_node_or_null("map_labels") as Node2D
+	if labels != null:
+		return labels.global_position
+	return global_position + Vector2(32, -18)
+
+
+func set_name_label_alpha(alpha: float) -> void:
+	var labels := get_node_or_null("map_labels") as Node2D
+	if labels == null:
+		return
+	var color = labels.modulate
+	color.a = alpha
+	labels.modulate = color
+	labels.visible = alpha > 0.001
+
+
+func set_name_label_scale(scale_factor: float) -> void:
+	var labels := get_node_or_null("map_labels") as Node2D
+	if labels == null:
+		return
+	labels.scale = Vector2.ONE * scale_factor
+
+
+func _center_name_label() -> void:
+	var lbl := get_node_or_null("map_labels/name_label") as Label
+	if lbl == null:
+		return
+	# Anchor at local (0,0) of map_labels; shift left by half text width.
+	lbl.reset_size()
+	var w := lbl.get_minimum_size().x
+	lbl.position = Vector2(-w * 0.5, -8.0)
 
 
 func refresh_vip_crown() -> void:

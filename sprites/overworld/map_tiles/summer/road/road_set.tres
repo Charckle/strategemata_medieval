@@ -1,4 +1,4 @@
-[gd_resource type="TileSet" load_steps=3 format=3]
+[gd_resource type="TileSet" format=3 uid="uid://crqsn33rvp36w"]
 
 [ext_resource type="Texture2D" uid="uid://6qhncolikr5s" path="res://sprites/overworld/map_tiles/summer/road/road.png" id="1_road"]
 

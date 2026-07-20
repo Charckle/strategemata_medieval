@@ -250,6 +250,21 @@ popup/item_0/id = 0
 popup/item_1/text = "On"
 popup/item_1/id = 1
 
+[node name="show_weather_row" type="HBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs/Video/content"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="show_weather_lbl" type="Label" parent="overlays/settings_pan/margin/vbox/tabs/Video/content/show_weather_row"]
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Show weather"
+
+[node name="show_weather_chk" type="CheckBox" parent="overlays/settings_pan/margin/vbox/tabs/Video/content/show_weather_row"]
+layout_mode = 2
+button_pressed = true
+text = "Enabled"
+
 [node name="Gameplay" type="VBoxContainer" parent="overlays/settings_pan/margin/vbox/tabs"]
 layout_mode = 2
 
@@ -272,4 +287,5 @@ text = "Back"
 [connection signal="item_selected" from="overlays/settings_pan/margin/vbox/tabs/Audio/content/music_on_off_row/music_on_off_btn" to="overlays/settings_pan" method="_on_music_on_off_btn_item_selected"]
 [connection signal="item_selected" from="overlays/settings_pan/margin/vbox/tabs/Audio/content/sfx_on_off_row/sfx_on_off_btn" to="overlays/settings_pan" method="_on_sfx_on_off_btn_item_selected"]
 [connection signal="item_selected" from="overlays/settings_pan/margin/vbox/tabs/Video/content/fullscreen_row/fullscreen_btn" to="overlays/settings_pan" method="_on_fullscreen_btn_item_selected"]
+[connection signal="toggled" from="overlays/settings_pan/margin/vbox/tabs/Video/content/show_weather_row/show_weather_chk" to="overlays/settings_pan" method="_on_show_weather_chk_toggled"]
 [connection signal="pressed" from="overlays/settings_pan/margin/vbox/back_btn" to="overlays/settings_pan" method="_on_back_btn_pressed"]

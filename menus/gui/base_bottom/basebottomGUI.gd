@@ -1,5 +1,7 @@
 extends CanvasLayer
 
+const ArmyNames := preload("res://global_scripts/army_names.gd")
+
 @onready var map_menu := $map_menu
 @onready var economy_menu := $economy_menu
 @onready var war_menu := $war_menu
@@ -9,6 +11,8 @@ extends CanvasLayer
 @onready var msg_list := $msg_menu/margin/vbox/tabs/Inbox/ScrollContainer/msg_list
 @onready var msg_empty_lbl := $msg_menu/margin/vbox/tabs/Inbox/empty_lbl
 @onready var show_province_names_chk := $settings_menu/margin/vbox/tabs/Gameplay/show_province_names_row/show_province_names_chk
+@onready var show_army_names_chk := $settings_menu/margin/vbox/tabs/Gameplay/show_army_names_row/show_army_names_chk
+@onready var show_weather_chk := $settings_menu/margin/vbox/tabs/Video/show_weather_row/show_weather_chk
 @onready var map_tabs := $map_menu/margin/vbox/tabs
 @onready var minimap := $map_menu/margin/vbox/tabs/Map/Minimap
 
@@ -21,17 +25,20 @@ extends CanvasLayer
 @onready var overview_population_lbl := $economy_menu/margin/vbox/tabs/overview/population_lbl
 @onready var provinces_list_container := $economy_menu/margin/vbox/tabs/all_provinces/ScrollContainer/provinces_list
 @onready var province_tab_name := $economy_menu/margin/vbox/tabs/province/province_name_lbl
-@onready var province_tab_status := $economy_menu/margin/vbox/tabs/province/info_grid/status_lbl
-@onready var province_tab_owner := $economy_menu/margin/vbox/tabs/province/info_grid/owner_lbl
-@onready var province_tab_defacto := $economy_menu/margin/vbox/tabs/province/info_grid/defacto_lbl
-@onready var province_tab_dejure := $economy_menu/margin/vbox/tabs/province/info_grid/dejure_lbl
-@onready var province_tab_population := $economy_menu/margin/vbox/tabs/province/info_grid/population_prov_lbl
-@onready var province_tab_income := $economy_menu/margin/vbox/tabs/province/info_grid/income_prov_lbl
-@onready var province_tab_villages := $economy_menu/margin/vbox/tabs/province/buildings_grid/villages_val
-@onready var province_tab_towns := $economy_menu/margin/vbox/tabs/province/buildings_grid/towns_val
-@onready var province_tab_castles := $economy_menu/margin/vbox/tabs/province/buildings_grid/castles_val
-@onready var province_tab_economy := $economy_menu/margin/vbox/tabs/province/buildings_grid/economy_val
-@onready var province_tab_root := $economy_menu/margin/vbox/tabs/province
+@onready var province_sub_tabs := $economy_menu/margin/vbox/tabs/province/sub_tabs
+@onready var province_tab_status := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid/status_lbl
+@onready var province_tab_owner := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid/owner_lbl
+@onready var province_tab_defacto := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid/defacto_lbl
+@onready var province_tab_dejure := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid/dejure_lbl
+@onready var province_tab_population := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid/population_prov_lbl
+@onready var province_tab_income := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid/income_prov_lbl
+@onready var province_tab_villages := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid/villages_val
+@onready var province_tab_towns := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid/towns_val
+@onready var province_tab_castles := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid/castles_val
+@onready var province_tab_economy := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid/economy_val
+@onready var province_tab_root := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content
+@onready var province_army_root := $economy_menu/margin/vbox/tabs/province/sub_tabs/army/ScrollContainer/content
+@onready var province_shipyard_root := $economy_menu/margin/vbox/tabs/province/sub_tabs/shipyard/ScrollContainer/content
 @onready var caravan_tab_root := $economy_menu/margin/vbox/tabs/caravan
 @onready var caravan_tab_info := $economy_menu/margin/vbox/tabs/caravan/caravan_info
 @onready var caravan_tab_send_btn := $economy_menu/margin/vbox/tabs/caravan/send_btn
@@ -67,7 +74,11 @@ var _prov_tax_row: HBoxContainer = null
 var _prov_levy_lbl: Label = null
 var _prov_weapons_lbl: Label = null
 var _prov_recruit_btn: Button = null
-var _prov_ships_btn: Button = null
+var _prov_shipyard_info: Label = null
+var _prov_shipyard_stock: Label = null
+var _prov_ships_spin: SpinBox = null
+var _prov_ships_build_btn: Button = null
+var _prov_shipyard_tab_index: int = 2
 
 # Recruit levy panel.
 var _rc_panel: PanelContainer = null
@@ -162,6 +173,13 @@ var _am_body: VBoxContainer = null
 var _am_base = null
 var _am_army: Node2D = null
 
+# Rename army dialog.
+var _rn_panel: PanelContainer = null
+var _rn_edit: LineEdit = null
+var _rn_error: Label = null
+var _rn_base = null
+var _rn_force_id: String = ""
+
 # Disband confirmation panel.
 var _db_panel: PanelContainer = null
 var _db_info_lbl: Label = null
@@ -214,6 +232,7 @@ var _building_popup_title: Label = null
 var _building_popup_body: Label = null
 var _building_popup_close: Button = null
 var _building_popup_deploy: Button = null
+var _building_popup_economy: Button = null
 var _building_popup_node: Node = null
 var _building_popup_pinned := false
 
@@ -267,6 +286,7 @@ var _bt_base = null
 var _bt_attacker_id: String = ""
 var _bt_defender_id: String = ""
 var _bt_building: Node = null
+var _bt_landing_fleet_id: String = ""
 
 # First-contact castle siege prompt (start engines / assault now).
 var _sg_panel: PanelContainer = null
@@ -308,7 +328,11 @@ func _ready() -> void:
 	$Panel/settings_btn.pressed.connect(_on_settings_btn_pressed)
 	msg_btn.pressed.connect(_on_msg_btn_pressed)
 	_populate_gameplay_settings()
+	_populate_video_settings()
 	show_province_names_chk.toggled.connect(_on_show_province_names_toggled)
+	if show_army_names_chk != null:
+		show_army_names_chk.toggled.connect(_on_show_army_names_toggled)
+	show_weather_chk.toggled.connect(_on_show_weather_toggled)
 	_ensure_province_levy_widgets()
 	if caravan_tab_send_btn != null:
 		caravan_tab_send_btn.pressed.connect(_on_caravan_tab_send_pressed)
@@ -321,6 +345,13 @@ func _ready() -> void:
 func _populate_gameplay_settings() -> void:
 	var enabled = GlobalSet.settings.get("show_province_names", 1) != 0
 	show_province_names_chk.button_pressed = enabled
+	if show_army_names_chk != null:
+		show_army_names_chk.button_pressed = GlobalSet.settings.get("show_army_names", 1) != 0
+
+
+func _populate_video_settings() -> void:
+	var weather_on = GlobalSet.settings.get("show_weather", 1) != 0
+	show_weather_chk.button_pressed = weather_on
 
 
 func _on_show_province_names_toggled(pressed: bool) -> void:
@@ -328,6 +359,18 @@ func _on_show_province_names_toggled(pressed: bool) -> void:
 	SettingsLoad.save_settings()
 	if is_instance_valid(parent_n) and parent_n.has_method("refresh_province_labels"):
 		parent_n.refresh_province_labels()
+
+
+func _on_show_army_names_toggled(pressed: bool) -> void:
+	GlobalSet.settings["show_army_names"] = 1 if pressed else 0
+	SettingsLoad.save_settings()
+	if is_instance_valid(parent_n) and parent_n.has_method("refresh_army_labels"):
+		parent_n.refresh_army_labels()
+
+
+func _on_show_weather_toggled(pressed: bool) -> void:
+	GlobalSet.settings["show_weather"] = 1 if pressed else 0
+	SettingsLoad.save_settings()
 
 
 func _on_map_btn_pressed() -> void:
@@ -367,10 +410,21 @@ func _open_economy_on_province() -> void:
 	var pid := ""
 	if parent_n.has_method("resolve_economy_province_focus"):
 		pid = parent_n.resolve_economy_province_focus()
-	selected_province_id = pid
+	open_economy_for_province(pid, false)
+
+
+## Open the Economy menu on the Province tab for `province_id`.
+func open_economy_for_province(province_id: String, sticky: bool = true) -> void:
+	if not is_instance_valid(parent_n):
+		return
+	selected_province_id = province_id
+	if economy_menu.visible:
+		_bring_to_front(economy_menu)
+	else:
+		_toggle_menu(economy_menu)
 	economy_tabs.current_tab = 2
-	if parent_n.has_method("set_province_focus") and pid != "":
-		parent_n.set_province_focus(pid, false)
+	if province_id != "" and parent_n.has_method("set_province_focus"):
+		parent_n.set_province_focus(province_id, sticky)
 	update_economy_menu(parent_n)
 
 
@@ -537,12 +591,17 @@ func _ensure_building_popup() -> void:
 	header.add_child(_building_popup_title)
 	header.add_child(_building_popup_close)
 	_building_popup_body = Label.new()
+	_building_popup_economy = Button.new()
+	_building_popup_economy.text = "Open province economy"
+	_building_popup_economy.visible = false
+	_building_popup_economy.pressed.connect(_on_building_popup_economy_pressed)
 	_building_popup_deploy = Button.new()
 	_building_popup_deploy.text = "Ungarrison your troops"
 	_building_popup_deploy.visible = false
 	vbox.add_child(header)
 	vbox.add_child(HSeparator.new())
 	vbox.add_child(_building_popup_body)
+	vbox.add_child(_building_popup_economy)
 	vbox.add_child(_building_popup_deploy)
 	margin.add_child(vbox)
 	_building_popup.add_child(margin)
@@ -557,6 +616,8 @@ func show_building_popup(building: Node, title: String, body: String, pinned: bo
 	_building_popup_body.text = body
 	# Only pinned popups get an X; transient ones close on unhover.
 	_building_popup_close.visible = pinned
+	# Economy shortcut only on click (pinned) — hover popups vanish on mouse leave.
+	_building_popup_economy.visible = pinned and _province_id_for_building(building) != ""
 	if _building_popup_deploy.pressed.is_connected(_on_building_popup_deploy_pressed):
 		_building_popup_deploy.pressed.disconnect(_on_building_popup_deploy_pressed)
 	if deploy_cb.is_valid():
@@ -568,6 +629,27 @@ func show_building_popup(building: Node, title: String, body: String, pinned: bo
 	_building_popup.visible = true
 	_building_popup.reset_size()
 	_position_building_popup()
+
+
+func _province_id_for_building(building: Node) -> String:
+	if building == null or not is_instance_valid(parent_n):
+		return ""
+	if parent_n.has_method("find_province_for_building"):
+		var prov = parent_n.find_province_for_building(building)
+		if prov != null and is_instance_valid(prov):
+			return String(prov.name)
+	var prov2 = building.get("province")
+	if prov2 != null and is_instance_valid(prov2):
+		return String(prov2.name)
+	return ""
+
+
+func _on_building_popup_economy_pressed() -> void:
+	var pid := _province_id_for_building(_building_popup_node)
+	hide_building_popup()
+	if pid == "":
+		return
+	open_economy_for_province(pid, true)
 
 
 func _on_building_popup_deploy_pressed(deploy_cb: Callable) -> void:
@@ -1045,6 +1127,11 @@ func _rebuild_castle_popup() -> void:
 	var pid := int(base.my_pl_id)
 	var prov = base.find_province_for_building(b) if base.has_method("find_province_for_building") else null
 	var is_dejure = prov != null and prov.has_method("has_dejure") and prov.has_dejure(pid)
+	if prov != null:
+		var econ_btn := Button.new()
+		econ_btn.text = "Open province economy"
+		econ_btn.pressed.connect(_on_castle_popup_economy_pressed)
+		_castle_popup_btns.add_child(econ_btn)
 	var wood := 0
 	var stone := 0
 	if prov != null and prov.has_method("get_player_material"):
@@ -1145,6 +1232,14 @@ func _on_castle_ungarrison_pressed() -> void:
 	open_deploy_menu(base, building, int(base.my_pl_id))
 
 
+func _on_castle_popup_economy_pressed() -> void:
+	var pid := _province_id_for_building(_castle_popup_building)
+	hide_castle_popup()
+	if pid == "":
+		return
+	open_economy_for_province(pid, true)
+
+
 # --- Close everything (called on player switch / end-turn) ------------------
 
 func close_all_popups() -> void:
@@ -1225,6 +1320,7 @@ func _close_army_menu() -> void:
 		_am_panel.visible = false
 	_am_base = null
 	_am_army = null
+	_close_rename_army_dialog()
 
 
 func _clear_army_menu_body() -> void:
@@ -1263,16 +1359,29 @@ func _rebuild_army_menu() -> void:
 		return
 	_clear_army_menu_body()
 
-	# Title: controller + total men
+	var units: Array = _am_army.get_units()
+	var fid := str(_am_army.force_id)
+	var nick := ""
+	if _am_base.has_method("force_display_name"):
+		nick = str(_am_base.force_display_name(fid))
+	if nick == "":
+		nick = "Army"
+
+	# Title: nickname + total men
 	var title_lbl: Label = _am_panel.get_node_or_null("MarginContainer/VBoxContainer/HBoxContainer/Title")
 	if title_lbl != null:
-		var units: Array = _am_army.get_units()
-		var pid = _am_army.get_controller()
-		var pname := str(_am_base.players[pid].name_) if _am_base.players.has(pid) else "Army"
-		title_lbl.text = "Army of %s  (%d men)" % [pname, GlobalUnits.total_men(units)]
+		title_lbl.text = "%s  (%d men)" % [nick, GlobalUnits.total_men(units)]
+
+	# Controller can rename
+	var ctrl = _am_army.get_controller()
+	if ctrl == _am_base.my_pl_id:
+		var rename_btn := Button.new()
+		rename_btn.text = "Rename"
+		rename_btn.pressed.connect(_on_am_rename_pressed)
+		_am_body.add_child(rename_btn)
+		_am_body.add_child(HSeparator.new())
 
 	# Roster summary
-	var units: Array = _am_army.get_units()
 	for pid in GlobalUnits.owners_in(units):
 		var owner_name := str(_am_base.players[pid].name_) if _am_base.players.has(pid) else "?"
 		var owner_units: Array = []
@@ -1388,7 +1497,6 @@ func _rebuild_army_menu() -> void:
 			var vip_hdr := Label.new()
 			vip_hdr.text = "VIP"
 			_am_body.add_child(vip_hdr)
-			var ctrl = _am_army.get_controller()
 			for vid in vip_ids:
 				var v: Dictionary = _am_base.get_vip(str(vid))
 				if v.is_empty():
@@ -1452,6 +1560,110 @@ func _on_am_put_vip_to_sword(vip_id: String) -> void:
 func refresh_army_menu_if_force(force_id: String) -> void:
 	if _am_panel != null and _am_panel.visible and _am_army != null and _am_army.force_id == force_id:
 		_rebuild_army_menu()
+
+
+func _on_am_rename_pressed() -> void:
+	if _am_base == null or _am_army == null:
+		return
+	_open_rename_army_dialog(_am_base, str(_am_army.force_id))
+
+
+func _ensure_rename_army_dialog() -> void:
+	if _rn_panel != null:
+		return
+	_rn_panel = PanelContainer.new()
+	_rn_panel.top_level = true
+	_rn_panel.z_index = 140
+	_rn_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_rn_panel.visible = false
+	_rn_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var title := Label.new()
+	title.text = "Rename army"
+	title.add_theme_font_size_override("font_size", 16)
+	_rn_edit = LineEdit.new()
+	_rn_edit.custom_minimum_size = Vector2(280, 0)
+	_rn_edit.max_length = int(ArmyNames.max_name_length())
+	_rn_error = Label.new()
+	_rn_error.modulate = Color(1.0, 0.45, 0.35)
+	_rn_error.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_rn_error.custom_minimum_size = Vector2(280, 0)
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 8)
+	var confirm_btn := Button.new()
+	confirm_btn.text = "Confirm"
+	confirm_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	confirm_btn.pressed.connect(_on_rn_confirm)
+	var reroll_btn := Button.new()
+	reroll_btn.text = "Reroll"
+	reroll_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	reroll_btn.pressed.connect(_on_rn_reroll)
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel_btn.pressed.connect(_close_rename_army_dialog)
+	btn_row.add_child(confirm_btn)
+	btn_row.add_child(reroll_btn)
+	btn_row.add_child(cancel_btn)
+	vbox.add_child(title)
+	vbox.add_child(_rn_edit)
+	vbox.add_child(_rn_error)
+	vbox.add_child(btn_row)
+	margin.add_child(vbox)
+	_rn_panel.add_child(margin)
+	add_child(_rn_panel)
+
+
+func _open_rename_army_dialog(base_map, force_id: String) -> void:
+	_ensure_rename_army_dialog()
+	_rn_base = base_map
+	_rn_force_id = force_id
+	_rn_error.text = ""
+	var current := ""
+	if base_map.has_method("force_nickname"):
+		current = str(base_map.force_nickname(force_id))
+	_rn_edit.text = current
+	_rn_edit.grab_focus()
+	_rn_panel.visible = true
+	_rn_panel.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	var sz := _rn_panel.get_combined_minimum_size()
+	_rn_panel.size = sz
+	_rn_panel.position = (vp - sz) * 0.5
+
+
+func _close_rename_army_dialog() -> void:
+	if _rn_panel != null:
+		_rn_panel.visible = false
+	_rn_base = null
+	_rn_force_id = ""
+
+
+func _on_rn_reroll() -> void:
+	if _rn_base == null or _rn_force_id == "" or _rn_edit == null:
+		return
+	_rn_error.text = ""
+	if _rn_base.has_method("do_reroll_force_name"):
+		_rn_edit.text = str(_rn_base.do_reroll_force_name(_rn_force_id))
+	else:
+		_rn_edit.text = str(ArmyNames.mint_unique({}))
+
+
+func _on_rn_confirm() -> void:
+	if _rn_base == null or _rn_force_id == "" or _rn_edit == null:
+		return
+	var cleaned: String = ArmyNames.sanitize(_rn_edit.text)
+	if cleaned == "":
+		_rn_error.text = "Name cannot be blank."
+		return
+	_rn_error.text = ""
+	if _rn_base.has_method("do_rename_force"):
+		_rn_base.do_rename_force(_rn_force_id, cleaned)
+	_close_rename_army_dialog()
 
 
 func _on_am_offer_join(stack_spec: Dictionary) -> void:
@@ -2848,9 +3060,8 @@ func _on_fm_put_vip_to_sword(force_id: String, vip_id: String) -> void:
 func _fm_force_label(fid: String, _unused: bool) -> String:
 	if _fm_base == null or not _fm_base.forces.has(fid):
 		return "Army"
-	var controller = _fm_base.get_force_controller(fid)
-	if _fm_base.players.has(controller):
-		return "Army of %s" % str(_fm_base.players[controller].name_)
+	if _fm_base.has_method("force_display_name"):
+		return str(_fm_base.force_display_name(fid))
 	return "Army"
 
 
@@ -3365,13 +3576,13 @@ func _ensure_province_levy_widgets() -> void:
 	if _prov_happiness_lbl != null or province_tab_root == null:
 		return
 	province_tab_root.mouse_filter = Control.MOUSE_FILTER_STOP
-	province_tab_root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Content lives inside a ScrollContainer — size to children, don't expand-fill.
+	province_tab_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	_prov_manage_root = VBoxContainer.new()
 	_prov_manage_root.add_theme_constant_override("separation", 6)
 	_prov_manage_root.mouse_filter = Control.MOUSE_FILTER_STOP
 	_prov_manage_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_prov_manage_root.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	province_tab_root.add_child(_prov_manage_root)
 	_prov_manage_root.add_child(HSeparator.new())
 
@@ -3379,16 +3590,14 @@ func _ensure_province_levy_widgets() -> void:
 	columns.add_theme_constant_override("separation", 20)
 	columns.mouse_filter = Control.MOUSE_FILTER_STOP
 	columns.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	columns.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_prov_manage_root.add_child(columns)
 
-	# Left: holding status + levy.
+	# Left: holding status (overview).
 	var left := VBoxContainer.new()
 	left.add_theme_constant_override("separation", 6)
 	left.mouse_filter = Control.MOUSE_FILTER_STOP
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	left.size_flags_stretch_ratio = 1.0
-	left.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	columns.add_child(left)
 
 	var fields_row := HBoxContainer.new()
@@ -3464,27 +3673,6 @@ func _ensure_province_levy_widgets() -> void:
 		_connect_tax_button(tbtn, level)
 		_prov_tax_row.add_child(tbtn)
 		_prov_tax_btns[level] = tbtn
-	_prov_levy_lbl = Label.new()
-	_prov_levy_lbl.text = "Levy: —"
-	_prov_levy_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
-	left.add_child(_prov_levy_lbl)
-	_prov_weapons_lbl = Label.new()
-	_prov_weapons_lbl.text = "Weapons: —"
-	_prov_weapons_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_prov_weapons_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
-	left.add_child(_prov_weapons_lbl)
-	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 8)
-	actions.mouse_filter = Control.MOUSE_FILTER_STOP
-	_prov_recruit_btn = Button.new()
-	_prov_recruit_btn.text = "Recruit army"
-	_prov_recruit_btn.pressed.connect(_on_province_recruit_pressed)
-	actions.add_child(_prov_recruit_btn)
-	_prov_ships_btn = Button.new()
-	_prov_ships_btn.text = "Build ships"
-	_prov_ships_btn.pressed.connect(_on_province_build_ships_pressed)
-	actions.add_child(_prov_ships_btn)
-	left.add_child(actions)
 
 	# Right: labor pool + sliders.
 	var right := VBoxContainer.new()
@@ -3492,22 +3680,98 @@ func _ensure_province_levy_widgets() -> void:
 	right.mouse_filter = Control.MOUSE_FILTER_STOP
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right.size_flags_stretch_ratio = 1.35
-	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	columns.add_child(right)
 
 	_prov_labor_lbl = _make_prov_section_label("Labor pool: —")
 	right.add_child(_prov_labor_lbl)
-	var labor_scroll := ScrollContainer.new()
-	labor_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
-	labor_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	labor_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	labor_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	right.add_child(labor_scroll)
 	_prov_labor_box = VBoxContainer.new()
 	_prov_labor_box.add_theme_constant_override("separation", 6)
 	_prov_labor_box.mouse_filter = Control.MOUSE_FILTER_STOP
 	_prov_labor_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	labor_scroll.add_child(_prov_labor_box)
+	right.add_child(_prov_labor_box)
+
+	_ensure_province_army_widgets()
+	_ensure_province_shipyard_widgets()
+	if province_sub_tabs != null:
+		province_sub_tabs.set_tab_title(0, "Overview")
+		province_sub_tabs.set_tab_title(1, "Army")
+		province_sub_tabs.set_tab_title(_prov_shipyard_tab_index, "Shipyard")
+
+
+func _ensure_province_army_widgets() -> void:
+	if _prov_levy_lbl != null or province_army_root == null:
+		return
+	province_army_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	province_army_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var title := Label.new()
+	title.text = "Levy & recruitment"
+	title.add_theme_font_size_override("font_size", 16)
+	title.mouse_filter = Control.MOUSE_FILTER_STOP
+	province_army_root.add_child(title)
+
+	_prov_levy_lbl = Label.new()
+	_prov_levy_lbl.text = "Levy: —"
+	_prov_levy_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_prov_levy_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	province_army_root.add_child(_prov_levy_lbl)
+
+	_prov_weapons_lbl = Label.new()
+	_prov_weapons_lbl.text = "Weapons: —"
+	_prov_weapons_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_prov_weapons_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	province_army_root.add_child(_prov_weapons_lbl)
+
+	_prov_recruit_btn = Button.new()
+	_prov_recruit_btn.text = "Recruit army"
+	_prov_recruit_btn.pressed.connect(_on_province_recruit_pressed)
+	province_army_root.add_child(_prov_recruit_btn)
+
+
+func _ensure_province_shipyard_widgets() -> void:
+	if _prov_shipyard_info != null or province_shipyard_root == null:
+		return
+	province_shipyard_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	province_shipyard_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var title := Label.new()
+	title.text = "Shipyard"
+	title.add_theme_font_size_override("font_size", 16)
+	title.mouse_filter = Control.MOUSE_FILTER_STOP
+	province_shipyard_root.add_child(title)
+
+	_prov_shipyard_info = Label.new()
+	_prov_shipyard_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_prov_shipyard_info.mouse_filter = Control.MOUSE_FILTER_STOP
+	_prov_shipyard_info.text = "Cost per ship: —"
+	province_shipyard_root.add_child(_prov_shipyard_info)
+
+	_prov_shipyard_stock = Label.new()
+	_prov_shipyard_stock.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_prov_shipyard_stock.mouse_filter = Control.MOUSE_FILTER_STOP
+	_prov_shipyard_stock.text = "Available: —"
+	province_shipyard_root.add_child(_prov_shipyard_stock)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.mouse_filter = Control.MOUSE_FILTER_STOP
+	var lbl := Label.new()
+	lbl.text = "Ships to build:"
+	lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	row.add_child(lbl)
+	_prov_ships_spin = SpinBox.new()
+	_prov_ships_spin.min_value = 1
+	_prov_ships_spin.max_value = 100
+	_prov_ships_spin.value = 1
+	_prov_ships_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_prov_ships_spin.value_changed.connect(_on_prov_ships_spin_changed)
+	row.add_child(_prov_ships_spin)
+	province_shipyard_root.add_child(row)
+
+	_prov_ships_build_btn = Button.new()
+	_prov_ships_build_btn.text = "Build transport ships"
+	_prov_ships_build_btn.pressed.connect(_on_province_build_ships_pressed)
+	province_shipyard_root.add_child(_prov_ships_build_btn)
 
 
 func _blacksmith_status_text(preview: Dictionary, holding: Dictionary) -> String:
@@ -3806,6 +4070,16 @@ func _connect_labor_slider(slider: HSlider, cat: String) -> void:
 	slider.value_changed.connect(func(v: float): _on_prov_labor_category_changed(cat, v))
 
 
+func _set_province_sub_tab_hidden(tab_index: int, hidden: bool) -> void:
+	if province_sub_tabs == null:
+		return
+	if tab_index < 0 or tab_index >= province_sub_tabs.get_tab_count():
+		return
+	province_sub_tabs.set_tab_hidden(tab_index, hidden)
+	if hidden and province_sub_tabs.current_tab == tab_index:
+		province_sub_tabs.current_tab = 0
+
+
 func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	_ensure_province_levy_widgets()
 	var data = base_map.get_province_data(province_id)
@@ -3824,6 +4098,8 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 		_prov_idle_field_count = 0
 		if _prov_manage_root != null:
 			_prov_manage_root.visible = false
+		_set_province_sub_tab_hidden(1, true)
+		_set_province_sub_tab_hidden(_prov_shipyard_tab_index, true)
 		hide_populate_idle_popup()
 		return
 	province_tab_name.text = data.get("name", "—")
@@ -3866,6 +4142,11 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	var can_manage := has_holding or has_dejure
 	if _prov_manage_root != null:
 		_prov_manage_root.visible = can_manage
+	_set_province_sub_tab_hidden(1, not can_manage)
+	var can_ships := false
+	if has_dejure and is_instance_valid(parent_n) and parent_n.has_method("province_coastal_towns_for"):
+		can_ships = not parent_n.province_coastal_towns_for(parent_n.my_pl_id, province_id).is_empty()
+	_set_province_sub_tab_hidden(_prov_shipyard_tab_index, not can_ships)
 	if not can_manage:
 		_prov_idle_field_count = 0
 		hide_populate_idle_popup()
@@ -3974,6 +4255,8 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			hide_populate_idle_popup()
 
 	_prov_happiness_lbl.text = "Happiness: %.0f (avg of your settlements)" % float(data.get("happiness", 100))
+
+	# Army tab
 	_prov_levy_lbl.text = "Levy this season: %d / remaining %d (cap 80%% of %d)" % [
 		int(data.get("levied_this_season", 0)),
 		int(data.get("levy_remaining", 0)),
@@ -3984,65 +4267,71 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	for k in GlobalUnits.WEAPON_KEYS:
 		wparts.append("%s %d" % [GlobalUnits.weapon_name(k), int(weapons.get(k, 0))])
 	_prov_weapons_lbl.text = "Weapons: %s" % ", ".join(wparts)
-
 	_prov_recruit_btn.visible = has_dejure
-	var can_ships := false
-	if has_dejure and is_instance_valid(parent_n) and parent_n.has_method("province_coastal_towns_for"):
-		can_ships = not parent_n.province_coastal_towns_for(parent_n.my_pl_id, selected_province_id).is_empty()
-	if _prov_ships_btn != null:
-		_prov_ships_btn.visible = can_ships
+	_prov_recruit_btn.disabled = not has_dejure
+
+	# Shipyard tab
+	if can_ships:
+		_fill_province_shipyard(base_map, province_id, holding)
+
+
+func _fill_province_shipyard(base_map: Node, province_id: String, holding: Dictionary) -> void:
+	if _prov_shipyard_info == null:
+		return
+	_prov_shipyard_info.text = (
+		"Cost per ship: %d wood + %d marks.\nCapacity: %d men/ship. Movement: %d MP."
+		% [
+			GlobalUnits.TRANSPORT_SHIP_WOOD_COST,
+			GlobalUnits.TRANSPORT_SHIP_MARKS_COST,
+			GlobalUnits.TRANSPORT_SHIP_CAPACITY,
+			GlobalUnits.TRANSPORT_SHIP_MP,
+		]
+	)
+	var wood := int(holding.get("wood_stock", 0))
+	var marks := 0
+	if base_map.get("players") != null and base_map.players.has(base_map.my_pl_id):
+		marks = int(base_map.players[base_map.my_pl_id].game_data.get("marks", 0))
+	var towns: Array = []
+	if base_map.has_method("province_coastal_towns_for"):
+		towns = base_map.province_coastal_towns_for(base_map.my_pl_id, province_id)
+	var max_by_wood := wood / GlobalUnits.TRANSPORT_SHIP_WOOD_COST if GlobalUnits.TRANSPORT_SHIP_WOOD_COST > 0 else 0
+	var max_by_marks := marks / GlobalUnits.TRANSPORT_SHIP_MARKS_COST if GlobalUnits.TRANSPORT_SHIP_MARKS_COST > 0 else 0
+	var max_affordable := maxi(0, mini(max_by_wood, max_by_marks))
+	_prov_shipyard_stock.text = (
+		"Coastal towns: %d · Available: %d wood · %d marks · can afford %d ship(s)"
+		% [towns.size(), wood, marks, max_affordable]
+	)
+	if _prov_ships_spin != null:
+		_prov_ships_spin.max_value = maxi(1, max_affordable) if max_affordable > 0 else 1
+		if int(_prov_ships_spin.value) > int(_prov_ships_spin.max_value):
+			_prov_ships_spin.value = _prov_ships_spin.max_value
+	_refresh_prov_ships_build_btn(max_affordable)
+
+
+func _refresh_prov_ships_build_btn(max_affordable: int = -1) -> void:
+	if _prov_ships_build_btn == null or _prov_ships_spin == null:
+		return
+	var count := int(_prov_ships_spin.value)
+	if max_affordable < 0:
+		max_affordable = int(_prov_ships_spin.max_value)
+	_prov_ships_build_btn.disabled = count < 1 or max_affordable < 1 or count > max_affordable
+	_prov_ships_build_btn.text = "Build %d transport ship%s" % [count, "" if count == 1 else "s"]
+
+
+func _on_prov_ships_spin_changed(_value: float) -> void:
+	_refresh_prov_ships_build_btn()
 
 
 func _on_province_build_ships_pressed() -> void:
 	if not is_instance_valid(parent_n) or selected_province_id == "":
 		return
-	_open_build_ships_dialog(parent_n, selected_province_id)
-
-
-func _open_build_ships_dialog(base_map: Node, province_id: String) -> void:
-	_ensure_fleet_prompt()
-	_clear_fleet_prompt()
-	var title := Label.new()
-	title.text = "Build transport ships"
-	title.add_theme_font_size_override("font_size", 16)
-	_fl_prompt_body.add_child(title)
-	var info := Label.new()
-	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	info.custom_minimum_size = Vector2(320, 0)
-	info.text = "Cost per ship: %d wood + %d marks.\nCapacity: %d men/ship. MP: %d." % [
-		GlobalUnits.TRANSPORT_SHIP_WOOD_COST,
-		GlobalUnits.TRANSPORT_SHIP_MARKS_COST,
-		GlobalUnits.TRANSPORT_SHIP_CAPACITY,
-		GlobalUnits.TRANSPORT_SHIP_MP,
-	]
-	_fl_prompt_body.add_child(info)
-	var row := HBoxContainer.new()
-	var lbl := Label.new()
-	lbl.text = "Ships:"
-	row.add_child(lbl)
-	var spin := SpinBox.new()
-	spin.min_value = 1
-	spin.max_value = 100
-	spin.value = 1
-	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(spin)
-	_fl_prompt_body.add_child(row)
-	var btns := HBoxContainer.new()
-	var build_btn := Button.new()
-	build_btn.text = "Build"
-	build_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	build_btn.pressed.connect(func():
-		_close_fleet_prompt()
-		base_map.do_build_transport_ships(province_id, int(spin.value))
-	)
-	var cancel := Button.new()
-	cancel.text = "Cancel"
-	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	cancel.pressed.connect(_close_fleet_prompt)
-	btns.add_child(build_btn)
-	btns.add_child(cancel)
-	_fl_prompt_body.add_child(btns)
-	_show_fleet_prompt()
+	if _prov_ships_spin == null:
+		return
+	var count := int(_prov_ships_spin.value)
+	if count < 1:
+		return
+	if parent_n.has_method("do_build_transport_ships"):
+		parent_n.do_build_transport_ships(selected_province_id, count)
 
 
 # --- Battle menu ------------------------------------------------------------
@@ -4080,13 +4369,20 @@ func _ensure_battle_menu() -> void:
 	add_child(_bt_panel)
 
 
-func open_battle_menu(base_map, attacker_id: String, defender_army_id: String, building: Node) -> void:
+func open_battle_menu(
+	base_map,
+	attacker_id: String,
+	defender_army_id: String,
+	building: Node,
+	landing_fleet_id: String = ""
+) -> void:
 	_close_siege_prompt()
 	_ensure_battle_menu()
 	_bt_base = base_map
 	_bt_attacker_id = attacker_id
 	_bt_defender_id = defender_army_id
 	_bt_building = building
+	_bt_landing_fleet_id = landing_fleet_id
 	_rebuild_battle_menu()
 
 
@@ -4097,6 +4393,7 @@ func _close_battle_menu() -> void:
 	_bt_attacker_id = ""
 	_bt_defender_id = ""
 	_bt_building = null
+	_bt_landing_fleet_id = ""
 
 
 func _rebuild_battle_menu() -> void:
@@ -4127,19 +4424,20 @@ func _rebuild_battle_menu() -> void:
 			_close_battle_menu()
 			return
 		var def_units: Array = _bt_base.forces[_bt_defender_id]["units"]
-		def_str = GlobalUnits.fighting_strength(def_units)
+		if _bt_landing_fleet_id != "" and _bt_base.has_method("get_landing_defender_battle_strength"):
+			def_str = _bt_base.get_landing_defender_battle_strength(_bt_defender_id, _bt_attacker_id)
+		else:
+			def_str = GlobalUnits.fighting_strength(def_units)
 		def_men = GlobalUnits.fighting_men(def_units)
-		def_name = _fm_force_label(_bt_defender_id, false) if _bt_base.forces.has(_bt_defender_id) else "Enemy army"
-		# Reuse label helper with temporary context
-		var ctrl = _bt_base.get_force_controller(_bt_defender_id)
-		if _bt_base.players.has(ctrl):
-			def_name = "Army of %s" % str(_bt_base.players[ctrl].name_)
-		_bt_title.text = "Battle"
+		if _bt_base.has_method("force_display_name") and _bt_base.forces.has(_bt_defender_id):
+			def_name = str(_bt_base.force_display_name(_bt_defender_id))
+		else:
+			def_name = "Enemy army"
+		_bt_title.text = "Landing assault" if _bt_landing_fleet_id != "" else "Battle"
 
-	var atk_ctrl = _bt_base.get_force_controller(_bt_attacker_id)
 	var atk_name := "Your army"
-	if _bt_base.players.has(atk_ctrl):
-		atk_name = "Army of %s" % str(_bt_base.players[atk_ctrl].name_)
+	if _bt_base.has_method("force_display_name") and _bt_base.forces.has(_bt_attacker_id):
+		atk_name = str(_bt_base.force_display_name(_bt_attacker_id))
 
 	var you := Label.new()
 	you.text = "%s\n%d fighting · strength %d" % [atk_name, atk_men, atk_str]
@@ -4169,8 +4467,25 @@ func _rebuild_battle_menu() -> void:
 		siege_lbl.add_theme_font_size_override("font_size", 12)
 		_bt_body.add_child(siege_lbl)
 
+	if _bt_landing_fleet_id != "":
+		var land_lbl := Label.new()
+		land_lbl.text = "Landing assault: shore defenders fight at ×%.1f. Costs %d ship MP." % [
+			GlobalUnits.LANDING_DEFENDER_BONUS, GlobalUnits.TRANSPORT_LANDING_MP
+		]
+		land_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		land_lbl.custom_minimum_size = Vector2(360, 0)
+		land_lbl.add_theme_font_size_override("font_size", 12)
+		_bt_body.add_child(land_lbl)
+
 	var hint := Label.new()
-	hint.text = "Strength is modified by luck when you attack. Stand ground leaves both armies in place."
+	if _bt_landing_fleet_id != "":
+		hint.text = (
+			"Strength is modified by luck when you attack. "
+			+ "Win to land survivors on the shore; lose and the landing force is wiped. "
+			+ "Stand ground cancels (no MP spent)."
+		)
+	else:
+		hint.text = "Strength is modified by luck when you attack. Stand ground leaves both armies in place."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(360, 0)
 	hint.add_theme_font_size_override("font_size", 12)
@@ -4202,8 +4517,9 @@ func _on_bt_attack() -> void:
 	var atk := _bt_attacker_id
 	var def := _bt_defender_id
 	var building = _bt_building
+	var landing_fleet := _bt_landing_fleet_id
 	_close_battle_menu()
-	base.do_battle_attack(atk, def, building)
+	base.do_battle_attack(atk, def, building, landing_fleet)
 
 
 # --- Siege prompt (first castle assault) ------------------------------------
@@ -4820,6 +5136,10 @@ func open_recruit_menu(base_map: Node, province_id: String) -> void:
 		spin.value = 0
 		spin.custom_minimum_size = Vector2(90, 0)
 		row.add_child(spin)
+		var max_btn := Button.new()
+		max_btn.text = "MAX"
+		max_btn.pressed.connect(_on_recruit_max_pressed.bind(ut))
+		row.add_child(max_btn)
 		_rc_body.add_child(row)
 		_rc_spinboxes[ut] = spin
 
@@ -4836,6 +5156,30 @@ func _close_recruit_menu() -> void:
 	_rc_base = null
 	_rc_province_id = ""
 	_rc_spinboxes.clear()
+
+
+func _on_recruit_max_pressed(ut: int) -> void:
+	if not _rc_spinboxes.has(ut) or _rc_base == null or _rc_province_id == "":
+		return
+	var data: Dictionary = _rc_base.get_province_data(_rc_province_id)
+	if data.is_empty():
+		return
+	var max_men := mini(int(data.get("levy_remaining", 0)), int(data.get("owned_population", 0)))
+	var weapons: Dictionary = data.get("weapons", {})
+	var used_by_others := 0
+	for other_ut in _rc_spinboxes:
+		if other_ut == ut:
+			continue
+		used_by_others += int(_rc_spinboxes[other_ut].value)
+	var type_max := maxi(0, max_men - used_by_others)
+	var cost: Dictionary = GlobalUnits.weapon_cost_for_type(ut)
+	if not cost.is_empty():
+		for k in cost:
+			var per := int(cost[k])
+			if per <= 0:
+				continue
+			type_max = mini(type_max, int(weapons.get(k, 0)) / per)
+	_rc_spinboxes[ut].value = type_max
 
 
 func _on_recruit_confirm() -> void:
@@ -6343,11 +6687,40 @@ func open_fleet_stack_picker(base_map: Node, stack: Array) -> void:
 	_show_fleet_prompt()
 
 
+func open_fleet_embark_picker(base_map: Node, army: Node2D, fleets: Array) -> void:
+	_ensure_fleet_prompt()
+	_clear_fleet_prompt()
+	var title := Label.new()
+	title.text = "Embark onto which fleet?"
+	title.add_theme_font_size_override("font_size", 16)
+	_fl_prompt_body.add_child(title)
+	for f in fleets:
+		if f == null or not is_instance_valid(f):
+			continue
+		var btn := Button.new()
+		btn.text = "%d ships — %d/%d men (MP %d)" % [
+			f.ship_count, f.men_aboard(), f.capacity(), f.movement_left
+		]
+		var fleet_ref: Node2D = f
+		btn.pressed.connect(func():
+			_close_fleet_prompt()
+			open_fleet_embark_prompt(base_map, fleet_ref, army)
+		)
+		_fl_prompt_body.add_child(btn)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.pressed.connect(_close_fleet_prompt)
+	_fl_prompt_body.add_child(cancel)
+	_show_fleet_prompt()
+
+
 func open_fleet_embark_prompt(base_map: Node, fleet: Node2D, army: Node2D) -> void:
 	_ensure_fleet_prompt()
 	_clear_fleet_prompt()
 	var men := GlobalUnits.total_men(army.get_units()) if army.has_method("get_units") else 0
 	var free_cap = fleet.free_capacity()
+	var army_mp := int(army.movement_left)
+	var fleet_mp := int(fleet.movement_left)
 	var title := Label.new()
 	title.text = "Embark army?"
 	title.add_theme_font_size_override("font_size", 16)
@@ -6355,8 +6728,9 @@ func open_fleet_embark_prompt(base_map: Node, fleet: Node2D, army: Node2D) -> vo
 	var info := Label.new()
 	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	info.custom_minimum_size = Vector2(300, 0)
-	info.text = "Army: %d men\nFleet free space: %d\nCosts %d ship MP" % [
-		men, free_cap, GlobalUnits.TRANSPORT_EMBARK_MP
+	info.text = "Army: %d men (MP %d)\nFleet free space: %d (MP %d)\nCosts %d army MP + %d ship MP" % [
+		men, army_mp, free_cap, fleet_mp,
+		GlobalUnits.TRANSPORT_EMBARK_ARMY_MP, GlobalUnits.TRANSPORT_EMBARK_FLEET_MP
 	]
 	_fl_prompt_body.add_child(info)
 	if men > free_cap:
@@ -6369,9 +6743,19 @@ func open_fleet_embark_prompt(base_map: Node, fleet: Node2D, army: Node2D) -> vo
 		_fl_prompt_body.add_child(ok)
 		_show_fleet_prompt()
 		return
-	if fleet.movement_left < GlobalUnits.TRANSPORT_EMBARK_MP:
+	if army_mp < GlobalUnits.TRANSPORT_EMBARK_ARMY_MP:
+		var warn_a := Label.new()
+		warn_a.text = "Not enough army movement points (need %d)." % GlobalUnits.TRANSPORT_EMBARK_ARMY_MP
+		_fl_prompt_body.add_child(warn_a)
+		var ok_a := Button.new()
+		ok_a.text = "OK"
+		ok_a.pressed.connect(_close_fleet_prompt)
+		_fl_prompt_body.add_child(ok_a)
+		_show_fleet_prompt()
+		return
+	if fleet_mp < GlobalUnits.TRANSPORT_EMBARK_FLEET_MP:
 		var warn2 := Label.new()
-		warn2.text = "Not enough ship movement points."
+		warn2.text = "Not enough ship movement points (need %d)." % GlobalUnits.TRANSPORT_EMBARK_FLEET_MP
 		_fl_prompt_body.add_child(warn2)
 		var ok2 := Button.new()
 		ok2.text = "OK"
@@ -6379,9 +6763,10 @@ func open_fleet_embark_prompt(base_map: Node, fleet: Node2D, army: Node2D) -> vo
 		_fl_prompt_body.add_child(ok2)
 		_show_fleet_prompt()
 		return
-	if not base_map.are_friendly_players(fleet.get_controller(), army.get_controller()):
+	if int(fleet.player_owner) != int(base_map.my_pl_id) \
+			or int(army.get_controller()) != int(base_map.my_pl_id):
 		var warn3 := Label.new()
-		warn3.text = "Can only pick up your own or allied armies."
+		warn3.text = "Can only embark your own army onto your own fleet."
 		_fl_prompt_body.add_child(warn3)
 		var ok3 := Button.new()
 		ok3.text = "OK"
@@ -6410,23 +6795,36 @@ func open_fleet_embark_prompt(base_map: Node, fleet: Node2D, army: Node2D) -> vo
 func open_fleet_disembark_prompt(base_map: Node, fleet: Node2D, land_cell: Vector2i) -> void:
 	_ensure_fleet_prompt()
 	_clear_fleet_prompt()
+	var shore_army: Node2D = null
+	if base_map.pathfinding != null and base_map.pathfinding.occupancy.has(land_cell):
+		var occ: Node2D = base_map.pathfinding.occupancy[land_cell]
+		if occ != null and not (occ.has_method("is_caravan") and occ.is_caravan()) \
+				and not (occ.has_method("is_fleet") and occ.is_fleet()):
+			shore_army = occ
+
 	var title := Label.new()
-	title.text = "Disembark army"
+	if shore_army == null:
+		title.text = "Land army"
+	elif base_map.are_friendly_players(fleet.get_controller(), shore_army.get_controller()):
+		title.text = "Land / merge"
+	else:
+		title.text = "Landing assault"
 	title.add_theme_font_size_override("font_size", 16)
 	_fl_prompt_body.add_child(title)
+
 	if fleet.aboard_force_ids.is_empty():
 		var empty := Label.new()
-		empty.text = "No armies aboard."
+		empty.text = "No armies aboard to land."
 		_fl_prompt_body.add_child(empty)
 		var ok := Button.new()
-		ok.text = "OK"
+		ok.text = "OK" if shore_army == null else "Cancel"
 		ok.pressed.connect(_close_fleet_prompt)
 		_fl_prompt_body.add_child(ok)
 		_show_fleet_prompt()
 		return
-	if fleet.movement_left < GlobalUnits.TRANSPORT_EMBARK_MP:
+	if fleet.movement_left < GlobalUnits.TRANSPORT_LANDING_MP:
 		var warn := Label.new()
-		warn.text = "Need %d ship MP to disembark." % GlobalUnits.TRANSPORT_EMBARK_MP
+		warn.text = "Need %d ship MP to land." % GlobalUnits.TRANSPORT_LANDING_MP
 		_fl_prompt_body.add_child(warn)
 		var ok2 := Button.new()
 		ok2.text = "OK"
@@ -6434,18 +6832,31 @@ func open_fleet_disembark_prompt(base_map: Node, fleet: Node2D, land_cell: Vecto
 		_fl_prompt_body.add_child(ok2)
 		_show_fleet_prompt()
 		return
+
 	var info := Label.new()
-	info.text = "Choose an army to land (costs %d MP):" % GlobalUnits.TRANSPORT_EMBARK_MP
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.custom_minimum_size = Vector2(300, 0)
+	if shore_army == null:
+		info.text = "Choose an army to land (costs %d ship MP):" % GlobalUnits.TRANSPORT_LANDING_MP
+	elif base_map.are_friendly_players(fleet.get_controller(), shore_army.get_controller()):
+		info.text = "Choose an army to merge into the shore force (costs %d ship MP):" % GlobalUnits.TRANSPORT_LANDING_MP
+	else:
+		info.text = (
+			"Choose an army to assault the shore (defender ×%.1f, costs %d ship MP):"
+			% [GlobalUnits.LANDING_DEFENDER_BONUS, GlobalUnits.TRANSPORT_LANDING_MP]
+		)
 	_fl_prompt_body.add_child(info)
+
 	for fid in fleet.aboard_force_ids:
 		var btn := Button.new()
 		var men := 0
 		if base_map.forces.has(fid):
 			men = GlobalUnits.total_men(base_map.forces[fid]["units"])
 		btn.text = "%s — %d men" % [base_map.force_display_name(str(fid)), men]
+		var force_id := str(fid)
 		btn.pressed.connect(func():
 			_close_fleet_prompt()
-			base_map.do_fleet_disembark(String(fleet.name), str(fid), land_cell)
+			_on_fleet_land_army_chosen(base_map, fleet, force_id, land_cell, shore_army)
 		)
 		_fl_prompt_body.add_child(btn)
 	var cancel := Button.new()
@@ -6453,6 +6864,44 @@ func open_fleet_disembark_prompt(base_map: Node, fleet: Node2D, land_cell: Vecto
 	cancel.pressed.connect(_close_fleet_prompt)
 	_fl_prompt_body.add_child(cancel)
 	_show_fleet_prompt()
+
+
+func _on_fleet_land_army_chosen(
+	base_map: Node, fleet: Node2D, force_id: String, land_cell: Vector2i, shore_army: Node2D
+) -> void:
+	if shore_army == null:
+		base_map.do_fleet_disembark(String(fleet.name), force_id, land_cell)
+		return
+	if base_map.are_friendly_players(fleet.get_controller(), shore_army.get_controller()):
+		_ensure_fleet_prompt()
+		_clear_fleet_prompt()
+		var title := Label.new()
+		title.text = "Merge landing army?"
+		title.add_theme_font_size_override("font_size", 16)
+		_fl_prompt_body.add_child(title)
+		var info := Label.new()
+		info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		info.custom_minimum_size = Vector2(300, 0)
+		info.text = "Merge into the shore army? Costs %d ship MP." % GlobalUnits.TRANSPORT_LANDING_MP
+		_fl_prompt_body.add_child(info)
+		var row := HBoxContainer.new()
+		var yes := Button.new()
+		yes.text = "Merge"
+		yes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		yes.pressed.connect(func():
+			_close_fleet_prompt()
+			base_map.do_fleet_landing_merge(String(fleet.name), force_id, str(shore_army.force_id))
+		)
+		var no := Button.new()
+		no.text = "Cancel"
+		no.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		no.pressed.connect(_close_fleet_prompt)
+		row.add_child(yes)
+		row.add_child(no)
+		_fl_prompt_body.add_child(row)
+		_show_fleet_prompt()
+		return
+	open_battle_menu(base_map, force_id, str(shore_army.force_id), null, String(fleet.name))
 
 
 func open_fleet_combine_prompt(

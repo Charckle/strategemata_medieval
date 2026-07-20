@@ -32,9 +32,27 @@ func load_settings() -> void:
 		var parsed = JSON.parse_string(content)
 		if typeof(parsed) == TYPE_DICTIONARY:
 			GlobalSet.settings = parsed
+			_merge_default_settings()
 		else:
 			push_error("Failed to parse settings JSON as dictionary.")
 			GlobalSet.settings = {}
 	else:
 		push_error("Could not open config file for reading: %s" % config_path)
 		GlobalSet.settings = {}
+
+
+func _merge_default_settings() -> void:
+	var default_file := FileAccess.open("res://default_data/settings.json", FileAccess.READ)
+	if default_file == null:
+		return
+	var defaults = JSON.parse_string(default_file.get_as_text())
+	default_file.close()
+	if typeof(defaults) != TYPE_DICTIONARY:
+		return
+	var changed := false
+	for key in defaults:
+		if not GlobalSet.settings.has(key):
+			GlobalSet.settings[key] = defaults[key]
+			changed = true
+	if changed:
+		save_settings()

@@ -1,0 +1,10 @@
+[gd_scene load_steps=3 format=3 uid="uid://b8cloudobjstx01"]
+
+[ext_resource type="Script" path="res://weather/clouds_object/cloud_object.gd" id="1_cloud"]
+[ext_resource type="Texture2D" path="res://weather/sprites/oblak_02.png" id="2_tex"]
+
+[node name="CloudObject" type="Node2D"]
+script = ExtResource("1_cloud")
+
+[node name="cloud" type="Sprite2D" parent="."]
+texture = ExtResource("2_tex")

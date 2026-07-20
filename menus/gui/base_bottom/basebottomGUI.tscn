@@ -229,69 +229,130 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 18
 text = "—"
 
-[node name="info_grid" type="GridContainer" parent="economy_menu/margin/vbox/tabs/province" unique_id=1543648825]
+[node name="sub_tabs" type="TabContainer" parent="economy_menu/margin/vbox/tabs/province" unique_id=2040139435]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="overview" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs" unique_id=2040139436]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 0
+metadata/_tab_index = 0
+
+[node name="ScrollContainer" type="ScrollContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview" unique_id=2040139433]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="content" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer" unique_id=2040139434]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="info_grid" type="GridContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content" unique_id=1543648825]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/h_separation = 24
 theme_override_constants/v_separation = 4
 columns = 3
 
-[node name="status_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/info_grid" unique_id=1543648827]
+[node name="status_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid" unique_id=1543648827]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Status: —"
 
-[node name="owner_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/info_grid" unique_id=1543648828]
+[node name="owner_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid" unique_id=1543648828]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Owner: —"
 
-[node name="defacto_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/info_grid" unique_id=1543648829]
+[node name="defacto_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid" unique_id=1543648829]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "De facto: —"
 
-[node name="dejure_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/info_grid" unique_id=1543648830]
+[node name="dejure_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid" unique_id=1543648830]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "De jure: —"
 
-[node name="population_prov_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/info_grid" unique_id=1543648831]
+[node name="population_prov_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid" unique_id=1543648831]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Population: —"
 
-[node name="income_prov_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/info_grid" unique_id=1543648832]
+[node name="income_prov_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid" unique_id=1543648832]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Predicted income: —"
 
-[node name="buildings_grid" type="GridContainer" parent="economy_menu/margin/vbox/tabs/province" unique_id=1543648834]
+[node name="buildings_grid" type="GridContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content" unique_id=1543648834]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/h_separation = 24
 theme_override_constants/v_separation = 4
 columns = 4
 
-[node name="villages_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648836]
+[node name="villages_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid" unique_id=1543648836]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Villages: — / —"
 
-[node name="towns_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648838]
+[node name="towns_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid" unique_id=1543648838]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Towns: — / —"
 
-[node name="castles_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648840]
+[node name="castles_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid" unique_id=1543648840]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Castles: — / —"
 
-[node name="economy_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/buildings_grid" unique_id=1543648842]
+[node name="economy_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid" unique_id=1543648842]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Economy: — / —"
+
+[node name="army" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs" unique_id=2040139437]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 0
+metadata/_tab_index = 1
+
+[node name="ScrollContainer" type="ScrollContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/army" unique_id=2040139438]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="content" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/army/ScrollContainer" unique_id=2040139439]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="shipyard" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs" unique_id=2040139440]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 0
+metadata/_tab_index = 2
+
+[node name="ScrollContainer" type="ScrollContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/shipyard" unique_id=2040139441]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="content" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/shipyard/ScrollContainer" unique_id=2040139442]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
 
 [node name="caravan" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs"]
 visible = false
@@ -543,9 +604,18 @@ visible = false
 layout_mode = 2
 metadata/_tab_index = 1
 
-[node name="Label" type="Label" parent="settings_menu/margin/vbox/tabs/Video" unique_id=582567864]
+[node name="show_weather_row" type="HBoxContainer" parent="settings_menu/margin/vbox/tabs/Video" unique_id=1765294020]
 layout_mode = 2
-text = "Video settings content"
+
+[node name="label" type="Label" parent="settings_menu/margin/vbox/tabs/Video/show_weather_row" unique_id=1765294021]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Show weather (cloud shadows)"
+
+[node name="show_weather_chk" type="CheckBox" parent="settings_menu/margin/vbox/tabs/Video/show_weather_row" unique_id=1765294022]
+layout_mode = 2
+button_pressed = true
+text = "Enabled"
 
 [node name="Gameplay" type="VBoxContainer" parent="settings_menu/margin/vbox/tabs" unique_id=1765294011]
 visible = false
@@ -561,6 +631,19 @@ size_flags_horizontal = 3
 text = "Show province names on map"
 
 [node name="show_province_names_chk" type="CheckBox" parent="settings_menu/margin/vbox/tabs/Gameplay/show_province_names_row" unique_id=1765294014]
+layout_mode = 2
+button_pressed = true
+text = "Enabled"
+
+[node name="show_army_names_row" type="HBoxContainer" parent="settings_menu/margin/vbox/tabs/Gameplay"]
+layout_mode = 2
+
+[node name="label" type="Label" parent="settings_menu/margin/vbox/tabs/Gameplay/show_army_names_row"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Show army names on map"
+
+[node name="show_army_names_chk" type="CheckBox" parent="settings_menu/margin/vbox/tabs/Gameplay/show_army_names_row"]
 layout_mode = 2
 button_pressed = true
 text = "Enabled"

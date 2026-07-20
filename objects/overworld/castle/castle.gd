@@ -17,7 +17,7 @@ const INSIDE_CAPACITY := {
 ## Standing finished level when `has_castle`; ignored while empty.
 @export var castle_type: CASTLE_TYPE = CASTLE_TYPE.WOODEN_FORT
 ## False = empty defense plot (no standing castle).
-@export var has_castle: bool = true
+@export var has_castle: bool = false
 
 @export var player_owner = 1
 

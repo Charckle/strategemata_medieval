@@ -24,6 +24,8 @@ func populate_settings() -> void:
 	# Video
 	var fs = GlobalSet.settings.get("fullscreen", 0)
 	$margin/vbox/tabs/Video/content/fullscreen_row/fullscreen_btn.selected = $margin/vbox/tabs/Video/content/fullscreen_row/fullscreen_btn.get_item_index(int(fs))
+	var weather_on = GlobalSet.settings.get("show_weather", 1) != 0
+	$margin/vbox/tabs/Video/content/show_weather_row/show_weather_chk.button_pressed = weather_on
 
 func _linear_to_db(linear: float) -> float:
 	if linear <= 0.0:
@@ -95,6 +97,10 @@ func _on_fullscreen_btn_item_selected(index: int) -> void:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 	else:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+
+func _on_show_weather_chk_toggled(pressed: bool) -> void:
+	GlobalSet.settings["show_weather"] = 1 if pressed else 0
+	SettingsLoad.save_settings()
 
 func _on_back_btn_pressed() -> void:
 	visible = false

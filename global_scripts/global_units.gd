@@ -122,7 +122,13 @@ const TRANSPORT_SHIP_CAPACITY := 100
 const TRANSPORT_SHIP_MP := 20
 const TRANSPORT_SHIP_WOOD_COST := 300
 const TRANSPORT_SHIP_MARKS_COST := 500
-const TRANSPORT_EMBARK_MP := 5
+# Army embarks onto an adjacent own fleet (army spends + fleet spends).
+const TRANSPORT_EMBARK_ARMY_MP := 4
+const TRANSPORT_EMBARK_FLEET_MP := 3
+# Disembark / landing merge / landing attack from a fleet onto shore.
+const TRANSPORT_LANDING_MP := 8
+# Shore defender bonus when attacked by an army landing from a fleet.
+const LANDING_DEFENDER_BONUS := 1.5
 # Missed pays: strike 1 warn, 2 sellswords leave, 3+ levy desertion.
 const UPKEEP_STRIKES_MAX := 3
 const UPKEEP_CLEAR_PAYS := 10

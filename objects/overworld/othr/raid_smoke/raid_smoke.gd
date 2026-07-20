@@ -6,6 +6,8 @@ extends Node2D
 
 const BASE_PARTICLE_COUNT := 16
 const RADIUS := 30.0
+## Steady rightward push (pixels/sec) so the cloud leans with the wind.
+const WIND_X := 10.0
 
 ## 0.0–1.0; set before add_child or via set_intensity after.
 var intensity: float = 1.0
@@ -54,7 +56,8 @@ func _spawn_particle() -> Dictionary:
 		"pos": Vector2(randf_range(-RADIUS, RADIUS), randf_range(-6.0, 14.0)),
 		"size": randf_range(2.5, 5.0 + 2.0 * intensity),
 		"speed": randf_range(12.0, 20.0 + 12.0 * intensity),
-		"drift": randf_range(-12.0, 12.0),
+		# Bias individual drift to the right so gusts reinforce the wind.
+		"drift": randf_range(-4.0, 16.0),
 		"life": randf_range(0.0, 1.5),
 		"max_life": randf_range(1.1, 2.5),
 		"alpha": randf_range(0.25, 0.75) * alpha_scale,
@@ -66,7 +69,7 @@ func _spawn_plume() -> Dictionary:
 		"pos": Vector2(randf_range(-3.0, 3.0), randf_range(0.0, 8.0)),
 		"size": randf_range(4.0, 6.5),
 		"speed": randf_range(38.0, 52.0),
-		"drift": randf_range(-4.0, 4.0),
+		"drift": randf_range(2.0, 10.0),
 		"life": 0.0,
 		"max_life": randf_range(2.4, 3.4),
 		"alpha": randf_range(0.55, 0.85),
@@ -84,6 +87,7 @@ func _process(delta: float) -> void:
 func _advance_particle(p: Dictionary, delta: float, is_plume: bool) -> void:
 	p["life"] = float(p["life"]) + delta
 	p["pos"].y -= float(p["speed"]) * delta
+	p["pos"].x += WIND_X * delta
 	p["pos"].x += float(p["drift"]) * delta * (0.08 if is_plume else 0.12)
 	if float(p["life"]) >= float(p["max_life"]):
 		var fresh := _spawn_plume() if is_plume else _spawn_particle()

@@ -1,0 +1,14 @@
+[gd_scene load_steps=3 format=3 uid="uid://b8balloonobjstx01"]
+
+[ext_resource type="Script" path="res://weather/balloon_object/balloon_object.gd" id="1_balloon"]
+[ext_resource type="Texture2D" uid="uid://buvp42lw5kfqt" path="res://sprites/overworld/random/ballon/balloon.png" id="2_tex"]
+
+[node name="BalloonObject" type="Node2D"]
+script = ExtResource("1_balloon")
+
+[node name="shadow" type="Sprite2D" parent="."]
+position = Vector2(0, 38)
+
+[node name="sprite" type="Sprite2D" parent="."]
+position = Vector2(0, -10)
+texture = ExtResource("2_tex")
