@@ -23,12 +23,11 @@ var defacto
 
 var status_ = PROVINCE_STATUS.STABLE
 
-# Levy / happiness (0–100). Snapshot resets each season with levied_this_season.
-var happiness: float = 100.0
+# Levy counter (happiness lives per settlement). Snapshot resets each season.
 var season_start_population: int = 0
 var levied_this_season: int = 0
 
-# Per-player holding economy: labor slider, running grain potential, horse stock.
+# Per-player holding economy: labor slider, running grain potential, horse stock, rations.
 # grain also lives in resources["grain"]["has"][pid]; horses here + mirrored in weapons for totals.
 var holdings: Dictionary = {}
 
@@ -86,10 +85,14 @@ func _find_building_of_type(container: Node, btype: int) -> Node:
 
 
 func _is_seat_destroyed(building: Node) -> bool:
-	# Only the castle seat can be "destroyed" (future mechanic). Razed towns stay the seat.
+	# Empty / under-construction castle plots are not a usable seat.
 	if building == null:
 		return true
-	return bool(building.get_meta("seat_destroyed", false))
+	if bool(building.get_meta("seat_destroyed", false)):
+		return true
+	if building.has_method("is_operational") and not building.is_operational():
+		return true
+	return false
 
 
 func get_non_seat_buildings() -> Array:
@@ -341,6 +344,8 @@ func ensure_holding(player_id: int) -> Dictionary:
 			"grain_potential": 0.0,
 			"horses": 0,
 			"pending_marks": 0, # silver preview → applied next tick to global treasury
+			"ration": GlobalUnits.RATION_DEFAULT,
+			"tax": GlobalUnits.TAX_DEFAULT,
 		}
 	else:
 		var h: Dictionary = holdings[player_id]
@@ -358,6 +363,10 @@ func ensure_holding(player_id: int) -> Dictionary:
 					labor_exist[cat] = 0
 		if not h.has("pending_marks"):
 			h["pending_marks"] = 0
+		if not h.has("ration"):
+			h["ration"] = GlobalUnits.RATION_DEFAULT
+		if not h.has("tax"):
+			h["tax"] = GlobalUnits.TAX_DEFAULT
 	return holdings[player_id]
 
 
@@ -487,8 +496,21 @@ func labor_category_cap(player_id: int, category: String, season: int) -> int:
 			return horse_labor_required(player_id, season)
 		"wood", "stone", "iron", "silver", "blacksmith":
 			return economy_worker_cap(player_id, category)
+		"castle":
+			return castle_construction_cap(player_id)
 		_:
 			return 0
+
+
+## Castle labor is uncapped by buildings; limited only by population via set_labor.
+func castle_construction_cap(player_id: int) -> int:
+	var castle := _find_building_of_type(defense, GlobalStuff.BUILDING_TYPE.CASTLE)
+	if castle == null or not castle.has_method("is_under_construction"):
+		return 0
+	if not castle.is_under_construction():
+		return 0
+	# Large soft cap; set_labor_category still clamps to remaining population.
+	return owned_settlement_population(player_id)
 
 
 func economy_worker_cap(player_id: int, category: String) -> int:
@@ -507,11 +529,10 @@ func economy_worker_cap(player_id: int, category: String) -> int:
 			continue
 		if int(b.get("subtype")) != want_sub:
 			continue
-		match st:
-			1: cap += GlobalUnits.ECONOMY_WORKERS_SMALL
-			2: cap += GlobalUnits.ECONOMY_WORKERS_MEDIUM
-			3: cap += GlobalUnits.ECONOMY_WORKERS_BIG
-			_: cap += GlobalUnits.ECONOMY_WORKERS_SMALL
+		if b.has_method("worker_cap"):
+			cap += int(b.worker_cap())
+		else:
+			cap += GlobalUnits.economy_workers_for(want_sub, 0)
 	return cap
 
 
@@ -588,6 +609,11 @@ func seed_test_weapons() -> void:
 	_sync_weapons_horses_total()
 	if get_player_grain(pid) <= 0:
 		add_player_grain(pid, GlobalUnits.STARTING_GRAIN)
+	# Starter materials so castle construction is testable on authored maps.
+	if get_player_material(pid, "wood") <= 0:
+		add_player_material(pid, "wood", 2000)
+	if get_player_material(pid, "stone") <= 0:
+		add_player_material(pid, "stone", 2000)
 
 
 func snapshot_season_start() -> void:
@@ -641,10 +667,72 @@ func get_recruit_spawn_building(player_id: int) -> Node:
 
 
 ## Apply incremental happiness loss when levied_this_season grows within a season.
+## Same delta on every settlement in the province (all owners' settlements equally).
 func apply_levy_happiness(prev_levied: int, new_levied: int) -> void:
 	var old_p := GlobalUnits.levy_happiness_penalty(prev_levied, season_start_population)
 	var new_p := GlobalUnits.levy_happiness_penalty(new_levied, season_start_population)
-	happiness = clampf(happiness - (new_p - old_p), 0.0, 100.0)
+	var delta := new_p - old_p
+	if delta <= 0.0:
+		return
+	for s in settlements.get_children():
+		if s.get("happiness") == null:
+			continue
+		s.happiness = clampf(float(s.happiness) - delta, 0.0, 100.0)
+
+
+func get_holding_ration(player_id: int) -> int:
+	return GlobalUnits.clamp_ration(int(ensure_holding(player_id).get("ration", GlobalUnits.RATION_DEFAULT)))
+
+
+func set_holding_ration(player_id: int, level: int) -> void:
+	if player_id < 0:
+		return
+	ensure_holding(player_id)["ration"] = GlobalUnits.clamp_ration(level)
+
+
+func get_holding_tax(player_id: int) -> int:
+	return GlobalUnits.clamp_tax(int(ensure_holding(player_id).get("tax", GlobalUnits.TAX_DEFAULT)))
+
+
+func set_holding_tax(player_id: int, level: int) -> void:
+	if player_id < 0:
+		return
+	ensure_holding(player_id)["tax"] = GlobalUnits.clamp_tax(level)
+
+
+## Total uncollected tax marks in settlements owned by `player_id`.
+func holding_tax_marks_stored(player_id: int) -> int:
+	var total := 0
+	for s in get_owned_settlements(player_id):
+		if s.get("tax_marks") == null:
+			continue
+		total += int(s.tax_marks)
+	return total
+
+
+## Seed grain reserved for unsown grain fields (winter plan / default priority).
+func seed_grain_reserve(player_id: int) -> int:
+	var n := 0
+	for f in get_fields_for_player(player_id):
+		if int(f.crop) == 1 and not bool(f.planted):
+			n += 1
+	return n * GlobalUnits.GRAIN_SEED_PER_FIELD
+
+
+## Average happiness of settlements owned by `player_id` (or all if pid < 0).
+func average_settlement_happiness(player_id: int = -1) -> float:
+	var total := 0.0
+	var n := 0
+	for s in settlements.get_children():
+		if s.get("happiness") == null:
+			continue
+		if player_id >= 0 and (s.get("player_owner") == null or int(s.player_owner) != player_id):
+			continue
+		total += float(s.happiness)
+		n += 1
+	if n <= 0:
+		return 100.0
+	return total / float(n)
 
 
 ## Remove `amount` people from owned settlements (proportional). Returns false if not enough.
@@ -857,6 +945,8 @@ func get_holding_summary(player_id: int, season: int) -> Dictionary:
 		labor[cat] = get_labor_category(player_id, cat)
 		caps[cat] = labor_category_cap(player_id, cat, season)
 	var preview := preview_economy_output(player_id)
+	var ration_info := preview_holding_rations(player_id)
+	var tax_prev := _preview_holding_tax(player_id)
 	return {
 		"population": owned_settlement_population(player_id),
 		"labor_assigned": total_labor_assigned(player_id),
@@ -885,8 +975,24 @@ func get_holding_summary(player_id: int, season: int) -> Dictionary:
 		"has_iron": economy_worker_cap(player_id, "iron") > 0,
 		"has_silver": economy_worker_cap(player_id, "silver") > 0,
 		"has_blacksmith": economy_worker_cap(player_id, "blacksmith") > 0,
+		"has_castle_work": castle_construction_cap(player_id) > 0,
 		"has_grain_work": count_planted_grain_fields(player_id) > 0 or count_fields_by_crop(player_id, 1) > 0,
 		"has_horse_work": count_occupied_horse_fields(player_id) > 0,
+		"ration": int(ration_info.get("requested", GlobalUnits.RATION_DEFAULT)),
+		"ration_effective": int(ration_info.get("effective", GlobalUnits.RATION_DEFAULT)),
+		"ration_affordable": bool(ration_info.get("affordable", true)),
+		"ration_grain_need": int(ration_info.get("civilian_need", 0)),
+		"ration_grain_available": int(ration_info.get("available_for_people", 0)),
+		"seed_reserve": int(ration_info.get("seed_reserve", 0)),
+		"army_grain_need": int(ration_info.get("army_need", 0)),
+		"happiness": average_settlement_happiness(player_id),
+		"tax": get_holding_tax(player_id),
+		"tax_marks_stored": holding_tax_marks_stored(player_id),
+		"tax_marks_next": int(tax_prev.get("total", 0)),
+		"tax_marks_next_wallet": int(tax_prev.get("wallet", 0)),
+		"tax_marks_next_coffer": int(tax_prev.get("coffer", 0)),
+		"tax_castle_bonus_next": int(tax_prev.get("castle_bonus", 0)),
+		"tax_auto_wallet": bool(tax_prev.get("auto_wallet", false)),
 	}
 
 
@@ -928,6 +1034,151 @@ func transfer_holding_stock_for_settlement(settlement: Node, from_pid: int, to_p
 			add_player_horses(to_pid, move_h)
 
 
+## Forecast grain split: seed reserve → local armies → civilians at requested ration.
+## `army_need` comes from base_map when available (0 otherwise).
+func preview_holding_rations(player_id: int, army_need: int = -1) -> Dictionary:
+	ensure_holding(player_id)
+	var requested := get_holding_ration(player_id)
+	var pop := owned_settlement_population(player_id)
+	var stock := get_player_grain(player_id)
+	var seed_r := seed_grain_reserve(player_id)
+	var army_n := army_need
+	if army_n < 0:
+		army_n = 0
+		if base_map != null and base_map.has_method("province_army_grain_need"):
+			army_n = int(base_map.province_army_grain_need(self, player_id))
+	var after_seed := maxi(0, stock - seed_r)
+	var available_for_people := maxi(0, after_seed - maxi(0, army_n))
+	var effective := GlobalUnits.affordable_ration(pop, requested, available_for_people)
+	var civilian_need := GlobalUnits.ration_grain_need(pop, effective)
+	var promised_need := GlobalUnits.ration_grain_need(pop, requested)
+	return {
+		"requested": requested,
+		"effective": effective,
+		"affordable": promised_need <= available_for_people,
+		"population": pop,
+		"stock": stock,
+		"seed_reserve": seed_r,
+		"army_need": maxi(0, army_n),
+		"available_for_people": available_for_people,
+		"civilian_need": civilian_need,
+		"promised_need": promised_need,
+	}
+
+
+## Feed armies/civilians, apply ration+tax happiness/pop, deposit tax into settlement coffers.
+## Returns shrink report for inbox, or empty if no losses.
+## `rng` seeds over-cap population jitter (null → no jitter).
+func tick_holding_rations(player_id: int, rng: RandomNumberGenerator = null) -> Dictionary:
+	ensure_holding(player_id)
+	var requested := get_holding_ration(player_id)
+	var tax_level := get_holding_tax(player_id)
+	var seed_r := seed_grain_reserve(player_id)
+	var stock := get_player_grain(player_id)
+	var spendable := maxi(0, stock - seed_r)
+
+	# Armies before people: pay local forces from granary first, then civilians.
+	var army_spent := 0
+	if spendable > 0 and base_map != null and base_map.has_method("feed_province_armies_from_stock"):
+		army_spent = int(base_map.feed_province_armies_from_stock(self, player_id, spendable))
+		if army_spent > 0:
+			add_player_grain(player_id, -army_spent)
+	var people_budget := maxi(0, spendable - army_spent)
+
+	var owned := get_owned_settlements(player_id)
+	# Stable order so over-cap jitter consumes RNG the same on all peers.
+	owned.sort_custom(func(a, b) -> bool: return String(a.name) < String(b.name))
+	var old_pop := 0
+	for s in owned:
+		old_pop += int(s.population)
+
+	var effective := GlobalUnits.affordable_ration(old_pop, requested, people_budget)
+	var civilian_need := GlobalUnits.ration_grain_need(old_pop, effective)
+	if civilian_need > 0:
+		add_player_grain(player_id, -civilian_need)
+
+	var happy_delta := (
+		GlobalUnits.ration_happiness_delta(effective) + GlobalUnits.tax_happiness_delta(tax_level)
+	)
+	var pop_frac := (
+		GlobalUnits.ration_pop_fraction(effective) + GlobalUnits.tax_pop_fraction(tax_level)
+	)
+	var auto_wallet := has_dejure(player_id)
+	var wallet_pay := 0
+	var raw_base_sum := 0
+	var new_pop := 0
+	for s in owned:
+		var can_grow = (
+			not s.has_method("can_receive_ration_growth") or s.can_receive_ration_growth()
+		)
+		# Tax on current (pre-growth) population: tier % always; delivery by de jure.
+		if can_grow:
+			var base := GlobalUnits.tax_marks_for_settlement(int(s.population), tax_level)
+			var tier_frac := 0.0
+			if s.has_method("settlement_marks_bonus_fraction"):
+				tier_frac = float(s.settlement_marks_bonus_fraction())
+			var due := GlobalUnits.tax_marks_with_tier_bonus(base, tier_frac)
+			raw_base_sum += base
+			if due > 0:
+				if auto_wallet:
+					wallet_pay += due
+				elif s.get("tax_marks") != null:
+					s.tax_marks = int(s.tax_marks) + due
+		if can_grow and s.get("happiness") != null:
+			s.happiness = clampf(float(s.happiness) + happy_delta, 0.0, 100.0)
+		if not can_grow:
+			s.predicted_growth = 0
+			new_pop += int(s.population)
+			continue
+		var pop_now := int(s.population)
+		var delta := GlobalUnits.population_delta_from_fraction(pop_now, pop_frac)
+		var cap_jit: Vector2i = GlobalUnits.settlement_pop_cap_and_jitter(s)
+		delta = GlobalUnits.settlement_overflow_adjusted_delta(
+			pop_now, delta, int(cap_jit.x), int(cap_jit.y), rng
+		)
+		s.predicted_growth = delta
+		s.population = maxi(0, pop_now + delta)
+		new_pop += int(s.population)
+
+	if auto_wallet:
+		wallet_pay += _castle_tax_bonus(player_id, raw_base_sum)
+		_add_player_marks(player_id, wallet_pay)
+
+	update_population_in_resources()
+
+	var dropped := old_pop - new_pop
+	if dropped <= 0:
+		return {}
+	return {
+		"province_name": str(p_name),
+		"province_id": str(name),
+		"old_pop": old_pop,
+		"new_pop": new_pop,
+		"dropped": dropped,
+		"grain_stock": get_player_grain(player_id),
+		"ration": requested,
+		"ration_effective": effective,
+		"ration_name": GlobalUnits.ration_name(requested),
+		"ration_effective_name": GlobalUnits.ration_name(effective),
+	}
+
+
+## Tick rations for every holding controller. Returns { player_id: [shrink_entries...] }.
+func tick_rations(rng: RandomNumberGenerator = null) -> Dictionary:
+	var by_player: Dictionary = {}
+	var pids: Array = get_holding_controllers()
+	pids.sort()
+	for pid in pids:
+		var report := tick_holding_rations(int(pid), rng)
+		if report.is_empty():
+			continue
+		var key := int(pid)
+		if not by_player.has(key):
+			by_player[key] = []
+		by_player[key].append(report)
+	return by_player
+
+
 ## Season that just ended (before bump, season was this). Apply labor → harvest/foals.
 ## `ended_season`: season players just finished acting in.
 ## `new_season`: season after bump.
@@ -942,11 +1193,57 @@ func tick_agriculture(ended_season: int, new_season: int, rng: RandomNumberGener
 	# Economy produces every season (based on labor assigned during ended season).
 	for pid in _economy_controllers():
 		_tick_holding_economy(pid)
+	_tick_castle_construction()
 	refresh_field_visuals(new_season)
 	for pid in get_holding_controllers():
 		clamp_all_labor(pid, new_season)
 	_update_grain_will()
 	_update_material_will()
+
+
+func get_castle_plot() -> Node:
+	return _find_building_of_type(defense, GlobalStuff.BUILDING_TYPE.CASTLE)
+
+
+func _tick_castle_construction() -> void:
+	var castle := get_castle_plot()
+	if castle == null or not castle.has_method("is_under_construction"):
+		return
+	if not castle.is_under_construction():
+		return
+	var work := 0
+	for pid in get_holding_controllers():
+		work += get_labor_category(pid, "castle")
+	if work <= 0:
+		return
+	if not castle.add_construction_work(work):
+		return
+	var refund: Dictionary = castle.complete_project()
+	_apply_material_dict(refund, true)
+	if castle.has_method("set_flags"):
+		castle.set_flags()
+	if base_map != null and base_map.has_method("update_menus"):
+		base_map.update_menus()
+	if base_map != null and is_instance_valid(base_map.gui_node) \
+			and base_map.gui_node.has_method("refresh_castle_popup_if"):
+		base_map.gui_node.refresh_castle_popup_if(base_map, castle)
+
+
+func _apply_material_dict(amounts: Dictionary, as_refund: bool) -> void:
+	if amounts == null or amounts.is_empty():
+		return
+	# Refund / pay against de jure holding (construction controller).
+	var pid := int(dejure) if dejure != null else int(player_owner)
+	if pid < 0:
+		return
+	for key in ["wood", "stone"]:
+		var amt := int(amounts.get(key, 0))
+		if amt == 0:
+			continue
+		if as_refund:
+			add_player_material(pid, key, amt)
+		else:
+			add_player_material(pid, key, -amt)
 
 
 func _economy_controllers() -> Array:
@@ -1281,11 +1578,100 @@ func _update_grain_will() -> void:
 	resources["grain"]["will"] = will
 
 
+## Settlement tax total (raw base + town/village tier %) for current pop / tax level.
+func settlement_tax_due(settlement: Node, tax_level: int = -1) -> Dictionary:
+	## {base, tier_frac, total}
+	if settlement == null:
+		return {"base": 0, "tier_frac": 0.0, "total": 0}
+	if settlement.has_method("can_receive_ration_growth") and not settlement.can_receive_ration_growth():
+		return {"base": 0, "tier_frac": 0.0, "total": 0}
+	if tax_level < 0:
+		var owner_pid := int(settlement.player_owner) if settlement.get("player_owner") != null else -1
+		tax_level = get_holding_tax(owner_pid) if owner_pid >= 0 else GlobalUnits.TAX_DEFAULT
+	var base := GlobalUnits.tax_marks_for_settlement(int(settlement.population), tax_level)
+	var tier_frac := 0.0
+	if settlement.has_method("settlement_marks_bonus_fraction"):
+		tier_frac = float(settlement.settlement_marks_bonus_fraction())
+	var total := GlobalUnits.tax_marks_with_tier_bonus(base, tier_frac)
+	return {"base": base, "tier_frac": tier_frac, "total": total}
+
+
+## Castle holding bonus on Σ raw tax bases. Requires de jure + owned operational castle.
+func _castle_tax_bonus(player_id: int, raw_base_sum: int) -> int:
+	if raw_base_sum <= 0 or not has_dejure(player_id):
+		return 0
+	var castle := get_castle_plot()
+	if castle == null or castle.get("player_owner") == null:
+		return 0
+	if int(castle.player_owner) != player_id:
+		return 0
+	if not castle.has_method("is_operational") or not castle.is_operational():
+		return 0
+	if not castle.has_method("holding_marks_bonus_fraction"):
+		return 0
+	var frac := float(castle.holding_marks_bonus_fraction())
+	if frac <= 0.0:
+		return 0
+	return int(floor(float(raw_base_sum) * frac))
+
+
+func _add_player_marks(player_id: int, amount: int) -> void:
+	if player_id < 0 or amount <= 0:
+		return
+	if base_map == null or base_map.get("players") == null:
+		return
+	var players: Dictionary = base_map.players
+	if not players.has(player_id):
+		return
+	players[player_id].game_data["marks"] = int(players[player_id].game_data.get("marks", 0)) + amount
+
+
+## Forecast next season tax: {total, wallet, coffer, castle_bonus, raw_base, auto_wallet}.
+func _preview_holding_tax(player_id: int) -> Dictionary:
+	var tax_level := get_holding_tax(player_id)
+	var auto_wallet := has_dejure(player_id)
+	var raw_base := 0
+	var settlements_total := 0
+	for s in get_owned_settlements(player_id):
+		var due: Dictionary = settlement_tax_due(s, tax_level)
+		raw_base += int(due.get("base", 0))
+		settlements_total += int(due.get("total", 0))
+	var castle_bonus := _castle_tax_bonus(player_id, raw_base) if auto_wallet else 0
+	var total := settlements_total + castle_bonus
+	return {
+		"total": total,
+		"wallet": total if auto_wallet else 0,
+		"coffer": 0 if auto_wallet else settlements_total,
+		"castle_bonus": castle_bonus,
+		"raw_base": raw_base,
+		"settlements_total": settlements_total,
+		"auto_wallet": auto_wallet,
+	}
+
+
 func recalculate_settlements_growth() -> void:
-	var settlement_list: Array = settlements.get_children()
-	for settlement in settlement_list:
+	# Clear, then assign ration+tax forecast per holding (affordable ration level).
+	# Over-cap forecast uses overflow pressure without random jitter.
+	for settlement in settlements.get_children():
 		if settlement.has_method("calculate_predicted_growth"):
 			settlement.calculate_predicted_growth()
+	for pid in get_holding_controllers():
+		var info := preview_holding_rations(int(pid))
+		var effective := int(info.get("effective", GlobalUnits.RATION.NORMAL))
+		var tax_level := get_holding_tax(int(pid))
+		var pop_frac := (
+			GlobalUnits.ration_pop_fraction(effective) + GlobalUnits.tax_pop_fraction(tax_level)
+		)
+		for s in get_owned_settlements(int(pid)):
+			if s.has_method("can_receive_ration_growth") and not s.can_receive_ration_growth():
+				s.predicted_growth = 0
+				continue
+			var pop_now := int(s.population)
+			var delta := GlobalUnits.population_delta_from_fraction(pop_now, pop_frac)
+			var cap_jit: Vector2i = GlobalUnits.settlement_pop_cap_and_jitter(s)
+			s.predicted_growth = GlobalUnits.settlement_overflow_adjusted_delta(
+				pop_now, delta, int(cap_jit.x), 0, null
+			)
 	update_population_in_resources()
 
 
@@ -1313,26 +1699,21 @@ func update_population_in_resources() -> void:
 
 
 func apply_predicted_growth_to_settlements() -> void:
-	var settlement_list: Array = settlements.get_children()
-	for settlement in settlement_list:
-		settlement.population += settlement.predicted_growth
+	# Population changes are applied in tick_holding_rations (ration system).
+	# predicted_growth is forecast-only for the UI.
 	update_population_in_resources()
 
 
 func recalculate_marks_will_by_player() -> void:
-	var settlement_list: Array = settlements.get_children()
-	for s in settlement_list:
-		if s.has_method("calculate_predicted_marks"):
-			s.calculate_predicted_marks()
-	# Only the de jure holder earns marks, and only from settlements they own.
+	# Forecast: next season tax (tier % included; castle bonus if de jure).
 	var will_by_player: Dictionary = {}
-	for s in settlement_list:
-		if s.get("player_owner") == null or s.get("predicted_marks") == null:
-			continue
-		if int(s.player_owner) != int(dejure):
-			continue
-		var pid = int(s.player_owner)
-		will_by_player[pid] = will_by_player.get(pid, 0) + s.predicted_marks
+	for pid in get_holding_controllers():
+		var tax_level := get_holding_tax(int(pid))
+		for s in get_owned_settlements(int(pid)):
+			var due: Dictionary = settlement_tax_due(s, tax_level)
+			s.predicted_marks = int(due.get("total", 0))
+		var prev := _preview_holding_tax(int(pid))
+		will_by_player[int(pid)] = int(prev.get("total", 0))
 	var total := 0
 	for pid in will_by_player:
 		total += will_by_player[pid]
@@ -1344,6 +1725,9 @@ func _count_buildings_in_node(node: Node, control_player_id: int) -> Dictionary:
 	var control := 0
 	var all_count := 0
 	for child in node.get_children():
+		# Empty castle plots do not count as standing castles.
+		if child.has_method("is_built") and not child.is_built():
+			continue
 		all_count += 1
 		if child.get("player_owner") != null and child.player_owner == control_player_id:
 			control += 1
@@ -1402,7 +1786,6 @@ func get_display_data(players_dict: Dictionary, viewer_id: int = NO_DEFACTO) -> 
 	var status_name := get_status_name_for_viewer(viewer_id)
 	var viewer_has_dejure := viewer_id >= 0 and has_dejure(viewer_id)
 	var marks_all: int = int(resources["marks"]["will"].get("all", 0))
-	var marks_for_viewer := marks_all if viewer_has_dejure else 0
 	var weapons_copy: Dictionary = get_weapons_for(viewer_id).duplicate() if viewer_id >= 0 else get_weapons().duplicate()
 	var season := 0
 	if base_map != null and base_map.get("season") != null:
@@ -1411,6 +1794,11 @@ func get_display_data(players_dict: Dictionary, viewer_id: int = NO_DEFACTO) -> 
 	var viewer_has_holding := viewer_id >= 0 and player_has_holding(viewer_id)
 	if viewer_has_holding:
 		holding = get_holding_summary(viewer_id, season)
+	var marks_for_viewer := 0
+	if viewer_has_holding:
+		marks_for_viewer = int(holding.get("tax_marks_next", 0))
+	elif viewer_has_dejure:
+		marks_for_viewer = int(resources["marks"]["will"].get(viewer_id, 0))
 	return {
 		"name": p_name,
 		"status": status_,
@@ -1428,7 +1816,7 @@ func get_display_data(players_dict: Dictionary, viewer_id: int = NO_DEFACTO) -> 
 		"towns": counts["towns"],
 		"castles": counts["castles"],
 		"economy": counts["economy"],
-		"happiness": happiness,
+		"happiness": average_settlement_happiness(viewer_id) if viewer_id >= 0 else average_settlement_happiness(),
 		"season_start_population": season_start_population,
 		"levied_this_season": levied_this_season,
 		"levy_remaining": max_levy_remaining(),
@@ -1436,4 +1824,14 @@ func get_display_data(players_dict: Dictionary, viewer_id: int = NO_DEFACTO) -> 
 		"owned_population": owned_settlement_population(viewer_id) if viewer_id >= 0 else 0,
 		"holding": holding,
 		"grain_stock": get_player_grain(viewer_id) if viewer_id >= 0 else 0,
+		"ration": int(holding.get("ration", GlobalUnits.RATION_DEFAULT)) if viewer_has_holding else GlobalUnits.RATION_DEFAULT,
+		"ration_effective": int(holding.get("ration_effective", GlobalUnits.RATION_DEFAULT)) if viewer_has_holding else GlobalUnits.RATION_DEFAULT,
+		"ration_affordable": bool(holding.get("ration_affordable", true)) if viewer_has_holding else true,
+		"tax": int(holding.get("tax", GlobalUnits.TAX_DEFAULT)) if viewer_has_holding else GlobalUnits.TAX_DEFAULT,
+		"tax_marks_stored": int(holding.get("tax_marks_stored", 0)) if viewer_has_holding else 0,
+		"tax_marks_next": int(holding.get("tax_marks_next", 0)) if viewer_has_holding else 0,
+		"tax_marks_next_wallet": int(holding.get("tax_marks_next_wallet", 0)) if viewer_has_holding else 0,
+		"tax_marks_next_coffer": int(holding.get("tax_marks_next_coffer", 0)) if viewer_has_holding else 0,
+		"tax_castle_bonus_next": int(holding.get("tax_castle_bonus_next", 0)) if viewer_has_holding else 0,
+		"tax_auto_wallet": bool(holding.get("tax_auto_wallet", false)) if viewer_has_holding else false,
 	}

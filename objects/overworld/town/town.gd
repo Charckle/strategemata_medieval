@@ -2,13 +2,21 @@ extends Node2D
 
 var type_ = GlobalStuff.BUILDING_TYPE.TOWN
 
-enum STAGES { SMALL, MEDIUM, BIG, RAZED }
+## Display / razed state. Economic tier is derived live from `population`.
+enum STAGES { SMALL, MEDIUM, BIG, VERY_BIG, RAZED }
 
-@export var stage = STAGES.SMALL
+## Designer-authored starting population; stage follows from this at runtime.
+@export var population: int = 300
+
+@export var player_owner = 1
+
+## Visual tier (lagged one turn) or RAZED. Not map-authored.
+var stage: int = STAGES.SMALL
 
 var fields = []
 
-@export var player_owner = 1
+# Soft pop cap (may overshoot; overflow shrink applies while above).
+const MAX_POPULATION := 2000
 
 # Max men this building can garrison (single flat pool). Starts empty.
 const GARRISON_CAPACITY := 300
@@ -18,8 +26,26 @@ const GARRISON_CAPACITY := 300
 
 var base_map: Node = null
 
+@onready var town_spr: Sprite2D = $town_spr
+
+const TOWN_TEXTURES := {
+	STAGES.SMALL: preload("res://sprites/overworld/objects/province/town/town.png"),
+	STAGES.MEDIUM: preload("res://sprites/overworld/objects/province/town/town_lvl_2.png"),
+	STAGES.BIG: preload("res://sprites/overworld/objects/province/town/town_lvl_3.png"),
+	STAGES.VERY_BIG: preload("res://sprites/overworld/objects/province/town/town_lvl_4.png"),
+}
+
 func get_garrison_capacity(_spot: int = GlobalUnits.SPOT.FLAT) -> int:
 	return GARRISON_CAPACITY
+
+
+func get_population_cap() -> int:
+	return MAX_POPULATION
+
+
+func get_overflow_jitter() -> int:
+	return GlobalUnits.TOWN_OVERFLOW_JITTER
+
 
 func get_pathfinding_blocked_tile_centers() -> Array:
 	return [
@@ -29,12 +55,19 @@ func get_pathfinding_blocked_tile_centers() -> Array:
 		global_position + Vector2(96, 32)
 	]
 
-var population
-var base_pop_growth = 0.05
+## 0–100; moved by rations, taxes, and levy (see province holding ticks).
+var happiness: float = 100.0
+## Uncollected tax marks stored here (owner collects with an army).
+var tax_marks: int = 0
 var predicted_growth
 var predicted_marks = 0
 
 func _ready() -> void:
+	population = maxi(0, int(population))
+	# First load: visual matches current pop (lag only applies across turns).
+	if stage != STAGES.RAZED:
+		stage = population_tier()
+	change_sprite()
 	get_start_data()
 
 
@@ -77,41 +110,89 @@ func shows_ownership_triangle() -> bool:
 	return true
 
 
+## Live economic tier from current population (ignores display lag).
+func population_tier() -> int:
+	if stage == STAGES.RAZED:
+		return STAGES.RAZED
+	var idx := GlobalUnits.settlement_tier_index(int(population), GlobalUnits.TOWN_TIER_POP_MAX)
+	match idx:
+		1: return STAGES.MEDIUM
+		2: return STAGES.BIG
+		3: return STAGES.VERY_BIG
+		_: return STAGES.SMALL
+
+
+func get_base_marks() -> int:
+	if stage == STAGES.RAZED:
+		return 0
+	return GlobalUnits.settlement_base_marks(int(population))
+
+
+func settlement_marks_bonus_fraction() -> float:
+	var tier := population_tier()
+	if tier == STAGES.RAZED:
+		return 0.0
+	var idx := GlobalUnits.settlement_tier_index(int(population), GlobalUnits.TOWN_TIER_POP_MAX)
+	return GlobalUnits.settlement_tier_marks_bonus(idx)
+
+
 func get_start_data():
-	get_pop()
 	calculate_predicted_growth()
 	calculate_predicted_marks()
 
 
 func calculate_predicted_marks() -> void:
+	# Province overwrites from holding tax rate; razed earns nothing.
 	if stage == STAGES.RAZED:
 		predicted_marks = 0
 		return
-	predicted_marks = int(ceil(population * 0.10))
+	predicted_marks = 0
 
 
 func calculate_predicted_growth() -> void:
+	# Province sets ration-based predicted_growth; razed never grows.
 	if stage == STAGES.RAZED:
 		predicted_growth = 0
 		return
-	predicted_growth = population * base_pop_growth
+	predicted_growth = 0
 
-func get_pop():
-	var pop := {
-		STAGES.SMALL: 300,
-		STAGES.MEDIUM: 600,
-		STAGES.BIG: 900,
-		STAGES.RAZED: 0,
-	}
-	
-	population = pop[stage]
+
+func can_receive_ration_growth() -> bool:
+	return stage != STAGES.RAZED
+
+
+## Sync display sprite to current population tier (call on new turn).
+func refresh_visual_stage() -> void:
+	if stage == STAGES.RAZED:
+		return
+	var want := population_tier()
+	if stage != want:
+		stage = want
+	change_sprite()
+
+
+func update_for_stage() -> void:
+	change_sprite()
+
+
+func change_sprite() -> void:
+	if town_spr == null:
+		return
+	# Razed: keep standing art; smoke is attached by the map.
+	if stage == STAGES.RAZED:
+		return
+	var tex: Texture2D = TOWN_TEXTURES.get(stage, TOWN_TEXTURES[STAGES.SMALL])
+	town_spr.texture = tex
+	town_spr.visible = true
 
 
 func get_stage_name() -> String:
-	match stage:
+	# UI shows live economic tier (sprite may lag one turn).
+	var live := population_tier() if stage != STAGES.RAZED else STAGES.RAZED
+	match live:
 		STAGES.SMALL: return "Small"
 		STAGES.MEDIUM: return "Medium"
 		STAGES.BIG: return "Big"
+		STAGES.VERY_BIG: return "Very Big"
 		STAGES.RAZED: return "Razed"
 	return ""
-	

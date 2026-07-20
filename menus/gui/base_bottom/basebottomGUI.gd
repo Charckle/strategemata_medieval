@@ -58,9 +58,16 @@ var _incoming_trade_panel: PanelContainer = null
 
 # Province levy / weapons UI (built under province tab at runtime).
 var _prov_happiness_lbl: Label = null
+var _prov_ration_lbl: Label = null
+var _prov_ration_btns: Dictionary = {} # RATION -> Button
+var _prov_ration_row: HBoxContainer = null
+var _prov_tax_lbl: Label = null
+var _prov_tax_btns: Dictionary = {} # TAX -> Button
+var _prov_tax_row: HBoxContainer = null
 var _prov_levy_lbl: Label = null
 var _prov_weapons_lbl: Label = null
 var _prov_recruit_btn: Button = null
+var _prov_ships_btn: Button = null
 
 # Recruit levy panel.
 var _rc_panel: PanelContainer = null
@@ -97,17 +104,31 @@ var _cv_cap_base = null
 var _cv_cap_caravan: Node2D = null
 var _cv_cap_force_id: String = ""
 
-# Merchant shop panel (tabbed: Weapons + Materials).
+# Transport fleet menus / prompts.
+var _fl_panel: PanelContainer = null
+var _fl_body: VBoxContainer = null
+var _fl_base = null
+var _fl_fleet: Node2D = null
+var _fl_split_spin: SpinBox = null
+var _fl_prompt: PanelContainer = null
+var _fl_prompt_body: VBoxContainer = null
+
+# Merchant shop panel (4 tabs: Buy/Sell × Weapons/Materials).
 var _ms_panel: PanelContainer = null
 var _ms_title: Label = null
 var _ms_info_lbl: Label = null
-var _ms_weapons_body: VBoxContainer = null
-var _ms_materials_body: VBoxContainer = null
-var _ms_total_lbl: Label = null
+var _ms_buy_weapons_body: VBoxContainer = null
+var _ms_buy_materials_body: VBoxContainer = null
+var _ms_sell_weapons_body: VBoxContainer = null
+var _ms_sell_materials_body: VBoxContainer = null
+var _ms_buy_total_lbl: Label = null
+var _ms_sell_total_lbl: Label = null
 var _ms_base = null
 var _ms_merchant: Node = null
-var _ms_weapon_spinboxes: Dictionary = {}  # weapon key -> SpinBox
-var _ms_material_spinboxes: Dictionary = {}  # material key -> SpinBox
+var _ms_buy_weapon_spinboxes: Dictionary = {}
+var _ms_buy_material_spinboxes: Dictionary = {}
+var _ms_sell_weapon_spinboxes: Dictionary = {}
+var _ms_sell_material_spinboxes: Dictionary = {}
 var _ms_competition := false
 
 # Merchant raid confirm panel.
@@ -229,6 +250,14 @@ var _econ_popup_body: Label = null
 var _econ_popup_btns: VBoxContainer = null
 var _econ_popup_building: Node = null
 var _econ_popup_base = null
+
+# Castle construction popup (build / upgrade / dismantle).
+var _castle_popup: PanelContainer = null
+var _castle_popup_title: Label = null
+var _castle_popup_body: Label = null
+var _castle_popup_btns: VBoxContainer = null
+var _castle_popup_building: Node = null
+var _castle_popup_base = null
 
 # Battle preview / result UI (built at runtime).
 var _bt_panel: PanelContainer = null
@@ -860,6 +889,18 @@ func _rebuild_economy_building_popup() -> void:
 				rbtn.disabled = current == str(wkey)
 				rbtn.pressed.connect(_on_econ_recipe_pressed.bind(str(wkey)))
 				_econ_popup_btns.add_child(rbtn)
+		if is_dejure and owns_building and b.has_method("can_upgrade") and b.can_upgrade():
+			var up_cost := int(b.upgrade_cost()) if b.has_method("upgrade_cost") else 0
+			var next_name := "Medium"
+			if b.has_method("next_stage") and b.get("STAGES") != null:
+				match int(b.next_stage()):
+					2: next_name = "Medium"
+					3: next_name = "Big"
+			var up := Button.new()
+			up.text = "Upgrade to %s (%d marks)" % [next_name, up_cost]
+			up.disabled = marks < up_cost
+			up.pressed.connect(_on_econ_upgrade_pressed)
+			_econ_popup_btns.add_child(up)
 		if is_dejure:
 			var dem := Button.new()
 			dem.text = "Demolish"
@@ -888,6 +929,13 @@ func _on_econ_build_pressed(subtype: int) -> void:
 		_econ_popup_base.do_build_economy(_econ_popup_building, subtype)
 
 
+func _on_econ_upgrade_pressed() -> void:
+	if _econ_popup_base == null or _econ_popup_building == null:
+		return
+	if _econ_popup_base.has_method("do_upgrade_economy"):
+		_econ_popup_base.do_upgrade_economy(_econ_popup_building)
+
+
 func _on_econ_demolish_pressed() -> void:
 	if _econ_popup_base == null or _econ_popup_building == null:
 		return
@@ -902,12 +950,208 @@ func _on_econ_recipe_pressed(weapon_key: String) -> void:
 		_econ_popup_base.do_set_blacksmith_recipe(_econ_popup_building, weapon_key)
 
 
+# --- Castle construction popup ----------------------------------------------
+
+func _ensure_castle_popup() -> void:
+	if _castle_popup != null:
+		return
+	_castle_popup = PanelContainer.new()
+	_castle_popup.top_level = true
+	_castle_popup.z_index = 130
+	_castle_popup.mouse_filter = Control.MOUSE_FILTER_STOP
+	_castle_popup.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var header := HBoxContainer.new()
+	_castle_popup_title = Label.new()
+	_castle_popup_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_castle_popup_title.add_theme_font_size_override("font_size", 16)
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.pressed.connect(hide_castle_popup)
+	header.add_child(_castle_popup_title)
+	header.add_child(close_btn)
+	_castle_popup_body = Label.new()
+	_castle_popup_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_castle_popup_body.custom_minimum_size = Vector2(280, 0)
+	_castle_popup_btns = VBoxContainer.new()
+	_castle_popup_btns.add_theme_constant_override("separation", 6)
+	vbox.add_child(header)
+	vbox.add_child(HSeparator.new())
+	vbox.add_child(_castle_popup_body)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(280, 220)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_castle_popup_btns.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_castle_popup_btns)
+	vbox.add_child(scroll)
+	margin.add_child(vbox)
+	_castle_popup.add_child(margin)
+	add_child(_castle_popup)
+
+
+func show_castle_popup(base_map: Node, building: Node) -> void:
+	_ensure_castle_popup()
+	hide_building_popup()
+	hide_field_popup()
+	hide_economy_building_popup()
+	_castle_popup_base = base_map
+	_castle_popup_building = building
+	_rebuild_castle_popup()
+	_castle_popup.visible = true
+	_castle_popup.reset_size()
+	var mouse_pos := get_viewport().get_mouse_position()
+	var pos := mouse_pos + Vector2(14, 0)
+	var vp := get_viewport().get_visible_rect().size
+	var sz := _castle_popup.size
+	pos.x = clampf(pos.x, 0.0, maxf(0.0, vp.x - sz.x))
+	pos.y = clampf(pos.y, 0.0, maxf(0.0, vp.y - sz.y))
+	_castle_popup.position = pos
+
+
+func hide_castle_popup() -> void:
+	if _castle_popup != null:
+		_castle_popup.visible = false
+	_castle_popup_building = null
+	_castle_popup_base = null
+
+
+func refresh_castle_popup_if(base_map: Node, building: Node) -> void:
+	if _castle_popup == null or not _castle_popup.visible:
+		return
+	if _castle_popup_building != building:
+		return
+	_castle_popup_base = base_map
+	_rebuild_castle_popup()
+
+
+func _rebuild_castle_popup() -> void:
+	if _castle_popup_base == null or _castle_popup_building == null:
+		return
+	var b := _castle_popup_building
+	var base = _castle_popup_base
+	_castle_popup_title.text = (
+		base._building_display_name(b) if base.has_method("_building_display_name") else "Castle"
+	)
+	_castle_popup_body.text = (
+		base._building_display_body(b) if base.has_method("_building_display_body") else ""
+	)
+	for c in _castle_popup_btns.get_children():
+		_castle_popup_btns.remove_child(c)
+		c.queue_free()
+	var pid := int(base.my_pl_id)
+	var prov = base.find_province_for_building(b) if base.has_method("find_province_for_building") else null
+	var is_dejure = prov != null and prov.has_method("has_dejure") and prov.has_dejure(pid)
+	var wood := 0
+	var stone := 0
+	if prov != null and prov.has_method("get_player_material"):
+		wood = int(prov.get_player_material(pid, "wood"))
+		stone = int(prov.get_player_material(pid, "stone"))
+	var stock_lbl := Label.new()
+	stock_lbl.text = "Your stock: %d wood · %d stone" % [wood, stone]
+	_castle_popup_btns.add_child(stock_lbl)
+	if b.has_method("is_operational") and b.is_operational():
+		var has_own := false
+		if base.has_method("get_player_garrison"):
+			has_own = not base.get_player_garrison(b, pid).is_empty()
+		if has_own:
+			var ung := Button.new()
+			ung.text = "Ungarrison your troops"
+			ung.pressed.connect(_on_castle_ungarrison_pressed)
+			_castle_popup_btns.add_child(ung)
+	if not is_dejure:
+		var hint := Label.new()
+		hint.text = "Only de jure can change construction here"
+		_castle_popup_btns.add_child(hint)
+		return
+	var hdr := Label.new()
+	hdr.text = "Construction target:"
+	_castle_popup_btns.add_child(hdr)
+	# Dismantle / cancel toward empty.
+	_add_castle_target_button(GlobalUnits.CASTLE_TARGET_EMPTY, "Dismantle / clear plot", wood, stone)
+	for lvl in range(6):
+		var name_ := str(b.castle_type_display_name(lvl)) if b.has_method("castle_type_display_name") else "Level %d" % (lvl + 1)
+		_add_castle_target_button(lvl, name_, wood, stone)
+
+
+func _add_castle_target_button(target: int, label: String, wood: int, stone: int) -> void:
+	var b := _castle_popup_building
+	if b == null or not b.has_method("preview_retarget"):
+		return
+	var preview: Dictionary = b.preview_retarget(target)
+	if preview.is_empty():
+		# Current target / no-op — show disabled current marker when matching.
+		if b.get("project_active") and int(b.get("project_target")) == target:
+			var cur := Button.new()
+			cur.text = "%s (current project)" % label
+			cur.disabled = true
+			_castle_popup_btns.add_child(cur)
+		elif b.has_method("is_operational") and b.is_operational() and int(b.get("castle_type")) == target:
+			var cur2 := Button.new()
+			cur2.text = "%s (standing)" % label
+			cur2.disabled = true
+			_castle_popup_btns.add_child(cur2)
+		return
+	var pay: Dictionary = preview.get("pay", {})
+	var pay_w := int(pay.get("wood", 0))
+	var pay_s := int(pay.get("stone", 0))
+	var work := int(preview.get("work_needed", 0))
+	var parts: PackedStringArray = []
+	if bool(preview.get("complete_immediately", false)):
+		parts.append("finish now")
+	elif work > 0:
+		parts.append("%d work" % work)
+	if pay_w > 0 or pay_s > 0:
+		var cost_bits: PackedStringArray = []
+		if pay_w > 0:
+			cost_bits.append("%d wood" % pay_w)
+		if pay_s > 0:
+			cost_bits.append("%d stone" % pay_s)
+		parts.append("pay " + ", ".join(cost_bits))
+	var refund: Dictionary = preview.get("refund_on_complete", {"wood": 0, "stone": 0})
+	var refund_now: Dictionary = preview.get("refund_now", {"wood": 0, "stone": 0})
+	var rw := int(refund.get("wood", 0)) + int(refund_now.get("wood", 0))
+	var rs := int(refund.get("stone", 0)) + int(refund_now.get("stone", 0))
+	if rw > 0 or rs > 0:
+		var rb: PackedStringArray = []
+		if rw > 0:
+			rb.append("%d wood" % rw)
+		if rs > 0:
+			rb.append("%d stone" % rs)
+		parts.append("refund " + ", ".join(rb))
+	var btn := Button.new()
+	btn.text = label if parts.is_empty() else "%s (%s)" % [label, " · ".join(parts)]
+	btn.disabled = wood < pay_w or stone < pay_s
+	btn.pressed.connect(_on_castle_target_pressed.bind(target))
+	_castle_popup_btns.add_child(btn)
+
+
+func _on_castle_target_pressed(target: int) -> void:
+	if _castle_popup_base == null or _castle_popup_building == null:
+		return
+	if _castle_popup_base.has_method("do_retarget_castle"):
+		_castle_popup_base.do_retarget_castle(_castle_popup_building, target)
+
+
+func _on_castle_ungarrison_pressed() -> void:
+	if _castle_popup_base == null or _castle_popup_building == null:
+		return
+	var building := _castle_popup_building
+	var base = _castle_popup_base
+	hide_castle_popup()
+	open_deploy_menu(base, building, int(base.my_pl_id))
+
+
 # --- Close everything (called on player switch / end-turn) ------------------
 
 func close_all_popups() -> void:
 	hide_building_popup()
 	hide_field_popup()
 	hide_economy_building_popup()
+	hide_castle_popup()
 	if _info_popup != null:
 		_info_popup.hide()
 	_close_army_menu()
@@ -2032,6 +2276,30 @@ func _rebuild_force_menu() -> void:
 			_fm_body.add_child(food_right)
 		_fm_body.add_child(HSeparator.new())
 
+	# Owner field army can collect stored tax from this settlement (1 MP).
+	if _fm_right_is_garrison and _fm_building != null \
+			and _fm_base.has_method("can_collect_settlement_tax") \
+			and _fm_base.has_method("settlement_tax_marks"):
+		var coffer := int(_fm_base.settlement_tax_marks(_fm_building))
+		if coffer > 0:
+			var tax_mp := int(GlobalUnits.TAX_COLLECT_MP)
+			var can_collect := bool(_fm_base.can_collect_settlement_tax(_fm_left_id, _fm_building))
+			var collect_btn := Button.new()
+			collect_btn.text = "Collect tax (%d marks, %d MP)" % [coffer, tax_mp]
+			if not can_collect:
+				var has_mp := true
+				if _fm_base.has_method("force_has_movement"):
+					has_mp = _fm_base.force_has_movement(_fm_left_id, tax_mp)
+				if not has_mp:
+					collect_btn.text = "Collect tax (need %d MP)" % tax_mp
+				else:
+					collect_btn.text = "Collect tax (unavailable)"
+				collect_btn.disabled = true
+			else:
+				collect_btn.pressed.connect(_on_fm_collect_tax)
+			_fm_body.add_child(collect_btn)
+			_fm_body.add_child(HSeparator.new())
+
 	if _fm_split_mode:
 		_fm_split_spinboxes.clear()
 		_fm_split_loot_spinboxes.clear()
@@ -2297,6 +2565,14 @@ func _fm_building_accepts_vip() -> bool:
 	if type_ == null:
 		return false
 	return type_ == GlobalStuff.BUILDING_TYPE.TOWN or type_ == GlobalStuff.BUILDING_TYPE.CASTLE
+
+
+func _on_fm_collect_tax() -> void:
+	if _fm_base == null or _fm_building == null or _fm_left_id == "":
+		return
+	if _fm_base.has_method("do_collect_settlement_tax"):
+		_fm_base.do_collect_settlement_tax(_fm_left_id, _fm_building)
+	_rebuild_force_menu()
 
 
 func _on_fm_transfer_confirm() -> void:
@@ -2617,10 +2893,11 @@ func refresh_military_tab() -> void:
 	var total := int(preview.get("total", 0))
 	var levy := int(preview.get("levy", 0))
 	var sellsword := int(preview.get("sellsword", 0))
+	var ships := int(preview.get("ships", 0))
 	if military_upkeep_lbl != null:
 		military_upkeep_lbl.text = (
-			"Projected upkeep: %d marks  (levies %d · sellswords %d)"
-			% [total, levy, sellsword]
+			"Projected upkeep: %d marks  (levies %d · sellswords %d · ships %d)"
+			% [total, levy, sellsword, ships]
 		)
 	var strikes := int(preview.get("strikes", 0))
 	var streak := int(preview.get("pay_streak", 0))
@@ -2668,7 +2945,11 @@ func refresh_military_tab() -> void:
 		name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		name_btn.text = "%s (%d men)" % [str(entry.get("name", "?")), int(entry.get("men", 0))]
 		var fid := str(entry.get("force_id", ""))
-		name_btn.pressed.connect(_on_military_force_pressed.bind(fid))
+		var fleet_id := str(entry.get("fleet_id", ""))
+		if fleet_id != "":
+			name_btn.pressed.connect(_on_military_fleet_pressed.bind(fleet_id))
+		else:
+			name_btn.pressed.connect(_on_military_force_pressed.bind(fid))
 		var cost_lbl := Label.new()
 		cost_lbl.text = "%d marks" % int(entry.get("total", 0))
 		cost_lbl.custom_minimum_size = Vector2(72, 0)
@@ -2701,6 +2982,18 @@ func _on_military_force_pressed(force_id: String) -> void:
 	if not is_instance_valid(parent_n) or not parent_n.has_method("jump_camera_to_force"):
 		return
 	parent_n.jump_camera_to_force(force_id)
+
+
+func _on_military_fleet_pressed(fleet_id: String) -> void:
+	if not is_instance_valid(parent_n):
+		return
+	var fleet = parent_n.get_fleet_by_id(fleet_id) if parent_n.has_method("get_fleet_by_id") else null
+	if fleet == null:
+		return
+	if parent_n.has_method("jump_camera_to"):
+		parent_n.jump_camera_to(fleet.global_position + Vector2(32, 16))
+	if fleet.is_controllable_by(parent_n.my_pl_id):
+		open_fleet_menu(parent_n, fleet)
 
 
 func refresh_alliances_list() -> void:
@@ -3124,6 +3417,53 @@ func _ensure_province_levy_widgets() -> void:
 	_prov_happiness_lbl.text = "Happiness: —"
 	_prov_happiness_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
 	left.add_child(_prov_happiness_lbl)
+	_prov_ration_lbl = Label.new()
+	_prov_ration_lbl.text = "Rations: —"
+	_prov_ration_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_prov_ration_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	left.add_child(_prov_ration_lbl)
+	_prov_ration_row = HBoxContainer.new()
+	_prov_ration_row.add_theme_constant_override("separation", 4)
+	_prov_ration_row.mouse_filter = Control.MOUSE_FILTER_STOP
+	left.add_child(_prov_ration_row)
+	_prov_ration_btns.clear()
+	var ration_group := ButtonGroup.new()
+	for level in [
+		GlobalUnits.RATION.NONE,
+		GlobalUnits.RATION.QUARTER,
+		GlobalUnits.RATION.HALF,
+		GlobalUnits.RATION.NORMAL,
+		GlobalUnits.RATION.DOUBLE,
+		GlobalUnits.RATION.QUADRUPLE,
+	]:
+		var btn := Button.new()
+		btn.text = GlobalUnits.ration_name(level)
+		btn.toggle_mode = true
+		btn.button_group = ration_group
+		btn.mouse_filter = Control.MOUSE_FILTER_STOP
+		_connect_ration_button(btn, level)
+		_prov_ration_row.add_child(btn)
+		_prov_ration_btns[level] = btn
+	_prov_tax_lbl = Label.new()
+	_prov_tax_lbl.text = "Tax: —"
+	_prov_tax_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_prov_tax_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	left.add_child(_prov_tax_lbl)
+	_prov_tax_row = HBoxContainer.new()
+	_prov_tax_row.add_theme_constant_override("separation", 4)
+	_prov_tax_row.mouse_filter = Control.MOUSE_FILTER_STOP
+	left.add_child(_prov_tax_row)
+	_prov_tax_btns.clear()
+	var tax_group := ButtonGroup.new()
+	for level in GlobalUnits.TAX_LEVELS:
+		var tbtn := Button.new()
+		tbtn.text = GlobalUnits.tax_name(level)
+		tbtn.toggle_mode = true
+		tbtn.button_group = tax_group
+		tbtn.mouse_filter = Control.MOUSE_FILTER_STOP
+		_connect_tax_button(tbtn, level)
+		_prov_tax_row.add_child(tbtn)
+		_prov_tax_btns[level] = tbtn
 	_prov_levy_lbl = Label.new()
 	_prov_levy_lbl.text = "Levy: —"
 	_prov_levy_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -3140,6 +3480,10 @@ func _ensure_province_levy_widgets() -> void:
 	_prov_recruit_btn.text = "Recruit army"
 	_prov_recruit_btn.pressed.connect(_on_province_recruit_pressed)
 	actions.add_child(_prov_recruit_btn)
+	_prov_ships_btn = Button.new()
+	_prov_ships_btn.text = "Build ships"
+	_prov_ships_btn.pressed.connect(_on_province_build_ships_pressed)
+	actions.add_child(_prov_ships_btn)
 	left.add_child(actions)
 
 	# Right: labor pool + sliders.
@@ -3229,6 +3573,108 @@ func _on_prov_labor_category_changed(category: String, value: float) -> void:
 		parent_n.do_set_holding_labor_category(selected_province_id, category, int(value))
 
 
+func _connect_ration_button(btn: Button, level: int) -> void:
+	btn.pressed.connect(func(): _on_prov_ration_pressed(level))
+
+
+func _on_prov_ration_pressed(level: int) -> void:
+	if selected_province_id == "" or not is_instance_valid(parent_n):
+		return
+	if parent_n.has_method("do_set_holding_ration"):
+		parent_n.do_set_holding_ration(selected_province_id, level)
+
+
+func _connect_tax_button(btn: Button, level: int) -> void:
+	btn.pressed.connect(func(): _on_prov_tax_pressed(level))
+
+
+func _on_prov_tax_pressed(level: int) -> void:
+	if selected_province_id == "" or not is_instance_valid(parent_n):
+		return
+	if parent_n.has_method("do_set_holding_tax"):
+		parent_n.do_set_holding_tax(selected_province_id, level)
+
+
+func _update_prov_tax_buttons(holding: Dictionary, has_holding: bool) -> void:
+	if _prov_tax_row == null:
+		return
+	_prov_tax_row.visible = has_holding
+	if _prov_tax_lbl != null:
+		_prov_tax_lbl.visible = has_holding
+	if not has_holding:
+		return
+	var level := int(holding.get("tax", GlobalUnits.TAX_DEFAULT))
+	var stored := int(holding.get("tax_marks_stored", 0))
+	var next_m := int(holding.get("tax_marks_next", 0))
+	var next_wallet := int(holding.get("tax_marks_next_wallet", 0))
+	var next_coffer := int(holding.get("tax_marks_next_coffer", 0))
+	var castle_b := int(holding.get("tax_castle_bonus_next", 0))
+	var auto_w := bool(holding.get("tax_auto_wallet", false))
+	var rate := GlobalUnits.tax_marks_per_person(level)
+	if _prov_tax_lbl != null:
+		if auto_w:
+			var castle_txt := (" · castle +%d" % castle_b) if castle_b > 0 else ""
+			_prov_tax_lbl.text = (
+				"Tax: %s (%d/person) · next +%d to wallet%s · stored %d in coffers"
+				% [GlobalUnits.tax_name(level), rate, next_wallet, castle_txt, stored]
+			)
+		else:
+			_prov_tax_lbl.text = (
+				"Tax: %s (%d/person) · next +%d to coffers (no de jure) · stored %d (collect with army)"
+				% [GlobalUnits.tax_name(level), rate, next_coffer if next_coffer > 0 else next_m, stored]
+			)
+	for lv in _prov_tax_btns:
+		var btn: Button = _prov_tax_btns[lv]
+		btn.set_pressed_no_signal(int(lv) == level)
+
+
+func _update_prov_ration_buttons(holding: Dictionary, has_holding: bool) -> void:
+	if _prov_ration_row == null:
+		return
+	_prov_ration_row.visible = has_holding
+	if _prov_ration_lbl != null:
+		_prov_ration_lbl.visible = has_holding
+	if not has_holding:
+		return
+	var requested := int(holding.get("ration", GlobalUnits.RATION_DEFAULT))
+	var effective := int(holding.get("ration_effective", requested))
+	var affordable := bool(holding.get("ration_affordable", true))
+	var avail := int(holding.get("ration_grain_available", 0))
+	var promised := GlobalUnits.ration_grain_need(
+		int(holding.get("population", 0)), requested
+	)
+	if _prov_ration_lbl != null:
+		if affordable:
+			_prov_ration_lbl.text = (
+				"Rations: %s · need %d grain / %d available after seed+armies"
+				% [GlobalUnits.ration_name(requested), promised, avail]
+			)
+			_prov_ration_lbl.remove_theme_color_override("font_color")
+		else:
+			_prov_ration_lbl.text = (
+				"Rations: %s promised, will feed as %s · need %d / have %d (seed+armies first)"
+				% [
+					GlobalUnits.ration_name(requested),
+					GlobalUnits.ration_name(effective),
+					promised,
+					avail,
+				]
+			)
+			_prov_ration_lbl.add_theme_color_override("font_color", Color(1.0, 0.35, 0.3))
+	var red := Color(1.0, 0.35, 0.3)
+	for level in _prov_ration_btns:
+		var btn: Button = _prov_ration_btns[level]
+		btn.set_pressed_no_signal(int(level) == requested)
+		if int(level) == requested and not affordable:
+			btn.add_theme_color_override("font_color", red)
+			btn.add_theme_color_override("font_pressed_color", red)
+			btn.add_theme_color_override("font_hover_color", red)
+		else:
+			btn.remove_theme_color_override("font_color")
+			btn.remove_theme_color_override("font_pressed_color")
+			btn.remove_theme_color_override("font_hover_color")
+
+
 func _labor_category_label(cat: String) -> String:
 	match cat:
 		"grain": return "Grain fields"
@@ -3238,6 +3684,7 @@ func _labor_category_label(cat: String) -> String:
 		"iron": return "Iron mines"
 		"silver": return "Silver mines"
 		"blacksmith": return "Blacksmiths"
+		"castle": return "Castle construction"
 	return cat.capitalize()
 
 
@@ -3267,6 +3714,8 @@ func _rebuild_labor_sliders(holding: Dictionary) -> void:
 		show_cats.append("silver")
 	if bool(holding.get("has_blacksmith", false)) or int(caps.get("blacksmith", 0)) > 0:
 		show_cats.append("blacksmith")
+	if bool(holding.get("has_castle_work", false)) or int(caps.get("castle", 0)) > 0:
+		show_cats.append("castle")
 	_prov_labor_updating = true
 	for cat in show_cats:
 		_add_labor_slider_row(str(cat), labor, caps, pop, holding)
@@ -3383,10 +3832,24 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	province_tab_defacto.text = "De facto: %s" % data.get("defacto_name", "—")
 	province_tab_dejure.text = "De jure: %s" % data.get("dejure_name", "—")
 	province_tab_population.text = "Population: %s (next: %s)" % [data.get("population_has", 0), data.get("population_will", 0)]
-	if data.get("viewer_has_dejure", false):
-		province_tab_income.text = "Income: %s" % data.get("marks_will", 0)
+	if data.get("viewer_has_holding", false):
+		if bool(data.get("tax_auto_wallet", false)):
+			var castle_b := int(data.get("tax_castle_bonus_next", 0))
+			var castle_bit := (" (incl. castle +%d)" % castle_b) if castle_b > 0 else ""
+			province_tab_income.text = "Tax next: %s → wallet%s · stored %s" % [
+				data.get("tax_marks_next_wallet", data.get("marks_will", 0)),
+				castle_bit,
+				data.get("tax_marks_stored", 0),
+			]
+		else:
+			province_tab_income.text = "Tax next: %s → coffers (no de jure) · stored %s" % [
+				data.get("tax_marks_next_coffer", data.get("tax_marks_next", data.get("marks_will", 0))),
+				data.get("tax_marks_stored", 0),
+			]
+	elif data.get("viewer_has_dejure", false):
+		province_tab_income.text = "Tax next: %s" % data.get("marks_will", 0)
 	else:
-		province_tab_income.text = "Income: 0 (no de jure)"
+		province_tab_income.text = "Tax: — (no holding)"
 
 	var v = data.get("villages", {"control": 0, "all": 0})
 	province_tab_villages.text = "Villages: %d / %d" % [v.get("control", 0), v.get("all", 0)]
@@ -3492,6 +3955,8 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			)
 			_prov_smith_lbl.text = _blacksmith_status_text(preview, holding)
 			_rebuild_labor_sliders(holding)
+			_update_prov_ration_buttons(holding, true)
+			_update_prov_tax_buttons(holding, true)
 		else:
 			_prov_idle_field_count = 0
 			_prov_fields_lbl.text = "Fields: (no settlement holding here)"
@@ -3504,9 +3969,11 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			_prov_prod_lbl.text = "Next season production: —"
 			_prov_smith_lbl.text = "Blacksmith: —"
 			_rebuild_labor_sliders({})
+			_update_prov_ration_buttons({}, false)
+			_update_prov_tax_buttons({}, false)
 			hide_populate_idle_popup()
 
-	_prov_happiness_lbl.text = "Happiness: %.0f" % float(data.get("happiness", 100))
+	_prov_happiness_lbl.text = "Happiness: %.0f (avg of your settlements)" % float(data.get("happiness", 100))
 	_prov_levy_lbl.text = "Levy this season: %d / remaining %d (cap 80%% of %d)" % [
 		int(data.get("levied_this_season", 0)),
 		int(data.get("levy_remaining", 0)),
@@ -3519,6 +3986,63 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	_prov_weapons_lbl.text = "Weapons: %s" % ", ".join(wparts)
 
 	_prov_recruit_btn.visible = has_dejure
+	var can_ships := false
+	if has_dejure and is_instance_valid(parent_n) and parent_n.has_method("province_coastal_towns_for"):
+		can_ships = not parent_n.province_coastal_towns_for(parent_n.my_pl_id, selected_province_id).is_empty()
+	if _prov_ships_btn != null:
+		_prov_ships_btn.visible = can_ships
+
+
+func _on_province_build_ships_pressed() -> void:
+	if not is_instance_valid(parent_n) or selected_province_id == "":
+		return
+	_open_build_ships_dialog(parent_n, selected_province_id)
+
+
+func _open_build_ships_dialog(base_map: Node, province_id: String) -> void:
+	_ensure_fleet_prompt()
+	_clear_fleet_prompt()
+	var title := Label.new()
+	title.text = "Build transport ships"
+	title.add_theme_font_size_override("font_size", 16)
+	_fl_prompt_body.add_child(title)
+	var info := Label.new()
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.custom_minimum_size = Vector2(320, 0)
+	info.text = "Cost per ship: %d wood + %d marks.\nCapacity: %d men/ship. MP: %d." % [
+		GlobalUnits.TRANSPORT_SHIP_WOOD_COST,
+		GlobalUnits.TRANSPORT_SHIP_MARKS_COST,
+		GlobalUnits.TRANSPORT_SHIP_CAPACITY,
+		GlobalUnits.TRANSPORT_SHIP_MP,
+	]
+	_fl_prompt_body.add_child(info)
+	var row := HBoxContainer.new()
+	var lbl := Label.new()
+	lbl.text = "Ships:"
+	row.add_child(lbl)
+	var spin := SpinBox.new()
+	spin.min_value = 1
+	spin.max_value = 100
+	spin.value = 1
+	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(spin)
+	_fl_prompt_body.add_child(row)
+	var btns := HBoxContainer.new()
+	var build_btn := Button.new()
+	build_btn.text = "Build"
+	build_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	build_btn.pressed.connect(func():
+		_close_fleet_prompt()
+		base_map.do_build_transport_ships(province_id, int(spin.value))
+	)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel.pressed.connect(_close_fleet_prompt)
+	btns.add_child(build_btn)
+	btns.add_child(cancel)
+	_fl_prompt_body.add_child(btns)
+	_show_fleet_prompt()
 
 
 # --- Battle menu ------------------------------------------------------------
@@ -4056,16 +4580,23 @@ func open_building_actions_menu(base_map, force_id: String, building: Node) -> v
 	var type_ = building.get("type_")
 	var is_castle = type_ == GlobalStuff.BUILDING_TYPE.CASTLE
 	var is_economy = type_ == GlobalStuff.BUILDING_TYPE.ECONOMY
-	var raid_mp := int(base_map.RAID_MP_COST) if base_map.get("RAID_MP_COST") != null else 2
+	var is_settlement = type_ == GlobalStuff.BUILDING_TYPE.TOWN or type_ == GlobalStuff.BUILDING_TYPE.VILLAGE
+	var raid_mp := int(base_map.RAID_MP_COST) if base_map.get("RAID_MP_COST") != null else 4
 	var capt_mp := int(base_map.CAPTURE_MP_COST) if base_map.get("CAPTURE_MP_COST") != null else 2
-	var raze_mp := int(base_map.RAZE_MP_COST) if base_map.get("RAZE_MP_COST") != null else 4
+	var raze_mp := int(base_map.RAZE_MP_COST) if base_map.get("RAZE_MP_COST") != null else 8
 	var has_raid_mp = base_map.force_has_movement(force_id, raid_mp) if base_map.has_method("force_has_movement") else true
 	var has_capt_mp = base_map.force_has_movement(force_id, capt_mp) if base_map.has_method("force_has_movement") else true
 	var has_raze_mp = base_map.force_has_movement(force_id, raze_mp) if base_map.has_method("force_has_movement") else true
 
 	var loot = base_map.compute_raid_loot(building)
+	var raze_loot = base_map.compute_raze_loot(building) if base_map.has_method("compute_raze_loot") else int(floor(float(loot) * 1.5))
+	var coffer := 0
+	if base_map.has_method("settlement_tax_marks"):
+		coffer = int(base_map.settlement_tax_marks(building))
 	var can_raid = base_map.can_raid_building(building)
+	var can_raze = base_map.can_raze_building(building) if base_map.has_method("can_raze_building") else false
 	var is_razed = base_map.is_building_razed(building) if base_map.has_method("is_building_razed") else false
+	var no_pop = is_settlement and int(building.get("population") if building.get("population") != null else 0) <= 0
 
 	var capt_btn := Button.new()
 	capt_btn.text = "Capture (%d MP)" % capt_mp
@@ -4076,10 +4607,18 @@ func open_building_actions_menu(base_map, force_id: String, building: Node) -> v
 	_ba_body.add_child(capt_btn)
 
 	var raid_btn := Button.new()
-	raid_btn.text = "Raid (%d marks, %d MP)" % [loot, raid_mp]
+	if coffer > 0 and loot > coffer:
+		raid_btn.text = "Raid (%d marks incl. %d tax, %d MP)" % [loot, coffer, raid_mp]
+	elif coffer > 0:
+		raid_btn.text = "Raid (%d tax marks, %d MP)" % [loot, raid_mp]
+	else:
+		raid_btn.text = "Raid (%d marks, %d MP)" % [loot, raid_mp]
 	raid_btn.disabled = not can_raid or loot <= 0 or not has_raid_mp
 	if is_razed:
 		raid_btn.text = "Raid (razed)"
+		raid_btn.disabled = true
+	elif no_pop:
+		raid_btn.text = "Raid (no population)"
 		raid_btn.disabled = true
 	elif not can_raid:
 		raid_btn.text = "Raid (already raided this season)"
@@ -4090,10 +4629,25 @@ func open_building_actions_menu(base_map, force_id: String, building: Node) -> v
 
 	if not is_castle:
 		var raze_btn := Button.new()
-		raze_btn.text = "Raze (%d MP)" % raze_mp
-		if is_razed or (base_map.has_method("can_raze_building") and not base_map.can_raze_building(building)):
+		if raze_loot > 0:
+			raze_btn.text = "Raze (%d marks, %d MP)" % [raze_loot, raze_mp]
+		else:
+			raze_btn.text = "Raze (%d MP)" % raze_mp
+		raze_btn.disabled = not can_raze or not has_raze_mp
+		if is_razed:
 			raze_btn.disabled = true
-			raze_btn.text = "Raze (already razed)" if is_razed else "Raze"
+			raze_btn.text = "Raze (already razed)"
+		elif no_pop:
+			raze_btn.disabled = true
+			raze_btn.text = "Raze (no population)"
+		elif not can_raze:
+			raze_btn.disabled = true
+			var last_raze := int(building.get_meta("last_raze_turn", -1))
+			var cur_turn := int(base_map.turn) if base_map.get("turn") != null else -2
+			if is_settlement and last_raze == cur_turn:
+				raze_btn.text = "Raze (already razed this season)"
+			else:
+				raze_btn.text = "Raze"
 		elif not has_raze_mp:
 			raze_btn.disabled = true
 			raze_btn.text = "Raze (need %d MP)" % raze_mp
@@ -4915,7 +5469,7 @@ func open_field_raid_menu(base_map: Node, force_id: String, field: Node) -> void
 	var preview := {"summary": "Raid this field?", "ok": true}
 	if base_map.has_method("field_raid_preview"):
 		preview = base_map.field_raid_preview(field)
-	var raid_mp := int(base_map.RAID_MP_COST) if base_map.get("RAID_MP_COST") != null else 2
+	var raid_mp := int(base_map.FIELD_RAID_MP_COST) if base_map.get("FIELD_RAID_MP_COST") != null else 2
 	var crop_name = field.get_crop_name() if field.has_method("get_crop_name") else "Field"
 	_fr_info.text = "%s\n%s\nCosts %d movement points." % [
 		crop_name,
@@ -4959,6 +5513,22 @@ func _on_field_raid_confirm() -> void:
 
 # --- Merchant shop ----------------------------------------------------------
 
+func _ms_make_scroll_tab(tab_name: String) -> VBoxContainer:
+	var tab := VBoxContainer.new()
+	tab.name = tab_name
+	tab.add_theme_constant_override("separation", 4)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.custom_minimum_size = Vector2(0, 160)
+	var body := VBoxContainer.new()
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 4)
+	scroll.add_child(body)
+	tab.add_child(scroll)
+	tab.set_meta("body", body)
+	return tab
+
+
 func _ensure_merchant_shop() -> void:
 	if _ms_panel != null:
 		return
@@ -4989,40 +5559,37 @@ func _ensure_merchant_shop() -> void:
 	vbox.add_child(_ms_info_lbl)
 	var tabs := TabContainer.new()
 	tabs.custom_minimum_size = Vector2(360, 220)
-	var weapons_tab := VBoxContainer.new()
-	weapons_tab.name = "Weapons"
-	weapons_tab.add_theme_constant_override("separation", 4)
-	var w_scroll := ScrollContainer.new()
-	w_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	w_scroll.custom_minimum_size = Vector2(0, 160)
-	_ms_weapons_body = VBoxContainer.new()
-	_ms_weapons_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_ms_weapons_body.add_theme_constant_override("separation", 4)
-	w_scroll.add_child(_ms_weapons_body)
-	weapons_tab.add_child(w_scroll)
-	tabs.add_child(weapons_tab)
-	var materials_tab := VBoxContainer.new()
-	materials_tab.name = "Materials"
-	materials_tab.add_theme_constant_override("separation", 4)
-	var m_scroll := ScrollContainer.new()
-	m_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	m_scroll.custom_minimum_size = Vector2(0, 160)
-	_ms_materials_body = VBoxContainer.new()
-	_ms_materials_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_ms_materials_body.add_theme_constant_override("separation", 4)
-	m_scroll.add_child(_ms_materials_body)
-	materials_tab.add_child(m_scroll)
-	tabs.add_child(materials_tab)
+	var buy_w := _ms_make_scroll_tab("Buy Weapons")
+	_ms_buy_weapons_body = buy_w.get_meta("body")
+	tabs.add_child(buy_w)
+	var buy_m := _ms_make_scroll_tab("Buy Materials")
+	_ms_buy_materials_body = buy_m.get_meta("body")
+	tabs.add_child(buy_m)
+	var sell_w := _ms_make_scroll_tab("Sell Weapons")
+	_ms_sell_weapons_body = sell_w.get_meta("body")
+	tabs.add_child(sell_w)
+	var sell_m := _ms_make_scroll_tab("Sell Materials")
+	_ms_sell_materials_body = sell_m.get_meta("body")
+	tabs.add_child(sell_m)
 	vbox.add_child(tabs)
-	_ms_total_lbl = Label.new()
-	_ms_total_lbl.text = "Total: 0 marks"
-	vbox.add_child(_ms_total_lbl)
+	_ms_buy_total_lbl = Label.new()
+	_ms_buy_total_lbl.text = "Buy total: 0 marks"
+	vbox.add_child(_ms_buy_total_lbl)
+	_ms_sell_total_lbl = Label.new()
+	_ms_sell_total_lbl.text = "Sell payout: 0 marks"
+	vbox.add_child(_ms_sell_total_lbl)
 	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 6)
 	var cancel_btn := Button.new()
 	cancel_btn.text = "Cancel"
 	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cancel_btn.pressed.connect(_close_merchant_shop)
 	btn_row.add_child(cancel_btn)
+	var sell_btn := Button.new()
+	sell_btn.text = "Sell"
+	sell_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sell_btn.pressed.connect(_on_merchant_sell_confirm)
+	btn_row.add_child(sell_btn)
 	var buy_btn := Button.new()
 	buy_btn.text = "Buy"
 	buy_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -5049,42 +5616,88 @@ func open_merchant_shop(base_map: Node, merchant: Node) -> void:
 	var marks := 0
 	if base_map.players.has(base_map.my_pl_id):
 		marks = int(base_map.players[base_map.my_pl_id].game_data.get("marks", 0))
-	var info := "Buying for %s.\nYour marks: %d" % [pname, marks]
+	var info := "Trade in %s.\nYour marks: %d" % [pname, marks]
 	if _ms_competition:
-		info += "\nCompetition: 15% discount (2+ merchants here)"
+		info += "\nCompetition: 15% buy discount / sell bonus (2+ merchants here)"
 	_ms_info_lbl.text = info
 
-	for child in _ms_weapons_body.get_children():
+	var owned_w := GlobalUnits.empty_weapon_stock()
+	var owned_m := GlobalUnits.empty_material_stock()
+	if prov != null and base_map.players.has(base_map.my_pl_id):
+		var pid: int = base_map.my_pl_id
+		if prov.has_method("get_weapons_for"):
+			owned_w = prov.get_weapons_for(pid)
+		for k in GlobalUnits.MATERIAL_KEYS:
+			if prov.has_method("get_player_material"):
+				owned_m[k] = prov.get_player_material(pid, k)
+
+	for child in _ms_buy_weapons_body.get_children():
 		child.queue_free()
-	_ms_weapon_spinboxes.clear()
+	_ms_buy_weapon_spinboxes.clear()
 	for k in GlobalUnits.WEAPON_KEYS:
 		_ms_add_shop_row(
-			_ms_weapons_body,
-			_ms_weapon_spinboxes,
+			_ms_buy_weapons_body,
+			_ms_buy_weapon_spinboxes,
 			k,
 			GlobalUnits.weapon_name(k),
 			GlobalUnits.weapon_mark_price_discounted(k, _ms_competition),
-			"weapon"
+			"buy",
+			"weapon",
+			9999
 		)
 
-	for child in _ms_materials_body.get_children():
+	for child in _ms_buy_materials_body.get_children():
 		child.queue_free()
-	_ms_material_spinboxes.clear()
+	_ms_buy_material_spinboxes.clear()
 	for k in GlobalUnits.MATERIAL_KEYS:
 		_ms_add_shop_row(
-			_ms_materials_body,
-			_ms_material_spinboxes,
+			_ms_buy_materials_body,
+			_ms_buy_material_spinboxes,
 			k,
 			GlobalUnits.material_name(k),
 			GlobalUnits.material_mark_price_discounted(k, _ms_competition),
-			"material"
+			"buy",
+			"material",
+			9999
 		)
 
-	_refresh_merchant_total()
+	for child in _ms_sell_weapons_body.get_children():
+		child.queue_free()
+	_ms_sell_weapon_spinboxes.clear()
+	for k in GlobalUnits.WEAPON_KEYS:
+		var have := maxi(0, int(owned_w.get(k, 0)))
+		_ms_add_shop_row(
+			_ms_sell_weapons_body,
+			_ms_sell_weapon_spinboxes,
+			k,
+			"%s (own %d)" % [GlobalUnits.weapon_name(k), have],
+			GlobalUnits.weapon_mark_sell_price(k, _ms_competition),
+			"sell",
+			"weapon",
+			have
+		)
+
+	for child in _ms_sell_materials_body.get_children():
+		child.queue_free()
+	_ms_sell_material_spinboxes.clear()
+	for k in GlobalUnits.MATERIAL_KEYS:
+		var have := maxi(0, int(owned_m.get(k, 0)))
+		_ms_add_shop_row(
+			_ms_sell_materials_body,
+			_ms_sell_material_spinboxes,
+			k,
+			"%s (own %d)" % [GlobalUnits.material_name(k), have],
+			GlobalUnits.material_mark_sell_price(k, _ms_competition),
+			"sell",
+			"material",
+			have
+		)
+
+	_refresh_merchant_totals()
 	_ms_panel.visible = true
 	_ms_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
-	_ms_panel.size = Vector2(minf(480, vp.x * 0.9), minf(420, vp.y * 0.85))
+	_ms_panel.size = Vector2(minf(520, vp.x * 0.9), minf(460, vp.y * 0.85))
 	_ms_panel.position = (vp - _ms_panel.size) * 0.5
 
 
@@ -5094,7 +5707,9 @@ func _ms_add_shop_row(
 	key: String,
 	display_name: String,
 	price: int,
-	kind: String
+	mode: String,
+	kind: String,
+	max_qty: int
 ) -> void:
 	var row := HBoxContainer.new()
 	var lbl := Label.new()
@@ -5103,7 +5718,7 @@ func _ms_add_shop_row(
 	row.add_child(lbl)
 	var spin := SpinBox.new()
 	spin.min_value = 0
-	spin.max_value = 9999
+	spin.max_value = maxi(0, max_qty)
 	spin.step = 1
 	spin.value = 0
 	spin.custom_minimum_size = Vector2(90, 0)
@@ -5111,14 +5726,14 @@ func _ms_add_shop_row(
 	row.add_child(spin)
 	var max_btn := Button.new()
 	max_btn.text = "MAX"
-	max_btn.pressed.connect(_on_merchant_max_pressed.bind(key, kind))
+	max_btn.pressed.connect(_on_merchant_max_pressed.bind(key, mode, kind))
 	row.add_child(max_btn)
 	body.add_child(row)
 	spin_map[key] = spin
 
 
 func _on_merchant_qty_changed(_value: float) -> void:
-	_refresh_merchant_total()
+	_refresh_merchant_totals()
 
 
 func _merchant_player_marks() -> int:
@@ -5127,55 +5742,77 @@ func _merchant_player_marks() -> int:
 	return int(_ms_base.players[_ms_base.my_pl_id].game_data.get("marks", 0))
 
 
-func _merchant_item_price(key: String, kind: String) -> int:
+func _merchant_item_price(key: String, mode: String, kind: String) -> int:
+	if mode == "sell":
+		if kind == "material":
+			return GlobalUnits.material_mark_sell_price(key, _ms_competition)
+		return GlobalUnits.weapon_mark_sell_price(key, _ms_competition)
 	if kind == "material":
 		return GlobalUnits.material_mark_price_discounted(key, _ms_competition)
 	return GlobalUnits.weapon_mark_price_discounted(key, _ms_competition)
 
 
-func _merchant_cart_cost_excluding(exclude_key: String, exclude_kind: String) -> int:
+func _merchant_buy_cost_excluding(exclude_key: String, exclude_kind: String) -> int:
 	var total := 0
-	for k in _ms_weapon_spinboxes:
+	for k in _ms_buy_weapon_spinboxes:
 		if exclude_kind == "weapon" and k == exclude_key:
 			continue
-		var amt := int(_ms_weapon_spinboxes[k].value)
+		var amt := int(_ms_buy_weapon_spinboxes[k].value)
 		if amt > 0:
 			total += GlobalUnits.weapon_mark_price_discounted(k, _ms_competition) * amt
-	for k in _ms_material_spinboxes:
+	for k in _ms_buy_material_spinboxes:
 		if exclude_kind == "material" and k == exclude_key:
 			continue
-		var amt := int(_ms_material_spinboxes[k].value)
+		var amt := int(_ms_buy_material_spinboxes[k].value)
 		if amt > 0:
 			total += GlobalUnits.material_mark_price_discounted(k, _ms_competition) * amt
 	return total
 
 
-func _on_merchant_max_pressed(key: String, kind: String) -> void:
-	var spin_map: Dictionary = _ms_material_spinboxes if kind == "material" else _ms_weapon_spinboxes
+func _on_merchant_max_pressed(key: String, mode: String, kind: String) -> void:
+	var spin_map: Dictionary
+	if mode == "sell":
+		spin_map = _ms_sell_material_spinboxes if kind == "material" else _ms_sell_weapon_spinboxes
+	else:
+		spin_map = _ms_buy_material_spinboxes if kind == "material" else _ms_buy_weapon_spinboxes
 	if not spin_map.has(key):
 		return
-	var price := _merchant_item_price(key, kind)
+	if mode == "sell":
+		spin_map[key].value = spin_map[key].max_value
+		_refresh_merchant_totals()
+		return
+	var price := _merchant_item_price(key, mode, kind)
 	if price <= 0:
 		return
-	var remaining := _merchant_player_marks() - _merchant_cart_cost_excluding(key, kind)
+	var remaining := _merchant_player_marks() - _merchant_buy_cost_excluding(key, kind)
 	var max_qty := maxi(0, remaining / price)
 	spin_map[key].value = max_qty
-	_refresh_merchant_total()
+	_refresh_merchant_totals()
 
 
-func _refresh_merchant_total() -> void:
-	if _ms_total_lbl == null:
-		return
-	var total := 0
-	for k in _ms_weapon_spinboxes:
-		var amt := int(_ms_weapon_spinboxes[k].value)
+func _refresh_merchant_totals() -> void:
+	var buy_total := 0
+	for k in _ms_buy_weapon_spinboxes:
+		var amt := int(_ms_buy_weapon_spinboxes[k].value)
 		if amt > 0:
-			total += GlobalUnits.weapon_mark_price_discounted(k, _ms_competition) * amt
-	for k in _ms_material_spinboxes:
-		var amt := int(_ms_material_spinboxes[k].value)
+			buy_total += GlobalUnits.weapon_mark_price_discounted(k, _ms_competition) * amt
+	for k in _ms_buy_material_spinboxes:
+		var amt := int(_ms_buy_material_spinboxes[k].value)
 		if amt > 0:
-			total += GlobalUnits.material_mark_price_discounted(k, _ms_competition) * amt
-	_ms_total_lbl.text = "Total: %d marks" % total
+			buy_total += GlobalUnits.material_mark_price_discounted(k, _ms_competition) * amt
+	if _ms_buy_total_lbl != null:
+		_ms_buy_total_lbl.text = "Buy total: %d marks" % buy_total
+	var sell_total := 0
+	for k in _ms_sell_weapon_spinboxes:
+		var amt := int(_ms_sell_weapon_spinboxes[k].value)
+		if amt > 0:
+			sell_total += GlobalUnits.weapon_mark_sell_price(k, _ms_competition) * amt
+	for k in _ms_sell_material_spinboxes:
+		var amt := int(_ms_sell_material_spinboxes[k].value)
+		if amt > 0:
+			sell_total += GlobalUnits.material_mark_sell_price(k, _ms_competition) * amt
+	if _ms_sell_total_lbl != null:
+		_ms_sell_total_lbl.text = "Sell payout: %d marks" % sell_total
 
 
 func _close_merchant_shop() -> void:
@@ -5183,37 +5820,194 @@ func _close_merchant_shop() -> void:
 		_ms_panel.visible = false
 	_ms_base = null
 	_ms_merchant = null
-	_ms_weapon_spinboxes.clear()
-	_ms_material_spinboxes.clear()
+	_ms_buy_weapon_spinboxes.clear()
+	_ms_buy_material_spinboxes.clear()
+	_ms_sell_weapon_spinboxes.clear()
+	_ms_sell_material_spinboxes.clear()
 	_ms_competition = false
+
+
+func _ms_collect_cart(weapon_spins: Dictionary, material_spins: Dictionary) -> Dictionary:
+	var weapons := GlobalUnits.empty_weapon_stock()
+	var materials := GlobalUnits.empty_material_stock()
+	var any := false
+	for k in weapon_spins:
+		var amt := int(weapon_spins[k].value)
+		weapons[k] = amt
+		if amt > 0:
+			any = true
+	for k in material_spins:
+		var amt := int(material_spins[k].value)
+		materials[k] = amt
+		if amt > 0:
+			any = true
+	return {"weapons": weapons, "materials": materials, "any": any}
+
+
+func _ms_clear_spinboxes(spin_map: Dictionary) -> void:
+	for k in spin_map:
+		spin_map[k].value = 0
+
+
+func _ms_refresh_info_and_sell_stock() -> void:
+	if _ms_base == null or _ms_merchant == null or not is_instance_valid(_ms_merchant):
+		return
+	if _ms_panel == null or not _ms_panel.visible:
+		return
+	var merchant := _ms_merchant
+	var base = _ms_base
+	var prov = merchant.get("province")
+	var pname := "Province"
+	if prov != null and prov.get("p_name") != null:
+		pname = str(prov.p_name)
+	_ms_competition = base.merchant_competition_in_province(prov)
+	var marks := 0
+	if base.players.has(base.my_pl_id):
+		marks = int(base.players[base.my_pl_id].game_data.get("marks", 0))
+	var info := "Trade in %s.\nYour marks: %d" % [pname, marks]
+	if _ms_competition:
+		info += "\nCompetition: 15% buy discount / sell bonus (2+ merchants here)"
+	_ms_info_lbl.text = info
+
+	# Preserve sell cart quantities while updating max/owned labels.
+	var sell_w_vals := {}
+	for k in _ms_sell_weapon_spinboxes:
+		sell_w_vals[k] = int(_ms_sell_weapon_spinboxes[k].value)
+	var sell_m_vals := {}
+	for k in _ms_sell_material_spinboxes:
+		sell_m_vals[k] = int(_ms_sell_material_spinboxes[k].value)
+
+	var owned_w := GlobalUnits.empty_weapon_stock()
+	var owned_m := GlobalUnits.empty_material_stock()
+	if prov != null and base.players.has(base.my_pl_id):
+		var pid: int = base.my_pl_id
+		if prov.has_method("get_weapons_for"):
+			owned_w = prov.get_weapons_for(pid)
+		for k in GlobalUnits.MATERIAL_KEYS:
+			if prov.has_method("get_player_material"):
+				owned_m[k] = prov.get_player_material(pid, k)
+
+	for child in _ms_sell_weapons_body.get_children():
+		child.queue_free()
+	_ms_sell_weapon_spinboxes.clear()
+	for k in GlobalUnits.WEAPON_KEYS:
+		var have := maxi(0, int(owned_w.get(k, 0)))
+		_ms_add_shop_row(
+			_ms_sell_weapons_body,
+			_ms_sell_weapon_spinboxes,
+			k,
+			"%s (own %d)" % [GlobalUnits.weapon_name(k), have],
+			GlobalUnits.weapon_mark_sell_price(k, _ms_competition),
+			"sell",
+			"weapon",
+			have
+		)
+		if _ms_sell_weapon_spinboxes.has(k):
+			_ms_sell_weapon_spinboxes[k].value = mini(int(sell_w_vals.get(k, 0)), have)
+
+	for child in _ms_sell_materials_body.get_children():
+		child.queue_free()
+	_ms_sell_material_spinboxes.clear()
+	for k in GlobalUnits.MATERIAL_KEYS:
+		var have := maxi(0, int(owned_m.get(k, 0)))
+		_ms_add_shop_row(
+			_ms_sell_materials_body,
+			_ms_sell_material_spinboxes,
+			k,
+			"%s (own %d)" % [GlobalUnits.material_name(k), have],
+			GlobalUnits.material_mark_sell_price(k, _ms_competition),
+			"sell",
+			"material",
+			have
+		)
+		if _ms_sell_material_spinboxes.has(k):
+			_ms_sell_material_spinboxes[k].value = mini(int(sell_m_vals.get(k, 0)), have)
+
+	# Refresh buy prices (competition) without wiping buy cart.
+	var buy_w_vals := {}
+	for k in _ms_buy_weapon_spinboxes:
+		buy_w_vals[k] = int(_ms_buy_weapon_spinboxes[k].value)
+	var buy_m_vals := {}
+	for k in _ms_buy_material_spinboxes:
+		buy_m_vals[k] = int(_ms_buy_material_spinboxes[k].value)
+
+	for child in _ms_buy_weapons_body.get_children():
+		child.queue_free()
+	_ms_buy_weapon_spinboxes.clear()
+	for k in GlobalUnits.WEAPON_KEYS:
+		_ms_add_shop_row(
+			_ms_buy_weapons_body,
+			_ms_buy_weapon_spinboxes,
+			k,
+			GlobalUnits.weapon_name(k),
+			GlobalUnits.weapon_mark_price_discounted(k, _ms_competition),
+			"buy",
+			"weapon",
+			9999
+		)
+		if _ms_buy_weapon_spinboxes.has(k):
+			_ms_buy_weapon_spinboxes[k].value = int(buy_w_vals.get(k, 0))
+
+	for child in _ms_buy_materials_body.get_children():
+		child.queue_free()
+	_ms_buy_material_spinboxes.clear()
+	for k in GlobalUnits.MATERIAL_KEYS:
+		_ms_add_shop_row(
+			_ms_buy_materials_body,
+			_ms_buy_material_spinboxes,
+			k,
+			GlobalUnits.material_name(k),
+			GlobalUnits.material_mark_price_discounted(k, _ms_competition),
+			"buy",
+			"material",
+			9999
+		)
+		if _ms_buy_material_spinboxes.has(k):
+			_ms_buy_material_spinboxes[k].value = int(buy_m_vals.get(k, 0))
+
+	_refresh_merchant_totals()
+
+
+func refresh_merchant_shop_if_open() -> void:
+	_ms_refresh_info_and_sell_stock()
 
 
 func _on_merchant_buy_confirm() -> void:
 	var base = _ms_base
 	var merchant = _ms_merchant
-	var weapons := GlobalUnits.empty_weapon_stock()
-	var materials := GlobalUnits.empty_material_stock()
-	var any := false
-	for k in _ms_weapon_spinboxes:
-		var amt := int(_ms_weapon_spinboxes[k].value)
-		weapons[k] = amt
-		if amt > 0:
-			any = true
-	for k in _ms_material_spinboxes:
-		var amt := int(_ms_material_spinboxes[k].value)
-		materials[k] = amt
-		if amt > 0:
-			any = true
+	var cart := _ms_collect_cart(_ms_buy_weapon_spinboxes, _ms_buy_material_spinboxes)
 	var merchant_id := ""
 	if merchant != null:
 		merchant_id = String(merchant.name)
-	_close_merchant_shop()
 	if base == null or merchant_id == "":
+		_close_merchant_shop()
 		return
-	if not any:
+	if not cart["any"]:
 		show_info_popup("Select items to buy")
 		return
-	base.do_buy_from_merchant(merchant_id, weapons, materials)
+	_ms_clear_spinboxes(_ms_buy_weapon_spinboxes)
+	_ms_clear_spinboxes(_ms_buy_material_spinboxes)
+	_refresh_merchant_totals()
+	base.do_buy_from_merchant(merchant_id, cart["weapons"], cart["materials"])
+
+
+func _on_merchant_sell_confirm() -> void:
+	var base = _ms_base
+	var merchant = _ms_merchant
+	var cart := _ms_collect_cart(_ms_sell_weapon_spinboxes, _ms_sell_material_spinboxes)
+	var merchant_id := ""
+	if merchant != null:
+		merchant_id = String(merchant.name)
+	if base == null or merchant_id == "":
+		_close_merchant_shop()
+		return
+	if not cart["any"]:
+		show_info_popup("Select items to sell")
+		return
+	_ms_clear_spinboxes(_ms_sell_weapon_spinboxes)
+	_ms_clear_spinboxes(_ms_sell_material_spinboxes)
+	_refresh_merchant_totals()
+	base.do_sell_to_merchant(merchant_id, cart["weapons"], cart["materials"])
 
 
 # --- Sellswords hire --------------------------------------------------------
@@ -5325,3 +6119,413 @@ func _on_sellswords_hire_confirm() -> void:
 	if base == null or band_id == "":
 		return
 	base.do_hire_sellswords(band_id)
+
+
+# --- Transport fleets -------------------------------------------------------
+
+func _ensure_fleet_menu() -> void:
+	if _fl_panel != null:
+		return
+	_fl_panel = PanelContainer.new()
+	_fl_panel.top_level = true
+	_fl_panel.z_index = 140
+	_fl_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_fl_panel.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var header := HBoxContainer.new()
+	var title := Label.new()
+	title.text = "Transport fleet"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 16)
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.pressed.connect(_close_fleet_menu)
+	header.add_child(title)
+	header.add_child(close_btn)
+	_fl_body = VBoxContainer.new()
+	_fl_body.add_theme_constant_override("separation", 6)
+	vbox.add_child(header)
+	vbox.add_child(HSeparator.new())
+	vbox.add_child(_fl_body)
+	margin.add_child(vbox)
+	_fl_panel.add_child(margin)
+	add_child(_fl_panel)
+
+
+func open_fleet_menu(base_map: Node, fleet: Node2D) -> void:
+	_ensure_fleet_menu()
+	_fl_base = base_map
+	_fl_fleet = fleet
+	_rebuild_fleet_menu()
+
+
+func _close_fleet_menu() -> void:
+	if _fl_panel != null:
+		_fl_panel.visible = false
+	_fl_base = null
+	_fl_fleet = null
+	_fl_split_spin = null
+
+
+func _rebuild_fleet_menu() -> void:
+	if _fl_body == null or _fl_fleet == null or _fl_base == null:
+		return
+	for child in _fl_body.get_children():
+		child.queue_free()
+	var f := _fl_fleet
+	if not is_instance_valid(f):
+		_close_fleet_menu()
+		return
+	var info := Label.new()
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.custom_minimum_size = Vector2(300, 0)
+	info.text = "%d ships · capacity %d/%d men\nMovement: %d / %d\nUpkeep: %d marks/season" % [
+		f.ship_count,
+		f.men_aboard(),
+		f.capacity(),
+		f.movement_left,
+		f.effective_max_mp(),
+		f.ship_count * GlobalUnits.UPKEEP_TRANSPORT_SHIP,
+	]
+	_fl_body.add_child(info)
+	_fl_body.add_child(HSeparator.new())
+
+	var move_btn := Button.new()
+	move_btn.text = "Move  (MP: %d)" % f.movement_left
+	move_btn.disabled = f.movement_left <= 0
+	move_btn.pressed.connect(_on_fl_move_pressed)
+	_fl_body.add_child(move_btn)
+
+	var aboard_hdr := Label.new()
+	aboard_hdr.text = "Armies aboard"
+	_fl_body.add_child(aboard_hdr)
+	if f.aboard_force_ids.is_empty():
+		var empty := Label.new()
+		empty.text = "(none)"
+		_fl_body.add_child(empty)
+	else:
+		for fid in f.aboard_force_ids:
+			var btn := Button.new()
+			var men := 0
+			if _fl_base.forces.has(fid):
+				men = GlobalUnits.total_men(_fl_base.forces[fid]["units"])
+			btn.text = "%s — %d men" % [_fl_base.force_display_name(str(fid)), men]
+			var can_open = _fl_base.get_force_controller(str(fid)) == _fl_base.my_pl_id \
+					or GlobalUnits.men_of_owner(_fl_base.forces.get(fid, {}).get("units", []), _fl_base.my_pl_id) > 0
+			btn.disabled = not can_open
+			btn.pressed.connect(_on_fl_open_aboard_army.bind(str(fid)))
+			_fl_body.add_child(btn)
+
+	_fl_body.add_child(HSeparator.new())
+	var split_row := HBoxContainer.new()
+	var split_lbl := Label.new()
+	split_lbl.text = "Split off ships:"
+	split_row.add_child(split_lbl)
+	_fl_split_spin = SpinBox.new()
+	_fl_split_spin.min_value = 1
+	_fl_split_spin.max_value = maxi(1, f.ship_count - 1)
+	_fl_split_spin.value = 1
+	_fl_split_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	split_row.add_child(_fl_split_spin)
+	_fl_body.add_child(split_row)
+	var split_btn := Button.new()
+	split_btn.text = "Split fleet"
+	split_btn.disabled = f.has_army_aboard() or f.ship_count < 2
+	if f.has_army_aboard():
+		split_btn.text = "Split (empty fleet first)"
+	split_btn.pressed.connect(_on_fl_split_pressed)
+	_fl_body.add_child(split_btn)
+
+	var disband_btn := Button.new()
+	disband_btn.text = "Disband fleet"
+	disband_btn.disabled = f.has_army_aboard()
+	disband_btn.pressed.connect(_on_fl_disband_pressed)
+	_fl_body.add_child(disband_btn)
+
+	_fl_panel.visible = true
+	_fl_panel.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_fl_panel.size = Vector2(minf(360, vp.x * 0.9), _fl_panel.get_combined_minimum_size().y)
+	_fl_panel.position = (vp - _fl_panel.size) * 0.5
+
+
+func _on_fl_move_pressed() -> void:
+	var fleet := _fl_fleet
+	var base = _fl_base
+	_close_fleet_menu()
+	if fleet != null and base != null:
+		base.pathfinding.select_army(fleet)
+
+
+func _on_fl_open_aboard_army(force_id: String) -> void:
+	var base = _fl_base
+	_close_fleet_menu()
+	if base == null:
+		return
+	open_aboard_army_menu(base, force_id)
+
+
+func _on_fl_split_pressed() -> void:
+	if _fl_base == null or _fl_fleet == null or _fl_split_spin == null:
+		return
+	var n := int(_fl_split_spin.value)
+	var fid := String(_fl_fleet.name)
+	var base = _fl_base
+	_close_fleet_menu()
+	base.do_fleet_split(fid, n)
+
+
+func _on_fl_disband_pressed() -> void:
+	if _fl_base == null or _fl_fleet == null:
+		return
+	var fid := String(_fl_fleet.name)
+	var base = _fl_base
+	_close_fleet_menu()
+	base.do_fleet_disband(fid)
+
+
+func open_aboard_army_menu(base_map: Node, force_id: String) -> void:
+	if base_map == null or not base_map.forces.has(force_id):
+		return
+	# Reuse army menu layout with a lightweight proxy node (not in the scene tree).
+	var proxy := Node2D.new()
+	proxy.set_script(preload("res://objects/overworld/army/army_map_unit/armiy_figure.gd"))
+	proxy.base_map = base_map
+	proxy.force_id = force_id
+	proxy.player_owner = base_map.get_force_controller(force_id)
+	proxy.movement_points = 0
+	proxy.movement_left = 0
+	_ensure_army_menu()
+	_am_base = base_map
+	_am_army = proxy
+	_rebuild_army_menu()
+	# Hide move/split for aboard; keep disband / inspect.
+	for child in _am_body.get_children():
+		if child is Button:
+			var t := str(child.text)
+			if t.begins_with("Move") or t.begins_with("Split"):
+				child.visible = false
+			elif t.begins_with("Disband"):
+				child.disabled = base_map.get_force_controller(force_id) != base_map.my_pl_id
+			elif t.begins_with("Deposit") or t.begins_with("Withdraw") or t.begins_with("Send"):
+				child.disabled = true
+
+
+func open_fleet_stack_picker(base_map: Node, stack: Array) -> void:
+	_ensure_fleet_prompt()
+	_clear_fleet_prompt()
+	var title := Label.new()
+	title.text = "Fleets on this tile"
+	title.add_theme_font_size_override("font_size", 16)
+	_fl_prompt_body.add_child(title)
+	for f in stack:
+		if f == null or not is_instance_valid(f):
+			continue
+		var btn := Button.new()
+		var own := "?"
+		if base_map.players.has(f.player_owner):
+			own = str(base_map.players[f.player_owner].name_)
+		btn.text = "%s — %d ships (%d/%d men)" % [
+			own, f.ship_count, f.men_aboard(), f.capacity()
+		]
+		btn.pressed.connect(func():
+			_close_fleet_prompt()
+			if f.is_controllable_by(base_map.my_pl_id):
+				open_fleet_menu(base_map, f)
+			else:
+				show_info_popup("Enemy transport fleet")
+		)
+		_fl_prompt_body.add_child(btn)
+	_show_fleet_prompt()
+
+
+func open_fleet_embark_prompt(base_map: Node, fleet: Node2D, army: Node2D) -> void:
+	_ensure_fleet_prompt()
+	_clear_fleet_prompt()
+	var men := GlobalUnits.total_men(army.get_units()) if army.has_method("get_units") else 0
+	var free_cap = fleet.free_capacity()
+	var title := Label.new()
+	title.text = "Embark army?"
+	title.add_theme_font_size_override("font_size", 16)
+	_fl_prompt_body.add_child(title)
+	var info := Label.new()
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.custom_minimum_size = Vector2(300, 0)
+	info.text = "Army: %d men\nFleet free space: %d\nCosts %d ship MP" % [
+		men, free_cap, GlobalUnits.TRANSPORT_EMBARK_MP
+	]
+	_fl_prompt_body.add_child(info)
+	if men > free_cap:
+		var warn := Label.new()
+		warn.text = "Not enough space — split the army first."
+		_fl_prompt_body.add_child(warn)
+		var ok := Button.new()
+		ok.text = "OK"
+		ok.pressed.connect(_close_fleet_prompt)
+		_fl_prompt_body.add_child(ok)
+		_show_fleet_prompt()
+		return
+	if fleet.movement_left < GlobalUnits.TRANSPORT_EMBARK_MP:
+		var warn2 := Label.new()
+		warn2.text = "Not enough ship movement points."
+		_fl_prompt_body.add_child(warn2)
+		var ok2 := Button.new()
+		ok2.text = "OK"
+		ok2.pressed.connect(_close_fleet_prompt)
+		_fl_prompt_body.add_child(ok2)
+		_show_fleet_prompt()
+		return
+	if not base_map.are_friendly_players(fleet.get_controller(), army.get_controller()):
+		var warn3 := Label.new()
+		warn3.text = "Can only pick up your own or allied armies."
+		_fl_prompt_body.add_child(warn3)
+		var ok3 := Button.new()
+		ok3.text = "OK"
+		ok3.pressed.connect(_close_fleet_prompt)
+		_fl_prompt_body.add_child(ok3)
+		_show_fleet_prompt()
+		return
+	var row := HBoxContainer.new()
+	var yes := Button.new()
+	yes.text = "Embark"
+	yes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	yes.pressed.connect(func():
+		_close_fleet_prompt()
+		base_map.do_fleet_embark(String(fleet.name), str(army.force_id))
+	)
+	var no := Button.new()
+	no.text = "Cancel"
+	no.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	no.pressed.connect(_close_fleet_prompt)
+	row.add_child(yes)
+	row.add_child(no)
+	_fl_prompt_body.add_child(row)
+	_show_fleet_prompt()
+
+
+func open_fleet_disembark_prompt(base_map: Node, fleet: Node2D, land_cell: Vector2i) -> void:
+	_ensure_fleet_prompt()
+	_clear_fleet_prompt()
+	var title := Label.new()
+	title.text = "Disembark army"
+	title.add_theme_font_size_override("font_size", 16)
+	_fl_prompt_body.add_child(title)
+	if fleet.aboard_force_ids.is_empty():
+		var empty := Label.new()
+		empty.text = "No armies aboard."
+		_fl_prompt_body.add_child(empty)
+		var ok := Button.new()
+		ok.text = "OK"
+		ok.pressed.connect(_close_fleet_prompt)
+		_fl_prompt_body.add_child(ok)
+		_show_fleet_prompt()
+		return
+	if fleet.movement_left < GlobalUnits.TRANSPORT_EMBARK_MP:
+		var warn := Label.new()
+		warn.text = "Need %d ship MP to disembark." % GlobalUnits.TRANSPORT_EMBARK_MP
+		_fl_prompt_body.add_child(warn)
+		var ok2 := Button.new()
+		ok2.text = "OK"
+		ok2.pressed.connect(_close_fleet_prompt)
+		_fl_prompt_body.add_child(ok2)
+		_show_fleet_prompt()
+		return
+	var info := Label.new()
+	info.text = "Choose an army to land (costs %d MP):" % GlobalUnits.TRANSPORT_EMBARK_MP
+	_fl_prompt_body.add_child(info)
+	for fid in fleet.aboard_force_ids:
+		var btn := Button.new()
+		var men := 0
+		if base_map.forces.has(fid):
+			men = GlobalUnits.total_men(base_map.forces[fid]["units"])
+		btn.text = "%s — %d men" % [base_map.force_display_name(str(fid)), men]
+		btn.pressed.connect(func():
+			_close_fleet_prompt()
+			base_map.do_fleet_disembark(String(fleet.name), str(fid), land_cell)
+		)
+		_fl_prompt_body.add_child(btn)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.pressed.connect(_close_fleet_prompt)
+	_fl_prompt_body.add_child(cancel)
+	_show_fleet_prompt()
+
+
+func open_fleet_combine_prompt(
+	base_map: Node, mover: Node2D, target: Node2D, dest_cell: Vector2i
+) -> void:
+	_ensure_fleet_prompt()
+	_clear_fleet_prompt()
+	var title := Label.new()
+	title.text = "Fleets"
+	title.add_theme_font_size_override("font_size", 16)
+	_fl_prompt_body.add_child(title)
+	var info := Label.new()
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.custom_minimum_size = Vector2(300, 0)
+	info.text = "Combine into one fleet, or stack on the same tile?"
+	_fl_prompt_body.add_child(info)
+	var combine_btn := Button.new()
+	combine_btn.text = "Combine fleets"
+	combine_btn.pressed.connect(func():
+		_close_fleet_prompt()
+		# Combine absorbs mover into target (works when adjacent or stacked).
+		base_map.do_fleet_combine(String(target.name), String(mover.name))
+	)
+	_fl_prompt_body.add_child(combine_btn)
+	var stack_btn := Button.new()
+	stack_btn.text = "Stack (same tile)"
+	stack_btn.pressed.connect(func():
+		_close_fleet_prompt()
+		if base_map.pathfinding.get_army_cell(mover) != dest_cell:
+			base_map.do_fleet_stack_move(String(mover.name), dest_cell)
+	)
+	_fl_prompt_body.add_child(stack_btn)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.pressed.connect(_close_fleet_prompt)
+	_fl_prompt_body.add_child(cancel)
+	_show_fleet_prompt()
+
+
+func _ensure_fleet_prompt() -> void:
+	if _fl_prompt != null:
+		return
+	_fl_prompt = PanelContainer.new()
+	_fl_prompt.top_level = true
+	_fl_prompt.z_index = 145
+	_fl_prompt.mouse_filter = Control.MOUSE_FILTER_STOP
+	_fl_prompt.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	_fl_prompt_body = VBoxContainer.new()
+	_fl_prompt_body.add_theme_constant_override("separation", 8)
+	margin.add_child(_fl_prompt_body)
+	_fl_prompt.add_child(margin)
+	add_child(_fl_prompt)
+
+
+func _clear_fleet_prompt() -> void:
+	if _fl_prompt_body == null:
+		return
+	for child in _fl_prompt_body.get_children():
+		child.queue_free()
+
+
+func _close_fleet_prompt() -> void:
+	if _fl_prompt != null:
+		_fl_prompt.visible = false
+	_clear_fleet_prompt()
+
+
+func _show_fleet_prompt() -> void:
+	_fl_prompt.visible = true
+	_fl_prompt.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_fl_prompt.size = Vector2(minf(360, vp.x * 0.9), _fl_prompt.get_combined_minimum_size().y)
+	_fl_prompt.position = (vp - _fl_prompt.size) * 0.5

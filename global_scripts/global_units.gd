@@ -116,6 +116,13 @@ const UPKEEP_LEVY_KNIGHT := 2.0
 const UPKEEP_LEVY_OTHER := 1.0
 const UPKEEP_SELLSWORD_KNIGHT := 5.0
 const UPKEEP_SELLSWORD_OTHER := 3.0
+# Transport fleets: flat marks per ship; unpaid ships are not struck (v1).
+const UPKEEP_TRANSPORT_SHIP := 20
+const TRANSPORT_SHIP_CAPACITY := 100
+const TRANSPORT_SHIP_MP := 20
+const TRANSPORT_SHIP_WOOD_COST := 300
+const TRANSPORT_SHIP_MARKS_COST := 500
+const TRANSPORT_EMBARK_MP := 5
 # Missed pays: strike 1 warn, 2 sellswords leave, 3+ levy desertion.
 const UPKEEP_STRIKES_MAX := 3
 const UPKEEP_CLEAR_PAYS := 10
@@ -130,6 +137,96 @@ const FOOD_GRAIN_PER_MAN_MOBILE := 1.0
 const FOOD_GRAIN_PER_MAN_GARRISON := 0.5
 # After one warning season, this fraction of each stack dies (ceil).
 const FOOD_ATTRITION_FRACTION := 0.10
+
+# --- Civilian rations (holding setting; feeds settlement pop each season) -----
+# Grain spend order from province stock: seed reserve → local armies → people.
+enum RATION {
+	NONE,
+	QUARTER,
+	HALF,
+	NORMAL,
+	DOUBLE,
+	QUADRUPLE,
+}
+const RATION_DEFAULT := RATION.NORMAL
+# Grain per person per season at each ration level.
+const RATION_GRAIN_PER_PERSON := {
+	RATION.NONE: 0.0,
+	RATION.QUARTER: 0.125,
+	RATION.HALF: 0.25,
+	RATION.NORMAL: 0.5,
+	RATION.DOUBLE: 1.0,
+	RATION.QUADRUPLE: 2.0,
+}
+# Happiness delta applied to each owned settlement when that ration is effective.
+const RATION_HAPPINESS_DELTA := {
+	RATION.NONE: -15.0,
+	RATION.QUARTER: -8.0,
+	RATION.HALF: -4.0,
+	RATION.NORMAL: 4.0,
+	RATION.DOUBLE: 8.0,
+	RATION.QUADRUPLE: 12.0,
+}
+# Population change fraction (ceil abs); replaces flat settlement growth.
+const RATION_POP_DELTA := {
+	RATION.NONE: -0.15,
+	RATION.QUARTER: -0.08,
+	RATION.HALF: -0.04,
+	RATION.NORMAL: 0.04,
+	RATION.DOUBLE: 0.08,
+	RATION.QUADRUPLE: 0.12,
+}
+# First positive growth from an empty (0-pop) settlement.
+const RATION_ZERO_POP_BOOTSTRAP := 10
+# Descending order for "highest affordable ≤ requested" resolution.
+const RATION_LEVELS_DESC := [
+	RATION.QUADRUPLE,
+	RATION.DOUBLE,
+	RATION.NORMAL,
+	RATION.HALF,
+	RATION.QUARTER,
+	RATION.NONE,
+]
+
+# --- Holding taxes (marks stored per settlement; collect with army) ----------
+enum TAX {
+	NONE,
+	NORMAL,
+	HEAVY,
+	HARSH,
+	BRUTAL,
+}
+const TAX_DEFAULT := TAX.NORMAL
+const TAX_COLLECT_MP := 1
+# Marks deposited into each settlement coffer per person (ceil).
+const TAX_MARKS_PER_PERSON := {
+	TAX.NONE: 0,
+	TAX.NORMAL: 1,
+	TAX.HEAVY: 2,
+	TAX.HARSH: 3,
+	TAX.BRUTAL: 4,
+}
+const TAX_HAPPINESS_DELTA := {
+	TAX.NONE: 10.0,
+	TAX.NORMAL: 5.0,
+	TAX.HEAVY: -5.0,
+	TAX.HARSH: -10.0,
+	TAX.BRUTAL: -18.0,
+}
+const TAX_POP_DELTA := {
+	TAX.NONE: 0.05,
+	TAX.NORMAL: 0.025,
+	TAX.HEAVY: -0.025,
+	TAX.HARSH: -0.05,
+	TAX.BRUTAL: -0.10,
+}
+const TAX_LEVELS := [
+	TAX.NONE,
+	TAX.NORMAL,
+	TAX.HEAVY,
+	TAX.HARSH,
+	TAX.BRUTAL,
+]
 
 # Weapon key -> unit type whose strength sets the mark price.
 const WEAPON_PRICE_UNIT := {
@@ -172,21 +269,175 @@ const FOAL_MID_MIN := 1
 const FOAL_MID_MAX := 3
 const STARTING_GRAIN := 40
 
-# Labor category keys shared by fields + economy.
-const LABOR_CATEGORIES := ["grain", "horses", "wood", "stone", "iron", "silver", "blacksmith"]
+# Labor category keys shared by fields + economy + castle construction.
+const LABOR_CATEGORIES := ["grain", "horses", "wood", "stone", "iron", "silver", "blacksmith", "castle"]
 
 # --- Economy buildings ------------------------------------------------------
-const ECONOMY_COST_WOODCUTTER := 100
-const ECONOMY_COST_BLACKSMITH := 250
-const ECONOMY_COST_MINE := 500
-const ECONOMY_WORKERS_SMALL := 50
-const ECONOMY_WORKERS_MEDIUM := 150
-const ECONOMY_WORKERS_BIG := 300
+# Subtype ints match basic_building.SUBTYPES:
+# 0 woodcutter, 1 iron mine, 3 silver mine, 4 stone quarry, 5 blacksmith.
+# Costs / workers arrays are [Small, Medium, Big]: build cost or worker cap at that stage;
+# upgrade Small→Medium uses Medium cost, Medium→Big uses Big cost.
+const ECONOMY_STAGE_COSTS := {
+	0: [100, 400, 800],
+	1: [500, 1300, 3000],
+	3: [800, 3000, 13000],
+	4: [500, 1500, 3500],
+	5: [250, 750, 1500],
+}
+const ECONOMY_WORKERS_BY_SUBTYPE := {
+	0: [100, 250, 500],
+	1: [100, 250, 500],
+	3: [50, 150, 300],
+	4: [50, 150, 300],
+	5: [50, 150, 300],
+}
 # Output per assigned worker per season.
 const ECONOMY_WOOD_PER_WORKER := 1
 const ECONOMY_STONE_PER_WORKER := 1
 const ECONOMY_IRON_PER_WORKER := 1
 const ECONOMY_SILVER_MARKS_PER_WORKER := 2
+
+# --- Settlement marks (town / village) --------------------------------------
+# Base tax from population; tier % applies only to that settlement's base.
+const SETTLEMENT_MARKS_POP_RATE := 0.10
+# Tier index: 0=Small, 1=Medium, 2=Big, 3=Very Big
+const SETTLEMENT_TIER_MARKS_BONUS := [0.0, 0.10, 0.20, 0.30]
+# Population ceilings for Small / Medium / Big (above last → Very Big).
+const TOWN_TIER_POP_MAX := [300, 600, 900]
+const VILLAGE_TIER_POP_MAX := [20, 60, 120]
+# Soft population caps (growth may overshoot; overflow applies pressure next tick).
+const TOWN_POPULATION_CAP := 2000
+const VILLAGE_POPULATION_CAP := 300
+# When over cap: at least −this fraction (ceil), or worse ration/tax delta if larger.
+const SETTLEMENT_OVERFLOW_SHRINK_FRAC := 0.10
+# Random jitter added to over-cap delta (inclusive), seeded per season.
+const TOWN_OVERFLOW_JITTER := 50
+const VILLAGE_OVERFLOW_JITTER := 10
+
+# --- Castle construction (CASTLE_TYPE 0..5) ----------------------------------
+# Materials paid upfront into the worksite; 1 labor = 1 work / season.
+const CASTLE_COST_WOOD := [500, 1000, 1000, 1000, 1500, 2000]
+const CASTLE_COST_STONE := [0, 0, 1000, 2500, 3200, 4500]
+const CASTLE_WORK := [500, 1000, 2500, 3500, 4500, 6000]
+## Holding-wide marks bonus on Σ settlement base (CASTLE_TYPE 0..5). Mid-build = 0.
+const CASTLE_HOLDING_MARKS_BONUS := [0.10, 0.20, 0.30, 0.50, 0.80, 1.00]
+## Target level for dismantle-to-empty projects.
+const CASTLE_TARGET_EMPTY := -1
+
+
+func economy_stage_cost(subtype: int, stage_index: int) -> int:
+	## stage_index 0=Small, 1=Medium, 2=Big.
+	var costs: Array = ECONOMY_STAGE_COSTS.get(subtype, [])
+	if stage_index < 0 or stage_index >= costs.size():
+		return 0
+	return int(costs[stage_index])
+
+
+func economy_workers_for(subtype: int, stage_index: int) -> int:
+	## stage_index 0=Small, 1=Medium, 2=Big.
+	var caps: Array = ECONOMY_WORKERS_BY_SUBTYPE.get(subtype, [50, 150, 300])
+	if stage_index < 0 or stage_index >= caps.size():
+		return int(caps[0]) if not caps.is_empty() else 50
+	return int(caps[stage_index])
+
+
+func settlement_base_marks(population: int) -> int:
+	return int(ceil(float(maxi(0, population)) * SETTLEMENT_MARKS_POP_RATE))
+
+
+## Adjust a settlement's pop delta when over its soft cap.
+## Over cap: min(base_delta, −ceil(10% pop)), then optional ±jitter (rng null → no jitter).
+func settlement_overflow_adjusted_delta(
+	population: int,
+	base_delta: int,
+	pop_cap: int,
+	jitter: int = 0,
+	rng: RandomNumberGenerator = null
+) -> int:
+	if pop_cap <= 0 or population <= pop_cap:
+		return base_delta
+	var overflow := -int(ceili(float(population) * SETTLEMENT_OVERFLOW_SHRINK_FRAC))
+	var delta := mini(base_delta, overflow)
+	if rng != null and jitter > 0:
+		delta += rng.randi_range(-jitter, jitter)
+	return delta
+
+
+## Cap / jitter for a town or village node (0 / 0 if unknown).
+func settlement_pop_cap_and_jitter(settlement: Node) -> Vector2i:
+	if settlement == null:
+		return Vector2i(0, 0)
+	if settlement.has_method("get_population_cap"):
+		var cap := int(settlement.get_population_cap())
+		var jit := 0
+		if settlement.has_method("get_overflow_jitter"):
+			jit = int(settlement.get_overflow_jitter())
+		return Vector2i(cap, jit)
+	return Vector2i(0, 0)
+
+
+## Returns tier index 0..3 from population and [small_max, medium_max, big_max].
+func settlement_tier_index(population: int, tier_max: Array) -> int:
+	var p := maxi(0, population)
+	if tier_max.size() < 3:
+		return 0
+	if p <= int(tier_max[0]):
+		return 0
+	if p <= int(tier_max[1]):
+		return 1
+	if p <= int(tier_max[2]):
+		return 2
+	return 3
+
+
+func settlement_tier_marks_bonus(tier_index: int) -> float:
+	if tier_index < 0 or tier_index >= SETTLEMENT_TIER_MARKS_BONUS.size():
+		return 0.0
+	return float(SETTLEMENT_TIER_MARKS_BONUS[tier_index])
+
+
+## Base marks plus that settlement's tier bonus (bonus is % of base only).
+func settlement_marks_with_tier_bonus(base_marks: int, tier_index: int) -> int:
+	var base := maxi(0, base_marks)
+	var bonus := settlement_tier_marks_bonus(tier_index)
+	return base + int(floor(float(base) * bonus))
+
+
+func castle_holding_marks_bonus(castle_type: int) -> float:
+	if castle_type < 0 or castle_type >= CASTLE_HOLDING_MARKS_BONUS.size():
+		return 0.0
+	return float(CASTLE_HOLDING_MARKS_BONUS[castle_type])
+
+
+func castle_material_cost(level: int) -> Dictionary:
+	if level < 0 or level >= CASTLE_COST_WOOD.size():
+		return {"wood": 0, "stone": 0}
+	return {"wood": int(CASTLE_COST_WOOD[level]), "stone": int(CASTLE_COST_STONE[level])}
+
+
+func castle_work_required(level: int) -> int:
+	if level < 0 or level >= CASTLE_WORK.size():
+		return 0
+	return int(CASTLE_WORK[level])
+
+
+## Element-wise max(0, to - from) material delta.
+func castle_material_delta(from_level: int, to_level: int) -> Dictionary:
+	var a := castle_material_cost(from_level)
+	var b := castle_material_cost(to_level)
+	return {
+		"wood": maxi(0, int(b["wood"]) - int(a["wood"])),
+		"stone": maxi(0, int(b["stone"]) - int(a["stone"])),
+	}
+
+
+func castle_material_refund(from_level: int, to_level: int) -> Dictionary:
+	var a := castle_material_cost(from_level)
+	var b := castle_material_cost(to_level)
+	return {
+		"wood": maxi(0, int(a["wood"]) - int(b["wood"])),
+		"stone": maxi(0, int(a["stone"]) - int(b["stone"])),
+	}
 
 # Blacksmith: one recipe per smith. Labor + materials per finished weapon.
 const BLACKSMITH_CRAFTABLE := ["maces", "pikes", "bows", "swords", "crossbows", "armour"]
@@ -310,6 +561,14 @@ func weapon_mark_price_discounted(key: String, competition: bool) -> int:
 	if not competition:
 		return base
 	return int(floor(float(base) * (1.0 - MERCHANT_COMPETITION_DISCOUNT)))
+
+
+## Sell payout: half base buy price; +competition bonus when 2+ merchants (floor).
+func weapon_mark_sell_price(key: String, competition: bool) -> int:
+	var half := int(floor(float(weapon_mark_price(key)) * 0.5))
+	if not competition:
+		return half
+	return int(floor(float(half) * (1.0 + MERCHANT_COMPETITION_DISCOUNT)))
 
 
 ## Marks to hire one sellsword stack (strength × mult × count).
@@ -544,6 +803,14 @@ func material_mark_price_discounted(key: String, competition: bool) -> int:
 	return int(floor(float(base) * (1.0 - MERCHANT_COMPETITION_DISCOUNT)))
 
 
+## Sell payout: half base buy price; +competition bonus when 2+ merchants (floor).
+func material_mark_sell_price(key: String, competition: bool) -> int:
+	var half := int(floor(float(material_mark_price(key)) * 0.5))
+	if not competition:
+		return half
+	return int(floor(float(half) * (1.0 + MERCHANT_COMPETITION_DISCOUNT)))
+
+
 ## Holding materials use per-player Dictionaries ({pid: n, "all": n}).
 func is_holding_material(key: String) -> bool:
 	return key in MATERIAL_KEYS
@@ -687,6 +954,118 @@ func levy_happiness_penalty(levied_total: int, season_start_pop: int) -> float:
 	var pct := float(levied_total) / float(season_start_pop) * 100.0
 	var free_pct := LEVY_HAPPINESS_FREE_FRACTION * 100.0
 	return maxf(0.0, (pct - free_pct) * LEVY_HAPPINESS_PER_PERCENT)
+
+
+func clamp_ration(level: int) -> int:
+	return clampi(level, RATION.NONE, RATION.QUADRUPLE)
+
+
+func ration_name(level: int) -> String:
+	match clamp_ration(level):
+		RATION.NONE: return "None"
+		RATION.QUARTER: return "Quarter"
+		RATION.HALF: return "Half"
+		RATION.NORMAL: return "Normal"
+		RATION.DOUBLE: return "Double"
+		RATION.QUADRUPLE: return "Quadruple"
+	return "Normal"
+
+
+func ration_grain_per_person(level: int) -> float:
+	return float(RATION_GRAIN_PER_PERSON.get(clamp_ration(level), 0.5))
+
+
+func ration_happiness_delta(level: int) -> float:
+	return float(RATION_HAPPINESS_DELTA.get(clamp_ration(level), 0.0))
+
+
+func ration_pop_fraction(level: int) -> float:
+	return float(RATION_POP_DELTA.get(clamp_ration(level), 0.0))
+
+
+## Grain needed to feed `pop` at `level` for one season (ceil).
+func ration_grain_need(pop: int, level: int) -> int:
+	if pop <= 0:
+		return 0
+	var rate := ration_grain_per_person(level)
+	if rate <= 0.0:
+		return 0
+	return int(ceili(float(pop) * rate))
+
+
+## Highest ration ≤ `requested` whose grain need fits in `available` grain.
+func affordable_ration(pop: int, requested: int, available: int) -> int:
+	var req := clamp_ration(requested)
+	var have := maxi(0, available)
+	for level in RATION_LEVELS_DESC:
+		var lv := int(level)
+		if lv > req:
+			continue
+		if ration_grain_need(pop, lv) <= have:
+			return lv
+	return RATION.NONE
+
+
+## Population change from a signed fraction (ceil abs).
+## 0-pop + positive growth → RATION_ZERO_POP_BOOTSTRAP.
+func population_delta_from_fraction(population: int, frac: float) -> int:
+	if frac == 0.0:
+		return 0
+	if population <= 0:
+		return RATION_ZERO_POP_BOOTSTRAP if frac > 0.0 else 0
+	var n := int(ceili(float(population) * absf(frac)))
+	return n if frac > 0.0 else -n
+
+
+## Population change for one settlement at an effective ration (ceil abs).
+func ration_population_delta(population: int, level: int) -> int:
+	return population_delta_from_fraction(population, ration_pop_fraction(level))
+
+
+func clamp_tax(level: int) -> int:
+	return clampi(level, TAX.NONE, TAX.BRUTAL)
+
+
+func tax_name(level: int) -> String:
+	match clamp_tax(level):
+		TAX.NONE: return "None"
+		TAX.NORMAL: return "Normal"
+		TAX.HEAVY: return "Heavy"
+		TAX.HARSH: return "Harsh"
+		TAX.BRUTAL: return "Brutal"
+	return "Normal"
+
+
+func tax_marks_per_person(level: int) -> int:
+	return int(TAX_MARKS_PER_PERSON.get(clamp_tax(level), 1))
+
+
+func tax_happiness_delta(level: int) -> float:
+	return float(TAX_HAPPINESS_DELTA.get(clamp_tax(level), 0.0))
+
+
+func tax_pop_fraction(level: int) -> float:
+	return float(TAX_POP_DELTA.get(clamp_tax(level), 0.0))
+
+
+## Raw tax marks for one settlement this season at `level` (ceil), before tier %.
+func tax_marks_for_settlement(population: int, level: int) -> int:
+	var rate := tax_marks_per_person(level)
+	if rate <= 0 or population <= 0:
+		return 0
+	return int(ceili(float(population) * float(rate)))
+
+
+## Raw tax base + floor(base × tier_bonus_fraction).
+func tax_marks_with_tier_bonus(base_marks: int, tier_bonus_fraction: float) -> int:
+	var base := maxi(0, base_marks)
+	if base <= 0 or tier_bonus_fraction <= 0.0:
+		return base
+	return base + int(floor(float(base) * tier_bonus_fraction))
+
+
+func tax_population_delta(population: int, level: int) -> int:
+	return population_delta_from_fraction(population, tax_pop_fraction(level))
 
 
 ## True when the force is non-empty and every stack is knights.

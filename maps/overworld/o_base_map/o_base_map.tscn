@@ -23,6 +23,8 @@ script = ExtResource("7_brdr")
 
 [node name="caravans" type="Node2D" parent="." unique_id=262908393]
 
+[node name="fleets" type="Node2D" parent="." unique_id=442969609]
+
 [node name="merchants" type="Node2D" parent="." unique_id=906083699]
 
 [node name="sellswords" type="Node2D" parent="." unique_id=835177033]

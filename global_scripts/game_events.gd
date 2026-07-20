@@ -62,8 +62,10 @@ static func inbox_label(event: Dictionary, reader_id: int) -> String:
 					return "One of your armies is starving"
 				"warning":
 					return "One of your armies is out of food"
+				"civilian_shrink":
+					return "Province population fell"
 				_:
-					return "Army food"
+					return "Food"
 		KIND.SIEGE:
 			return "Siege engines completed — %s" % place
 	return kind_name(int(event.get("kind", -1)))
@@ -98,8 +100,10 @@ static func report_title(event: Dictionary, reader_id: int) -> String:
 					return "One of your armies is starving"
 				"warning":
 					return "One of your armies is out of food"
+				"civilian_shrink":
+					return "Province population fell"
 				_:
-					return "Army food"
+					return "Food"
 		KIND.SIEGE:
 			return "Siege engines completed"
 	return "Status report"

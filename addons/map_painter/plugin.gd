@@ -286,7 +286,7 @@ func _place_object(map_root: Node, ground: TileMapLayer, cell: Vector2i, brush: 
 		_dock.Brush.CASTLE:
 			inst = MapPainterOps.place_packed(
 				map_root, prov, "defense", MapPainterOps.CASTLE_SCENE, "Castle",
-				ground, cell, true, {"player_owner": owner_id}
+				ground, cell, true, {"player_owner": owner_id, "has_castle": false}
 			)
 		_dock.Brush.ECON_OPEN:
 			inst = MapPainterOps.place_packed(

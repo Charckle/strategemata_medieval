@@ -2,6 +2,10 @@ extends Node2D
 
 const DEFAULT_GRAY := Vector3i(128, 128, 128)
 
+## If set, call this method on the parent settlement for banner pids
+## instead of get_banner_pids (e.g. castle OutsideFlag → get_outside_banner_pids).
+@export var banner_pids_method: String = ""
+
 # Vertical spacing between banners (banner height + gap).
 const BANNER_STEP := 4
 # Y coordinate of the top of the triangle flag in Flag-local space.
@@ -106,7 +110,9 @@ func _shows_ownership_triangle() -> bool:
 
 func _collect_banner_pids(players_dict: Dictionary) -> Array:
 	var raw: Array = []
-	if settlement.has_method("get_banner_pids"):
+	if not banner_pids_method.is_empty() and settlement.has_method(banner_pids_method):
+		raw = settlement.call(banner_pids_method)
+	elif settlement.has_method("get_banner_pids"):
 		raw = settlement.get_banner_pids()
 	elif settlement.has_method("get_owner_set") and settlement.has_method("get_controller"):
 		var controller: int = settlement.get_controller()

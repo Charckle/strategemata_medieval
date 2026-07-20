@@ -18,6 +18,7 @@ var alliances := {}
 #     "siege": optional { "building": key, "level": 0..3 } while Sieging a castle }
 # location = {"kind": "cell"}  -> a mobile army; the figure node holds its position
 #          | {"kind": "garrison", "building": <path String>, "spot": SPOT}
+#          | {"kind": "aboard", "fleet": <fleet_id String>} -> embarked on a fleet
 # controller (mobile armies only): player who commands the army on the map.
 # Built deterministically from the scene on every peer, then mutated only via
 # the server-authoritative apply_* RPCs below so it stays in sync.
@@ -56,6 +57,7 @@ var player_msg_unread: Dictionary = {}
 
 const ARMY_FIGURE_SCENE := preload("res://objects/overworld/army/army_map_unit/armiy_figure.tscn")
 const CARAVAN_SCENE := preload("res://objects/overworld/othr/caravan/caravan.tscn")
+const TRANSPORT_SHIP_SCENE := preload("res://objects/overworld/othr/transport_ship/transport_ship.tscn")
 const MERCHANT_SCENE := preload("res://objects/overworld/othr/merchant/merchant.tscn")
 const MERCHANT_COUNT := 2
 const MERCHANT_NAMES := ["Pipin", "Mery"]
@@ -70,15 +72,21 @@ const SELLSWORDS_MAX_PER_PROVINCE := 2
 @onready var provinces = $provinces
 @onready var armies = $armies
 @onready var caravans = $caravans
+@onready var fleets = $fleets
 @onready var merchants = $merchants
 @onready var sellswords = $sellswords
 var _next_caravan_id: int = 1
+var _next_fleet_id: int = 1
 @onready var camera: Camera2D = $Camera2D
 @onready var pathfinding = $pathfinding
 @onready var province_labels = $ProvinceLabels
 @onready var province_borders = $ProvinceBorders
 
 @onready var gui_node = $BasebottomGUI
+
+# After a fleet move onto an own fleet's tile, prompt combine vs stack.
+var _pending_fleet_combine_mover_name := ""
+var _pending_fleet_combine_target: Node2D = null
 
 # province Node -> Array[Node] of bordering provinces (built once after borders).
 var province_neighbors: Dictionary = {}
@@ -262,12 +270,14 @@ func build_forces_registry() -> void:
 func _register_building_start_garrison(b: Node) -> void:
 	if b.get("type_") == null:
 		return
-	var key := _building_key(b)
 	if b.type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
+		if b.has_method("is_operational") and not b.is_operational():
+			return
+		var key := _building_key(b)
 		_seed_garrison(key, GlobalUnits.SPOT.INSIDE, b.get("start_inside"))
 		_seed_garrison(key, GlobalUnits.SPOT.OUTSIDE, b.get("start_outside"))
 	else:
-		_seed_garrison(key, GlobalUnits.SPOT.FLAT, b.get("start_garrison"))
+		_seed_garrison(_building_key(b), GlobalUnits.SPOT.FLAT, b.get("start_garrison"))
 
 
 func _seed_garrison(building_key: String, spot: int, spec) -> void:
@@ -614,7 +624,8 @@ func _force_anchor_cell(force_id: String) -> Vector2i:
 	if not forces.has(force_id):
 		return invalid
 	var loc: Dictionary = forces[force_id].get("location", {})
-	if str(loc.get("kind", "")) == "garrison":
+	var kind := str(loc.get("kind", ""))
+	if kind == "garrison":
 		var b := _building_from_key(str(loc.get("building", "")))
 		if b == null:
 			return invalid
@@ -622,6 +633,11 @@ func _force_anchor_cell(force_id: String) -> Vector2i:
 		if approach.is_empty():
 			return invalid
 		return approach[0]
+	if kind == "aboard":
+		var fleet := get_fleet_by_id(str(loc.get("fleet", "")))
+		if fleet == null:
+			return invalid
+		return pathfinding.get_army_cell(fleet)
 	var fig = armies.get_node_or_null(force_id)
 	if fig == null:
 		return invalid
@@ -943,10 +959,16 @@ func _force_world_pos(force_id: String) -> Vector2:
 	if not forces.has(force_id):
 		return Vector2.ZERO
 	var loc: Dictionary = forces[force_id].get("location", {})
-	if str(loc.get("kind", "")) == "garrison":
+	var kind := str(loc.get("kind", ""))
+	if kind == "garrison":
 		var b := _building_from_key(str(loc.get("building", "")))
 		if b != null and b is Node2D:
 			return (b as Node2D).global_position
+		return Vector2.ZERO
+	if kind == "aboard":
+		var fleet := get_fleet_by_id(str(loc.get("fleet", "")))
+		if fleet != null:
+			return fleet.global_position + Vector2(32, 16)
 		return Vector2.ZERO
 	var fig = armies.get_node_or_null(force_id)
 	if fig != null:
@@ -1138,12 +1160,17 @@ func _cleanup_force_if_empty(fid: String) -> void:
 		return
 	var vip_ids := get_vips_on_force(fid)
 	var loc: Dictionary = forces[fid].get("location", {})
-	var is_garrison := str(loc.get("kind", "")) == "garrison"
+	var kind := str(loc.get("kind", ""))
+	var is_garrison := kind == "garrison"
 	if not vip_ids.is_empty() and is_garrison:
 		return
 	if not vip_ids.is_empty() and not is_garrison:
 		var ctrl := get_force_controller(fid)
 		relocate_vips_from_disbanded_force(fid, ctrl)
+	if kind == "aboard":
+		var fleet := get_fleet_by_id(str(loc.get("fleet", "")))
+		if fleet != null:
+			fleet.aboard_force_ids.erase(fid)
 	forces.erase(fid)
 	var fig = armies.get_node_or_null(fid)
 	if fig != null:
@@ -1208,6 +1235,16 @@ func open_selected_army_menu(army: Node2D) -> void:
 	if army == null or not is_instance_valid(army):
 		return
 	pathfinding.deselect_army()
+	if army.has_method("is_fleet") and army.is_fleet():
+		var cell = pathfinding.get_army_cell(army)
+		var stack: Array = pathfinding.fleets_at_cell(cell)
+		if stack.size() > 1 and is_instance_valid(gui_node) and gui_node.has_method("open_fleet_stack_picker"):
+			gui_node.open_fleet_stack_picker(self, stack)
+			return
+		if army.is_controllable_by(my_pl_id) and is_instance_valid(gui_node) \
+				and gui_node.has_method("open_fleet_menu"):
+			gui_node.open_fleet_menu(self, army)
+		return
 	if army.is_controllable_by(my_pl_id):
 		gui_node.open_army_menu(self, army)
 	elif army.has_units_of(my_pl_id):
@@ -1250,6 +1287,8 @@ func on_caravan_clicked(caravan: Node2D) -> void:
 	var selected = pathfinding.selected_army if pathfinding != null else null
 	# Army selected: interact if adjacent, else approach (capture for enemies).
 	if selected != null and not (selected.has_method("is_caravan") and selected.is_caravan()):
+		if selected.has_method("is_fleet") and selected.is_fleet():
+			return
 		if pathfinding.are_armies_adjacent(selected, caravan):
 			pathfinding.open_army_interaction(selected, caravan)
 		else:
@@ -1261,6 +1300,101 @@ func on_caravan_clicked(caravan: Node2D) -> void:
 	else:
 		if is_instance_valid(gui_node):
 			gui_node.show_info_popup("Enemy caravan — move an army next to it to capture")
+
+
+func get_fleet_by_id(fleet_id: String) -> Node2D:
+	if fleets == null or fleet_id == "":
+		return null
+	return fleets.get_node_or_null(fleet_id) as Node2D
+
+
+func on_fleet_clicked(fleet: Node2D) -> void:
+	if is_mouse_over_gui() or fleet == null:
+		return
+	var selected = pathfinding.selected_army if pathfinding != null else null
+	# Fleet selected: let pathfinding handle embark / combine via confirm_move.
+	if selected != null and selected.has_method("is_fleet") and selected.is_fleet():
+		if selected == fleet:
+			open_selected_army_menu(fleet)
+			return
+		if pathfinding.are_armies_adjacent(selected, fleet):
+			if selected.get_controller() == fleet.get_controller():
+				pathfinding.deselect_army()
+				open_fleet_combine_prompt(selected, fleet, pathfinding.get_army_cell(fleet))
+			return
+		# Move toward that sea tile.
+		pathfinding.confirm_move_to_army(fleet)
+		return
+	# Land army selected: fleets pick up armies, not the reverse.
+	if selected != null and not (selected.has_method("is_fleet") and selected.is_fleet()) \
+			and not (selected.has_method("is_caravan") and selected.is_caravan()):
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Select the fleet to pick up armies")
+		return
+
+	var cell = pathfinding.get_army_cell(fleet)
+	var stack: Array = pathfinding.fleets_at_cell(cell)
+	if stack.size() > 1:
+		if is_instance_valid(gui_node) and gui_node.has_method("open_fleet_stack_picker"):
+			gui_node.open_fleet_stack_picker(self, stack)
+		return
+	if fleet.is_controllable_by(my_pl_id):
+		if is_instance_valid(gui_node) and gui_node.has_method("open_fleet_menu"):
+			gui_node.open_fleet_menu(self, fleet)
+	else:
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Enemy transport fleet")
+
+
+func open_fleet_embark_prompt(fleet: Node2D, army: Node2D) -> void:
+	if not is_instance_valid(gui_node) or not gui_node.has_method("open_fleet_embark_prompt"):
+		return
+	gui_node.open_fleet_embark_prompt(self, fleet, army)
+
+
+func open_fleet_disembark_prompt(fleet: Node2D, land_cell: Vector2i) -> void:
+	if not is_instance_valid(gui_node) or not gui_node.has_method("open_fleet_disembark_prompt"):
+		return
+	gui_node.open_fleet_disembark_prompt(self, fleet, land_cell)
+
+
+func open_fleet_combine_prompt(mover: Node2D, target: Node2D, dest_cell: Vector2i) -> void:
+	if not is_instance_valid(gui_node) or not gui_node.has_method("open_fleet_combine_prompt"):
+		return
+	gui_node.open_fleet_combine_prompt(self, mover, target, dest_cell)
+
+
+func set_pending_fleet_combine(mover_name: String, target: Node2D) -> void:
+	clear_pending_garrison()
+	clear_pending_army_interaction()
+	_pending_fleet_combine_mover_name = mover_name
+	_pending_fleet_combine_target = target
+
+
+func clear_pending_fleet_combine() -> void:
+	_pending_fleet_combine_mover_name = ""
+	_pending_fleet_combine_target = null
+
+
+func refresh_fleet_stack_visuals() -> void:
+	if fleets == null or pathfinding == null:
+		return
+	for cell in pathfinding.fleet_occupancy.keys():
+		var stack: Array = pathfinding.fleet_occupancy[cell]
+		var owner_pids: Array = []
+		for f in stack:
+			var pid := int(f.get_controller()) if f.has_method("get_controller") else int(f.player_owner)
+			if not owner_pids.has(pid):
+				owner_pids.append(pid)
+		owner_pids.sort()
+		# Stable primary: lowest name.
+		var primary: Node2D = null
+		for f in stack:
+			if primary == null or String(f.name) < String(primary.name):
+				primary = f
+		for f in stack:
+			if f.has_method("set_stack_display"):
+				f.set_stack_display(f == primary, owner_pids)
 
 
 # --- Diplomacy (alliances) --------------------------------------------------
@@ -1385,6 +1519,11 @@ func get_building_battle_strength(building: Node, attacker_id: String = "") -> i
 func open_army_building_interaction(force_id: String, building: Node) -> void:
 	if not forces.has(force_id) or building == null or not is_instance_valid(building):
 		return
+	# Empty / under-construction castle plots are non-interactable worksites.
+	if building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
+		if building.has_method("is_army_interactable") and not building.is_army_interactable():
+			gui_node.show_info_popup("Castle worksite — armies cannot interact here")
+			return
 	var controller := get_force_controller(force_id)
 	if is_building_friendly_to(building, controller):
 		gui_node.open_garrison_menu(self, force_id, building)
@@ -1634,33 +1773,66 @@ func province_predicted_marks_total(prov: Node) -> int:
 	return total
 
 
+func settlement_tax_marks(building: Node) -> int:
+	if building == null or building.get("tax_marks") == null:
+		return 0
+	return maxi(0, int(building.tax_marks))
+
+
 func compute_raid_loot(building: Node) -> int:
 	var prov := find_province_for_building(building)
 	if prov == null:
+		return 0
+	# Empty settlements cannot be looted.
+	if is_settlement_building(building) and not settlement_has_population(building):
 		return 0
 	prov.recalculate_marks_will_by_player()
 	prov.update_population_in_resources()
 	var marks_will := province_predicted_marks_total(prov)
 	var type_ = building.get("type_")
+	var base_loot := 0
 	if type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
-		return int(floor(float(marks_will) * 0.10))
-	if type_ == GlobalStuff.BUILDING_TYPE.ECONOMY:
-		return int(floor(float(marks_will) * 0.05))
-	# Village / town: share of province output by settlement pop ratio.
-	var sett_pop := int(building.get("population") if building.get("population") != null else 0)
-	var prov_pop := province_total_population(prov)
-	if prov_pop <= 0 or sett_pop <= 0:
-		return 0
-	return int(floor(float(marks_will) * float(sett_pop) / float(prov_pop)))
+		base_loot = int(floor(float(marks_will) * 0.10))
+	elif type_ == GlobalStuff.BUILDING_TYPE.ECONOMY:
+		base_loot = int(floor(float(marks_will) * 0.05))
+	else:
+		# Village / town: share of province tax forecast by settlement pop ratio.
+		var sett_pop := int(building.get("population") if building.get("population") != null else 0)
+		var prov_pop := province_total_population(prov)
+		if prov_pop > 0 and sett_pop > 0:
+			base_loot = int(floor(float(marks_will) * float(sett_pop) / float(prov_pop)))
+	# Plus any uncollected tax sitting in the settlement coffer.
+	return base_loot + settlement_tax_marks(building)
+
+
+func compute_raze_loot(building: Node) -> int:
+	return int(floor(float(compute_raid_loot(building)) * RAZE_LOOT_MULT))
+
+
+func is_settlement_building(building: Node) -> bool:
+	if building == null or building.get("type_") == null:
+		return false
+	var type_ := int(building.type_)
+	return type_ == GlobalStuff.BUILDING_TYPE.TOWN or type_ == GlobalStuff.BUILDING_TYPE.VILLAGE
+
+
+func settlement_has_population(building: Node) -> bool:
+	if not is_settlement_building(building):
+		return false
+	return int(building.get("population") if building.get("population") != null else 0) > 0
 
 
 const RAZE_RECOVERY_SEASONS := 2
 const RAID_SMOKE_INTENSITY := 0.35
 const RAZE_SMOKE_INTENSITY_FULL := 1.0
 const RAZE_SMOKE_INTENSITY_FADED := 0.45
-const RAID_MP_COST := 2
+const RAID_MP_COST := 4
+const FIELD_RAID_MP_COST := 2
 const CAPTURE_MP_COST := 2
-const RAZE_MP_COST := 4
+const RAZE_MP_COST := 8
+const RAID_POP_KEEP := 0.8 ## lose 20%
+const RAZE_POP_KEEP := 0.5 ## lose 50%
+const RAZE_LOOT_MULT := 1.5
 
 
 func is_building_razed(building: Node) -> bool:
@@ -1695,6 +1867,8 @@ func can_raid_building(building: Node) -> bool:
 	if building.get("type_") != null and int(building.type_) == GlobalStuff.BUILDING_TYPE.FIELD:
 		return can_raid_field(building)
 	if is_building_razed(building):
+		return false
+	if is_settlement_building(building) and not settlement_has_population(building):
 		return false
 	var last_t := int(building.get_meta("last_raid_turn", -1))
 	return last_t != turn
@@ -1777,7 +1951,15 @@ func can_raze_building(building: Node) -> bool:
 		return false
 	if is_building_razed(building):
 		return false
-	return building.get("STAGES") != null
+	if building.get("STAGES") == null:
+		return false
+	# Settlements: soft raze (−50% pop), once per season, needs living population.
+	if is_settlement_building(building):
+		if not settlement_has_population(building):
+			return false
+		return int(building.get_meta("last_raze_turn", -1)) != turn
+	# Economy (and any other staged building): full RAZED wipe.
+	return true
 
 
 func do_battle_attack(attacker_id: String, defender_army_id: String, building: Node) -> void:
@@ -2352,6 +2534,8 @@ func request_raid_building(force_id: String, building_key: String) -> void:
 	if building.get("type_") != null and int(building.type_) == GlobalStuff.BUILDING_TYPE.FIELD:
 		return
 	var loot := compute_raid_loot(building)
+	if loot <= 0:
+		return
 	var raider := get_force_controller(force_id)
 	apply_raid_building.rpc(force_id, building_key, raider, loot, turn)
 
@@ -2375,19 +2559,24 @@ func apply_raid_building(
 		players[raider].game_data["marks"] = int(players[raider].game_data.get("marks", 0)) + loot
 	var type_ = building.get("type_")
 	if type_ == GlobalStuff.BUILDING_TYPE.VILLAGE or type_ == GlobalStuff.BUILDING_TYPE.TOWN:
+		if building.get("tax_marks") != null:
+			building.tax_marks = 0
 		if building.get("population") != null:
-			building.population = int(floor(float(building.population) * 0.5))
+			building.population = int(floor(float(building.population) * RAID_POP_KEEP))
 			if building.has_method("calculate_predicted_marks"):
 				building.calculate_predicted_marks()
 			if building.has_method("calculate_predicted_growth"):
 				building.calculate_predicted_growth()
+			if building.has_method("refresh_visual_stage"):
+				building.refresh_visual_stage()
 		var prov := find_province_for_building(building)
 		if prov != null:
 			prov.update_population_in_resources()
 			prov.recalculate_marks_will_by_player()
-	# Light smoke for one season (cleared on next season tick if not razed).
+	# Light smoke for one season (cleared on next season tick).
 	building.set_meta("smoke_kind", "raid")
-	_attach_building_smoke(building, RAID_SMOKE_INTENSITY)
+	building.set_meta("smoke_turn", raid_turn)
+	_attach_building_smoke(building, RAID_SMOKE_INTENSITY, false)
 	if is_instance_valid(gui_node):
 		gui_node.show_info_popup("Raid yielded %d marks" % loot)
 		if players.has(my_pl_id):
@@ -2406,7 +2595,7 @@ func request_raid_field(force_id: String, field_key: String) -> void:
 		return
 	if not forces.has(force_id):
 		return
-	if not force_has_movement(force_id, RAID_MP_COST):
+	if not force_has_movement(force_id, FIELD_RAID_MP_COST):
 		return
 	var field = _building_from_key(field_key)
 	if field == null or not can_raid_field(field):
@@ -2468,7 +2657,7 @@ func apply_raid_field(
 	var field = _building_from_key(field_key)
 	if field == null:
 		return
-	if not spend_force_movement(force_id, RAID_MP_COST):
+	if not spend_force_movement(force_id, FIELD_RAID_MP_COST):
 		return
 	field.set_meta("last_raid_turn", raid_turn)
 	clear_force_siege(force_id)
@@ -2499,7 +2688,8 @@ func apply_raid_field(
 		if owner_pid >= 0 and prov.has_method("clamp_all_labor"):
 			prov.clamp_all_labor(owner_pid, int(season))
 	field.set_meta("smoke_kind", "raid")
-	_attach_building_smoke(field, RAID_SMOKE_INTENSITY)
+	field.set_meta("smoke_turn", raid_turn)
+	_attach_building_smoke(field, RAID_SMOKE_INTENSITY, false)
 	if is_instance_valid(gui_node):
 		var bits: PackedStringArray = []
 		if grain_loot > 0:
@@ -2527,33 +2717,78 @@ func request_raze_building(force_id: String, building_key: String) -> void:
 	var building = _building_from_key(building_key)
 	if building == null or not can_raze_building(building):
 		return
-	apply_raze_building.rpc(force_id, building_key)
+	var loot := compute_raze_loot(building)
+	var razer := get_force_controller(force_id)
+	apply_raze_building.rpc(force_id, building_key, razer, loot, turn)
 
 
 @rpc("authority", "call_local", "reliable")
-func apply_raze_building(force_id: String, building_key: String) -> void:
+func apply_raze_building(
+	force_id: String,
+	building_key: String,
+	razer: int = -1,
+	loot: int = -1,
+	raze_turn: int = -1
+) -> void:
 	var building = _building_from_key(building_key)
 	if building == null or not can_raze_building(building):
 		return
 	if not spend_force_movement(force_id, RAZE_MP_COST):
 		return
-	building.stage = building.STAGES.RAZED
-	building.set_meta("raze_seasons_left", RAZE_RECOVERY_SEASONS)
+	if razer < 0:
+		razer = get_force_controller(force_id)
+	if loot < 0:
+		loot = compute_raze_loot(building)
+	if raze_turn < 0:
+		raze_turn = turn
+	clear_force_siege(force_id)
+	if loot > 0 and players.has(razer):
+		players[razer].game_data["marks"] = int(players[razer].game_data.get("marks", 0)) + loot
+	if building.get("tax_marks") != null:
+		building.tax_marks = 0
+	building.set_meta("last_raze_turn", raze_turn)
 	building.set_meta("smoke_kind", "raze")
-	if building.has_method("update_for_stage"):
-		building.update_for_stage()
-	if building.has_method("get_start_data"):
-		building.get_start_data()
-	elif building.get("population") != null:
-		building.population = 0
-	_clear_building_garrison(building)
+	building.set_meta("smoke_turn", raze_turn)
+
+	if is_settlement_building(building):
+		# Soft raze: −50% pop, once/season; smoke clears next season.
+		if building.get("population") != null:
+			building.population = int(floor(float(building.population) * RAZE_POP_KEEP))
+		if building.has_method("calculate_predicted_marks"):
+			building.calculate_predicted_marks()
+		if building.has_method("calculate_predicted_growth"):
+			building.calculate_predicted_growth()
+		if building.has_method("refresh_visual_stage"):
+			building.refresh_visual_stage()
+		elif building.has_method("update_for_stage"):
+			building.update_for_stage()
+	else:
+		# Economy (legacy): full RAZED wipe + recovery seasons.
+		building.stage = building.STAGES.RAZED
+		building.set_meta("raze_seasons_left", RAZE_RECOVERY_SEASONS)
+		if building.get("population") != null:
+			building.population = 0
+		if building.has_method("update_for_stage"):
+			building.update_for_stage()
+		if building.has_method("get_start_data"):
+			building.get_start_data()
+		if building.get("tax_marks") != null:
+			building.tax_marks = 0
+		_clear_building_garrison(building)
+
 	var prov := find_province_for_building(building)
 	if prov != null:
 		prov.update_population_in_resources()
 		prov.recalculate_marks_will_by_player()
-	_attach_building_smoke(building, RAZE_SMOKE_INTENSITY_FULL)
+	_attach_building_smoke(building, RAZE_SMOKE_INTENSITY_FULL, true)
+
 	if is_instance_valid(gui_node):
-		gui_node.show_info_popup("Building razed")
+		if loot > 0:
+			gui_node.show_info_popup("Building razed — took %d marks" % loot)
+		else:
+			gui_node.show_info_popup("Building razed")
+		if players.has(my_pl_id):
+			gui_node.update_money(players[my_pl_id].game_data["marks"])
 		if gui_node.has_method("refresh_army_menu_if_force"):
 			gui_node.refresh_army_menu_if_force(force_id)
 
@@ -2561,12 +2796,13 @@ func apply_raze_building(force_id: String, building_key: String) -> void:
 const RAID_SMOKE_SCRIPT := preload("res://objects/overworld/othr/raid_smoke/raid_smoke.gd")
 
 
-func _attach_building_smoke(building: Node, intensity: float) -> void:
+func _attach_building_smoke(building: Node, intensity: float, tall_plume: bool = false) -> void:
 	_clear_building_smoke(building)
 	var smoke := Node2D.new()
 	smoke.name = "RaidSmoke"
 	smoke.set_script(RAID_SMOKE_SCRIPT)
 	smoke.intensity = clampf(intensity, 0.0, 1.0)
+	smoke.tall_plume = tall_plume
 	building.add_child(smoke)
 	smoke.position = Vector2(32, 8)
 
@@ -2584,8 +2820,10 @@ func _set_building_smoke_intensity(building: Node, intensity: float) -> void:
 	var smoke = building.get_node_or_null("RaidSmoke")
 	if smoke != null and smoke.has_method("set_intensity"):
 		smoke.set_intensity(intensity)
+		if smoke.has_method("set_tall_plume"):
+			smoke.set_tall_plume(true)
 	else:
-		_attach_building_smoke(building, intensity)
+		_attach_building_smoke(building, intensity, true)
 
 
 func clear_expired_raid_smoke() -> void:
@@ -2595,13 +2833,20 @@ func clear_expired_raid_smoke() -> void:
 			if container == null:
 				continue
 			for b in container.get_children():
-				if str(b.get_meta("smoke_kind", "")) == "raze":
-					continue  # razed smoke fades via tick_razed_buildings
-				var last_t := int(b.get_meta("last_raid_turn", -1))
-				if last_t >= 0 and last_t != turn:
+				# Full RAZED economy smoke fades via tick_razed_buildings.
+				if is_building_razed(b) and str(b.get_meta("smoke_kind", "")) == "raze":
+					continue
+				var smoke_turn := int(b.get_meta("smoke_turn", -1))
+				if smoke_turn < 0:
+					smoke_turn = int(b.get_meta("last_raid_turn", -1))
+				if smoke_turn < 0:
+					smoke_turn = int(b.get_meta("last_raze_turn", -1))
+				if smoke_turn >= 0 and smoke_turn != turn:
 					_clear_building_smoke(b)
 					if b.has_meta("smoke_kind"):
 						b.remove_meta("smoke_kind")
+					if b.has_meta("smoke_turn"):
+						b.remove_meta("smoke_turn")
 
 
 func tick_razed_buildings() -> void:
@@ -2681,17 +2926,21 @@ func _restore_razed_building(building: Node) -> void:
 		building.stage = building.STAGES.EMPTY
 	else:
 		building.stage = building.STAGES.SMALL
+	# Towns / villages recover empty and grow back via rations.
+	if type_ == GlobalStuff.BUILDING_TYPE.TOWN or type_ == GlobalStuff.BUILDING_TYPE.VILLAGE:
+		if building.get("population") != null:
+			building.population = 0
 	if building.has_meta("raze_seasons_left"):
 		building.remove_meta("raze_seasons_left")
 	if building.has_meta("smoke_kind"):
 		building.remove_meta("smoke_kind")
 	_clear_building_smoke(building)
-	if building.has_method("update_for_stage"):
+	if building.has_method("refresh_visual_stage"):
+		building.refresh_visual_stage()
+	elif building.has_method("update_for_stage"):
 		building.update_for_stage()
 	if building.has_method("get_start_data"):
 		building.get_start_data()
-	elif building.get("population") != null:
-		building.population = 0
 
 
 func tick_all_force_seasons() -> void:
@@ -2785,6 +3034,11 @@ func on_building_clicked(building: Node2D) -> bool:
 	if _is_army_selected():
 		# Garrisonable buildings, merchants, or fields: interact when adjacent, else approach.
 		var is_garrisonable := building.has_method("get_garrison_capacity")
+		if building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
+			if building.has_method("is_army_interactable") and not building.is_army_interactable():
+				gui_node.show_info_popup("Castle worksite — armies cannot interact here")
+				pathfinding.deselect_army()
+				return true
 		var is_merchant = building.get("type_") != null \
 				and building.type_ == GlobalStuff.BUILDING_TYPE.MERCHANT \
 				and not bool(building.get("camp_hidden"))
@@ -2841,6 +3095,12 @@ func on_building_clicked(building: Node2D) -> bool:
 		else:
 			gui_node.show_building_popup(building, _building_display_name(building), _building_display_body(building), true)
 		return true
+	if building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
+		if gui_node.has_method("show_castle_popup"):
+			gui_node.show_castle_popup(self, building)
+		else:
+			gui_node.show_building_popup(building, _building_display_name(building), _building_display_body(building), true)
+		return true
 	var has_own_garrison := (building.has_method("get_garrison_capacity")
 		and not get_player_garrison(building, my_pl_id).is_empty())
 	var deploy_cb := Callable()
@@ -2888,9 +3148,9 @@ func open_army_field_interaction(force_id: String, field: Node) -> void:
 		if is_instance_valid(gui_node):
 			gui_node.show_info_popup("Cannot raid this field")
 		return
-	if not force_has_movement(force_id, RAID_MP_COST):
+	if not force_has_movement(force_id, FIELD_RAID_MP_COST):
 		if is_instance_valid(gui_node):
-			gui_node.show_info_popup("Need %d movement points to raid" % RAID_MP_COST)
+			gui_node.show_info_popup("Need %d movement points to raid" % FIELD_RAID_MP_COST)
 		return
 	if is_instance_valid(gui_node) and gui_node.has_method("open_field_raid_menu"):
 		gui_node.open_field_raid_menu(self, force_id, field)
@@ -2909,7 +3169,10 @@ func _building_display_name(b: Node2D) -> String:
 		match b.type_:
 			GlobalStuff.BUILDING_TYPE.VILLAGE: return "Village"
 			GlobalStuff.BUILDING_TYPE.TOWN: return "Town"
-			GlobalStuff.BUILDING_TYPE.CASTLE: return "Castle"
+			GlobalStuff.BUILDING_TYPE.CASTLE:
+				if b.has_method("get_stage_name"):
+					return str(b.get_stage_name())
+				return "Castle"
 			GlobalStuff.BUILDING_TYPE.FIELD: return "Field"
 			GlobalStuff.BUILDING_TYPE.MERCHANT:
 				var mname := str(b.get("display_name") if b.get("display_name") != null else "")
@@ -2985,6 +3248,8 @@ func _building_display_body(b: Node2D) -> String:
 			eowner = str(players[b.player_owner].name_)
 		lines.append("Owner: %s" % eowner)
 		if b.has_method("is_built") and b.is_built():
+			if b.has_method("get_stage_name"):
+				lines.append("Stage: %s" % b.get_stage_name())
 			lines.append("Workers cap: %d" % int(b.worker_cap()))
 			var cat := str(b.labor_category())
 			if cat == "blacksmith":
@@ -2997,6 +3262,14 @@ func _building_display_body(b: Node2D) -> String:
 				lines.append("Labor category: %s" % cat)
 		else:
 			lines.append("Empty — de jure can build here")
+	elif b.get("type_") != null and b.type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
+		if b.has_method("construction_summary"):
+			lines.append(str(b.construction_summary()))
+		if b.has_method("is_under_construction") and b.is_under_construction():
+			lines.append("Offline — assign Castle labor in the province menu")
+			lines.append("Armies cannot interact with this worksite")
+		elif b.has_method("is_built") and not b.is_built():
+			lines.append("Empty plot — de jure can start construction")
 	elif b.get("player_owner") != null:
 		var owner_name := "Unowned"
 		if players.has(b.player_owner):
@@ -3008,8 +3281,23 @@ func _building_display_body(b: Node2D) -> String:
 			lines.append("Stage: %s" % stage_name)
 	if b.get("population") != null:
 		lines.append("Population: %s" % str(b.population))
-	if b.get("predicted_marks") != null:
-		lines.append("Income: %s marks" % str(b.predicted_marks))
+	if b.get("happiness") != null and b.get("player_owner") != null \
+			and int(b.player_owner) == my_pl_id:
+		lines.append("Happiness: %.0f" % float(b.happiness))
+	if b.get("player_owner") != null and int(b.player_owner) == my_pl_id:
+		if b.get("predicted_marks") != null:
+			var prov := find_province_for_building(b)
+			var to_wallet = prov != null and prov.has_method("has_dejure") and prov.has_dejure(my_pl_id)
+			if to_wallet:
+				lines.append("Tax next season: %s marks → wallet" % str(b.predicted_marks))
+			else:
+				lines.append("Tax next season: %s marks → coffer" % str(b.predicted_marks))
+		if b.has_method("settlement_marks_bonus_fraction"):
+			var pct := float(b.settlement_marks_bonus_fraction()) * 100.0
+			if pct > 0.0:
+				lines.append("Tier bonus: +%.0f%%" % pct)
+		if b.get("tax_marks") != null:
+			lines.append("Tax stored: %d marks" % int(b.tax_marks))
 	if b.has_method("get_garrison_capacity"):
 		lines.append(_building_garrison_text(b))
 	var vip_ids := get_building_vip_ids(b)
@@ -3112,6 +3400,9 @@ func _try_open_pending_garrison(army_name: String) -> void:
 	var building := _pending_garrison_building
 	var force_id := _pending_garrison_force_id
 	clear_pending_garrison()
+	if building != null and building.has_method("is_army_interactable") \
+			and not building.is_army_interactable():
+		return
 	if building == null or not is_instance_valid(building):
 		return
 	var army = armies.get_node_or_null(army_name)
@@ -3150,6 +3441,478 @@ func _try_open_pending_army_interaction(army_name: String) -> void:
 		return
 	# Defer past the click that completed the move.
 	call_deferred("_on_army_interaction", army, target)
+
+
+func _try_open_pending_fleet_combine(fleet_name: String) -> void:
+	if _pending_fleet_combine_mover_name != fleet_name:
+		return
+	var target := _pending_fleet_combine_target
+	clear_pending_fleet_combine()
+	if target == null or not is_instance_valid(target):
+		return
+	var fleet = get_fleet_by_id(fleet_name)
+	if fleet == null or not fleet.is_controllable_by(my_pl_id):
+		return
+	var cell = pathfinding.get_army_cell(fleet)
+	if pathfinding.get_army_cell(target) != cell:
+		return
+	call_deferred("open_fleet_combine_prompt", fleet, target, cell)
+
+
+# --- Transport fleets -------------------------------------------------------
+
+func town_has_sea_access(town: Node) -> bool:
+	return not get_sea_cells_adjacent_to_building(town).is_empty()
+
+
+func get_sea_cells_adjacent_to_building(building: Node) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	if building == null or pathfinding == null:
+		return result
+	var footprint: Array = pathfinding.object_to_footprint.get(building, [])
+	if footprint.is_empty() and building.has_method("get_pathfinding_blocked_tile_centers"):
+		for pos in building.get_pathfinding_blocked_tile_centers():
+			var cell: Vector2i = pathfinding.map_layer.local_to_map(
+				pathfinding.map_layer.to_local(pos)
+			)
+			footprint.append(cell)
+	for cell in footprint:
+		for dir in pathfinding.EDGE_DIRS:
+			var n: Vector2i = cell + dir
+			if pathfinding.is_sea_cell(n) and n not in result:
+				result.append(n)
+	return result
+
+
+func get_fleet_spawn_sea_cell(town: Node) -> Vector2i:
+	var cells := get_sea_cells_adjacent_to_building(town)
+	if cells.is_empty():
+		return Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+	return cells[0]
+
+
+func province_coastal_towns_for(player_id: int, province_id: String) -> Array:
+	var out: Array = []
+	var prov := _get_province_by_id(province_id)
+	if prov == null:
+		return out
+	var sett = prov.get_node_or_null("settlements")
+	if sett == null:
+		return out
+	for b in sett.get_children():
+		if b.get("type_") == null or b.type_ != GlobalStuff.BUILDING_TYPE.TOWN:
+			continue
+		if int(b.player_owner) != player_id:
+			continue
+		if town_has_sea_access(b):
+			out.append(b)
+	return out
+
+
+func do_build_transport_ships(province_id: String, ship_count: int) -> void:
+	ship_count = clampi(ship_count, 1, 200)
+	var towns := province_coastal_towns_for(my_pl_id, province_id)
+	if towns.is_empty():
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Need an owned town bordering the sea")
+		return
+	var wood_need := ship_count * GlobalUnits.TRANSPORT_SHIP_WOOD_COST
+	var marks_need := ship_count * GlobalUnits.TRANSPORT_SHIP_MARKS_COST
+	var prov := _get_province_by_id(province_id)
+	if prov == null or not prov.has_dejure(my_pl_id):
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("You need de jure ownership to build ships here")
+		return
+	if prov.get_player_material(my_pl_id, "wood") < wood_need:
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Need %d wood" % wood_need)
+		return
+	var marks := int(players[my_pl_id].game_data.get("marks", 0))
+	if marks < marks_need:
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Need %d marks" % marks_need)
+		return
+	var spawn := get_fleet_spawn_sea_cell(towns[0])
+	if spawn == Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("No sea tile next to the town")
+		return
+	request_build_transport_ships.rpc_id(1, province_id, ship_count, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_build_transport_ships(province_id: String, ship_count: int, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	ship_count = clampi(ship_count, 1, 200)
+	if not players.has(player_id):
+		return
+	var towns := province_coastal_towns_for(player_id, province_id)
+	if towns.is_empty():
+		return
+	var prov := _get_province_by_id(province_id)
+	if prov == null or not prov.has_dejure(player_id):
+		return
+	var wood_need := ship_count * GlobalUnits.TRANSPORT_SHIP_WOOD_COST
+	var marks_need := ship_count * GlobalUnits.TRANSPORT_SHIP_MARKS_COST
+	if prov.get_player_material(player_id, "wood") < wood_need:
+		return
+	if int(players[player_id].game_data.get("marks", 0)) < marks_need:
+		return
+	var spawn := get_fleet_spawn_sea_cell(towns[0])
+	if spawn == Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
+		return
+	_next_fleet_id += 1
+	var new_id := "fl_%d" % _next_fleet_id
+	apply_build_transport_ships.rpc(
+		province_id, player_id, ship_count, new_id, spawn.x, spawn.y
+	)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_build_transport_ships(
+	province_id: String,
+	player_id: int,
+	ship_count: int,
+	fleet_id: String,
+	cell_x: int,
+	cell_y: int
+) -> void:
+	var prov := _get_province_by_id(province_id)
+	if prov == null or not players.has(player_id):
+		return
+	var wood_need := ship_count * GlobalUnits.TRANSPORT_SHIP_WOOD_COST
+	var marks_need := ship_count * GlobalUnits.TRANSPORT_SHIP_MARKS_COST
+	if prov.get_player_material(player_id, "wood") < wood_need:
+		return
+	var marks := int(players[player_id].game_data.get("marks", 0))
+	if marks < marks_need:
+		return
+	prov.add_player_material(player_id, "wood", -wood_need)
+	players[player_id].game_data["marks"] = marks - marks_need
+	_spawn_fleet(fleet_id, player_id, ship_count, Vector2i(cell_x, cell_y), -1)
+	if player_id == my_pl_id and is_instance_valid(gui_node):
+		gui_node.update_money(players[my_pl_id].game_data["marks"])
+		if gui_node.has_method("update_economy_menu"):
+			gui_node.update_economy_menu(self)
+		if gui_node.has_method("refresh_military_tab_if_open"):
+			gui_node.refresh_military_tab_if_open()
+
+
+func _spawn_fleet(
+	fleet_id: String,
+	player_id: int,
+	ship_count: int,
+	cell: Vector2i,
+	starting_mp: int = -1
+) -> Node2D:
+	var fig = TRANSPORT_SHIP_SCENE.instantiate()
+	fig.name = fleet_id
+	fleets.add_child(fig)
+	fig.base_map = self
+	fig.fleet_id = fleet_id
+	fig.player_owner = player_id
+	fig.ship_count = maxi(1, ship_count)
+	fig.movement_points = GlobalUnits.TRANSPORT_SHIP_MP
+	fig.aboard_force_ids = []
+	if starting_mp < 0:
+		fig.reset_movement()
+	else:
+		fig.movement_left = clampi(starting_mp, 0, fig.effective_max_mp())
+	pathfinding.place_fleet_at_cell(fig, cell)
+	fig.set_flags()
+	pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
+	return fig
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_fleet_move(fleet_name: String, cell_x: int, cell_y: int, steps: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var fleet = get_fleet_by_id(fleet_name)
+	if fleet == null:
+		return
+	steps = clampi(steps, 0, fleet.movement_left)
+	if steps <= 0:
+		return
+	var dest := Vector2i(cell_x, cell_y)
+	if not pathfinding.is_sea_cell(dest):
+		return
+	apply_fleet_move.rpc(fleet_name, cell_x, cell_y, steps)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_fleet_move(fleet_name: String, cell_x: int, cell_y: int, steps: int) -> void:
+	var fleet = get_fleet_by_id(fleet_name)
+	if fleet == null:
+		clear_pending_fleet_combine()
+		return
+	pathfinding.place_fleet_at_cell(fleet, Vector2i(cell_x, cell_y))
+	fleet.movement_left -= steps
+	pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
+	for fid in fleet.aboard_force_ids:
+		clear_force_hunger_if_relieved(str(fid))
+	_try_open_pending_fleet_combine(fleet_name)
+
+
+func do_fleet_embark(fleet_id: String, army_force_id: String) -> void:
+	request_fleet_embark.rpc_id(1, fleet_id, army_force_id, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_fleet_embark(fleet_id: String, army_force_id: String, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var fleet = get_fleet_by_id(fleet_id)
+	if fleet == null or int(fleet.player_owner) != player_id:
+		return
+	if fleet.movement_left < GlobalUnits.TRANSPORT_EMBARK_MP:
+		return
+	if not forces.has(army_force_id):
+		return
+	var loc: Dictionary = forces[army_force_id].get("location", {})
+	if str(loc.get("kind", "")) != "cell":
+		return
+	var army = armies.get_node_or_null(army_force_id)
+	if army == null:
+		return
+	if not pathfinding.are_armies_adjacent(fleet, army):
+		return
+	var army_ctrl := get_force_controller(army_force_id)
+	if not are_friendly_players(player_id, army_ctrl):
+		return
+	var men := GlobalUnits.total_men(forces[army_force_id]["units"])
+	if men <= 0 or men > fleet.free_capacity():
+		return
+	apply_fleet_embark.rpc(fleet_id, army_force_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_fleet_embark(fleet_id: String, army_force_id: String) -> void:
+	var fleet = get_fleet_by_id(fleet_id)
+	if fleet == null or not forces.has(army_force_id):
+		return
+	var fig = armies.get_node_or_null(army_force_id)
+	if fig != null:
+		armies.remove_child(fig)
+		fig.queue_free()
+	forces[army_force_id]["location"] = {"kind": "aboard", "fleet": fleet_id}
+	if not fleet.aboard_force_ids.has(army_force_id):
+		fleet.aboard_force_ids.append(army_force_id)
+	fleet.movement_left = maxi(0, fleet.movement_left - GlobalUnits.TRANSPORT_EMBARK_MP)
+	clear_force_siege(army_force_id)
+	pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
+	_sync_force_hunger_fx(army_force_id)
+	refresh_all_vip_crowns()
+
+
+func do_fleet_disembark(fleet_id: String, army_force_id: String, cell: Vector2i) -> void:
+	request_fleet_disembark.rpc_id(1, fleet_id, army_force_id, cell.x, cell.y, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_fleet_disembark(
+	fleet_id: String, army_force_id: String, cell_x: int, cell_y: int, player_id: int
+) -> void:
+	if not multiplayer.is_server():
+		return
+	var fleet = get_fleet_by_id(fleet_id)
+	if fleet == null or int(fleet.player_owner) != player_id:
+		return
+	if fleet.movement_left < GlobalUnits.TRANSPORT_EMBARK_MP:
+		return
+	if not forces.has(army_force_id):
+		return
+	if not fleet.aboard_force_ids.has(army_force_id):
+		return
+	var dest := Vector2i(cell_x, cell_y)
+	if not pathfinding.walkable_cells.has(dest) or pathfinding.occupancy.has(dest):
+		return
+	var fleet_cell = pathfinding.get_army_cell(fleet)
+	if not pathfinding._cells_edge_adjacent(fleet_cell, dest):
+		return
+	var ctrl := get_force_controller(army_force_id)
+	var mp_left := 0
+	apply_fleet_disembark.rpc(fleet_id, army_force_id, cell_x, cell_y, ctrl, mp_left)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_fleet_disembark(
+	fleet_id: String,
+	army_force_id: String,
+	cell_x: int,
+	cell_y: int,
+	controller: int,
+	starting_mp: int
+) -> void:
+	var fleet = get_fleet_by_id(fleet_id)
+	if fleet == null or not forces.has(army_force_id):
+		return
+	fleet.aboard_force_ids.erase(army_force_id)
+	fleet.movement_left = maxi(0, fleet.movement_left - GlobalUnits.TRANSPORT_EMBARK_MP)
+	var cargo: Dictionary = forces[army_force_id].get("cargo", GlobalUnits.empty_caravan_cargo())
+	# Re-spawn land figure; keep same force_id and cargo/VIPs.
+	var fig = ARMY_FIGURE_SCENE.instantiate()
+	fig.name = army_force_id
+	armies.add_child(fig)
+	fig.base_map = self
+	forces[army_force_id]["location"] = {"kind": "cell"}
+	forces[army_force_id]["controller"] = controller
+	forces[army_force_id]["cargo"] = cargo
+	fig.bind_force(army_force_id)
+	pathfinding.place_army_at_cell(fig, Vector2i(cell_x, cell_y))
+	fig.movement_left = clampi(starting_mp, 0, fig.effective_max_mp())
+	pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
+	_sync_force_hunger_fx(army_force_id)
+	refresh_all_vip_crowns()
+
+
+func do_fleet_combine(keep_id: String, absorb_id: String) -> void:
+	request_fleet_combine.rpc_id(1, keep_id, absorb_id, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_fleet_combine(keep_id: String, absorb_id: String, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	if keep_id == absorb_id:
+		return
+	var keep = get_fleet_by_id(keep_id)
+	var absorb = get_fleet_by_id(absorb_id)
+	if keep == null or absorb == null:
+		return
+	if int(keep.player_owner) != player_id or int(absorb.player_owner) != player_id:
+		return
+	if pathfinding.get_army_cell(keep) != pathfinding.get_army_cell(absorb):
+		# Allow combine when adjacent: move absorb onto keep first via apply.
+		if not pathfinding.are_armies_adjacent(keep, absorb):
+			return
+	apply_fleet_combine.rpc(keep_id, absorb_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_fleet_combine(keep_id: String, absorb_id: String) -> void:
+	var keep = get_fleet_by_id(keep_id)
+	var absorb = get_fleet_by_id(absorb_id)
+	if keep == null or absorb == null or keep_id == absorb_id:
+		return
+	var keep_cell = pathfinding.get_army_cell(keep)
+	pathfinding.place_fleet_at_cell(absorb, keep_cell)
+	keep.ship_count += absorb.ship_count
+	for fid in absorb.aboard_force_ids:
+		if not keep.aboard_force_ids.has(fid):
+			keep.aboard_force_ids.append(fid)
+		if forces.has(fid):
+			forces[fid]["location"] = {"kind": "aboard", "fleet": keep_id}
+	keep.movement_left = mini(keep.movement_left, absorb.movement_left)
+	fleets.remove_child(absorb)
+	absorb.queue_free()
+	pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
+
+
+func do_fleet_stack_move(mover_id: String, dest: Vector2i) -> void:
+	var fleet = get_fleet_by_id(mover_id)
+	if fleet == null:
+		return
+	var from_cell = pathfinding.get_army_cell(fleet)
+	if from_cell == dest:
+		return
+	if not pathfinding._cells_edge_adjacent(from_cell, dest):
+		return
+	if not pathfinding.is_sea_cell(dest):
+		return
+	var cost = pathfinding.enter_cost(dest, fleet)
+	if fleet.movement_left < cost:
+		return
+	request_fleet_move.rpc_id(1, mover_id, dest.x, dest.y, cost)
+
+
+func do_fleet_split(fleet_id: String, ships_off: int) -> void:
+	request_fleet_split.rpc_id(1, fleet_id, ships_off, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_fleet_split(fleet_id: String, ships_off: int, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var fleet = get_fleet_by_id(fleet_id)
+	if fleet == null or int(fleet.player_owner) != player_id:
+		return
+	if fleet.has_army_aboard():
+		return
+	ships_off = clampi(ships_off, 1, fleet.ship_count - 1)
+	if ships_off <= 0 or fleet.ship_count - ships_off < 1:
+		return
+	_next_fleet_id += 1
+	var new_id := "fl_%d" % _next_fleet_id
+	var cell = pathfinding.get_army_cell(fleet)
+	apply_fleet_split.rpc(fleet_id, new_id, ships_off, cell.x, cell.y, fleet.movement_left)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_fleet_split(
+	fleet_id: String,
+	new_id: String,
+	ships_off: int,
+	cell_x: int,
+	cell_y: int,
+	mp_left: int
+) -> void:
+	var fleet = get_fleet_by_id(fleet_id)
+	if fleet == null or fleet.has_army_aboard():
+		return
+	if ships_off <= 0 or ships_off >= fleet.ship_count:
+		return
+	fleet.ship_count -= ships_off
+	_spawn_fleet(new_id, fleet.player_owner, ships_off, Vector2i(cell_x, cell_y), mp_left)
+
+
+func do_fleet_disband(fleet_id: String) -> void:
+	request_fleet_disband.rpc_id(1, fleet_id, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_fleet_disband(fleet_id: String, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var fleet = get_fleet_by_id(fleet_id)
+	if fleet == null or int(fleet.player_owner) != player_id:
+		return
+	if fleet.has_army_aboard():
+		return
+	apply_fleet_disband.rpc(fleet_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_fleet_disband(fleet_id: String) -> void:
+	var fleet = get_fleet_by_id(fleet_id)
+	if fleet == null:
+		return
+	if fleet.has_army_aboard():
+		return
+	fleets.remove_child(fleet)
+	fleet.queue_free()
+	pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
+	if is_instance_valid(gui_node) and gui_node.has_method("refresh_military_tab_if_open"):
+		gui_node.refresh_military_tab_if_open()
+
+
+func force_is_aboard(fid: String) -> bool:
+	if not forces.has(fid):
+		return false
+	return str(forces[fid].get("location", {}).get("kind", "")) == "aboard"
+
+
+func get_force_fleet_id(fid: String) -> String:
+	if not force_is_aboard(fid):
+		return ""
+	return str(forces[fid].get("location", {}).get("fleet", ""))
 
 
 # --- Force mutations (merge / split / garrison), server-authoritative --------
@@ -3572,6 +4335,9 @@ func request_garrison_units(source_id: String, building_key: String, spot: int, 
 	if !multiplayer.is_server():
 		return
 	if not forces.has(source_id):
+		return
+	var building = _building_from_key(building_key)
+	if building != null and building.has_method("is_army_interactable") and not building.is_army_interactable():
 		return
 	# Server validation: garrisoning costs 1 MP.
 	var sfig = armies.get_node_or_null(source_id)
@@ -4549,6 +5315,129 @@ func apply_buy_from_merchant(
 	if is_instance_valid(gui_node):
 		if player_id == my_pl_id:
 			gui_node.update_money(players[my_pl_id].game_data["marks"])
+			if gui_node.has_method("refresh_merchant_shop_if_open"):
+				gui_node.refresh_merchant_shop_if_open()
+		update_menus()
+
+
+func _merchant_cart_total_sell(weapons: Dictionary, materials: Dictionary, competition: bool) -> int:
+	var total := 0
+	for k in GlobalUnits.WEAPON_KEYS:
+		var amt := int(weapons.get(k, 0))
+		if amt > 0:
+			total += GlobalUnits.weapon_mark_sell_price(k, competition) * amt
+	for k in GlobalUnits.MATERIAL_KEYS:
+		var amt := int(materials.get(k, 0))
+		if amt > 0:
+			total += GlobalUnits.material_mark_sell_price(k, competition) * amt
+	return total
+
+
+func do_sell_to_merchant(merchant_id: String, weapons: Dictionary, materials: Dictionary) -> void:
+	var m := get_merchant_by_id(merchant_id)
+	if m == null:
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Merchant not found")
+		return
+	var prov = m.get("province")
+	if prov == null or not prov.has_method("has_dejure") or not prov.has_dejure(my_pl_id):
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Only the de jure owner can view the merchant")
+		return
+	var competition := merchant_competition_in_province(prov)
+	var total_payout := _merchant_cart_total_sell(weapons, materials, competition)
+	if total_payout <= 0:
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Select items to sell")
+		return
+	if not prov.has_method("can_afford_caravan_cargo") or not prov.can_afford_caravan_cargo(my_pl_id, _merchant_sell_cargo(weapons, materials)):
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Not enough stock to sell")
+		return
+	request_sell_to_merchant.rpc_id(1, merchant_id, weapons, materials, my_pl_id)
+
+
+func _merchant_sell_cargo(weapons: Dictionary, materials: Dictionary) -> Dictionary:
+	var cargo := {}
+	for k in GlobalUnits.WEAPON_KEYS:
+		cargo[k] = maxi(0, int(weapons.get(k, 0)))
+	for k in GlobalUnits.MATERIAL_KEYS:
+		cargo[k] = maxi(0, int(materials.get(k, 0)))
+	return cargo
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_sell_to_merchant(
+	merchant_id: String,
+	weapons: Dictionary,
+	materials: Dictionary,
+	player_id: int
+) -> void:
+	if not multiplayer.is_server():
+		return
+	if not players.has(player_id):
+		return
+	var m := get_merchant_by_id(merchant_id)
+	if m == null:
+		return
+	var prov = m.get("province")
+	if prov == null or not prov.has_method("has_dejure") or not prov.has_dejure(player_id):
+		return
+	if not prov.has_method("can_afford_caravan_cargo") or not prov.has_method("subtract_caravan_cargo"):
+		return
+	var competition := merchant_competition_in_province(prov)
+	var cleaned_w := GlobalUnits.empty_weapon_stock()
+	for k in GlobalUnits.WEAPON_KEYS:
+		cleaned_w[k] = maxi(0, int(weapons.get(k, 0)))
+	var cleaned_m := GlobalUnits.empty_material_stock()
+	for k in GlobalUnits.MATERIAL_KEYS:
+		cleaned_m[k] = maxi(0, int(materials.get(k, 0)))
+	# Clamp to available stock.
+	if prov.has_method("get_weapons_for"):
+		var avail_w: Dictionary = prov.get_weapons_for(player_id)
+		for k in GlobalUnits.WEAPON_KEYS:
+			cleaned_w[k] = mini(cleaned_w[k], maxi(0, int(avail_w.get(k, 0))))
+	for k in GlobalUnits.MATERIAL_KEYS:
+		if prov.has_method("get_player_material"):
+			cleaned_m[k] = mini(cleaned_m[k], maxi(0, prov.get_player_material(player_id, k)))
+	var total_payout := _merchant_cart_total_sell(cleaned_w, cleaned_m, competition)
+	if total_payout <= 0:
+		return
+	var cargo := _merchant_sell_cargo(cleaned_w, cleaned_m)
+	if not prov.can_afford_caravan_cargo(player_id, cargo):
+		return
+	apply_sell_to_merchant.rpc(merchant_id, cleaned_w, cleaned_m, player_id, total_payout)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_sell_to_merchant(
+	merchant_id: String,
+	weapons: Dictionary,
+	materials: Dictionary,
+	player_id: int,
+	total_payout: int
+) -> void:
+	var m := get_merchant_by_id(merchant_id)
+	if m == null:
+		return
+	var prov = m.get("province")
+	if prov == null or not prov.has_method("subtract_caravan_cargo"):
+		return
+	if not players.has(player_id):
+		return
+	if total_payout <= 0:
+		return
+	var cargo := _merchant_sell_cargo(weapons, materials)
+	if not prov.can_afford_caravan_cargo(player_id, cargo):
+		return
+	prov.subtract_caravan_cargo(player_id, cargo)
+	var marks := int(players[player_id].game_data.get("marks", 0))
+	players[player_id].game_data["marks"] = marks + total_payout
+	if is_instance_valid(gui_node):
+		if player_id == my_pl_id:
+			gui_node.update_money(players[my_pl_id].game_data["marks"])
+			if gui_node.has_method("refresh_merchant_shop_if_open"):
+				gui_node.refresh_merchant_shop_if_open()
 		update_menus()
 
 
@@ -4759,10 +5648,10 @@ func find_province_for_cell(cell: Vector2i) -> Node:
 
 
 func get_force_province(force_id: String) -> Node:
-	var fig = armies.get_node_or_null(force_id)
-	if fig == null:
+	var cell := _force_anchor_cell(force_id)
+	if cell == Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
 		return null
-	return find_province_for_cell(pathfinding.get_army_cell(fig))
+	return find_province_for_cell(cell)
 
 
 ## Client helper: true if disbanding here refunds weapons to province stock.
@@ -4895,6 +5784,9 @@ func apply_recruit_levy(
 	# -1 = full effective MP for the new levy this turn.
 	_spawn_army_figure(new_id, units, Vector2i(cell_x, cell_y), -1, player_id)
 	update_players_population()
+	# Live settlement/castle marks bonuses follow population immediately.
+	if prov.has_method("recalculate_marks_will_by_player"):
+		prov.recalculate_marks_will_by_player()
 	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
 		gui_node.update_economy_menu(self)
 
@@ -5372,14 +6264,22 @@ func request_disband_force(force_id: String) -> void:
 	if not forces.has(force_id):
 		return
 	var fig = armies.get_node_or_null(force_id)
-	if fig == null:
+	var army_cell: Vector2i
+	if fig != null:
+		army_cell = pathfinding.get_army_cell(fig)
+	elif force_is_aboard(force_id):
+		# Disbanding while at sea: place foreign remnants on nearby land if any.
+		var fleet_cell := _force_anchor_cell(force_id)
+		army_cell = pathfinding.get_free_adjacent_cell(fleet_cell)
+		if army_cell == Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
+			army_cell = fleet_cell
+	else:
 		return
 
 	var units: Array = forces[force_id]["units"]
 	var disbanding_player: int = get_force_controller(force_id)
 	if disbanding_player < 0:
 		disbanding_player = GlobalUnits.primary_owner(units)
-	var army_cell = pathfinding.get_army_cell(fig)
 
 	# --- Build foreign-owner spawns -----------------------------------------
 	var foreign_owners: Array = []
@@ -5465,6 +6365,11 @@ func apply_disband_force(
 
 	# Remove the disbanding army.
 	if forces.has(force_id):
+		var loc: Dictionary = forces[force_id].get("location", {})
+		if str(loc.get("kind", "")) == "aboard":
+			var fleet := get_fleet_by_id(str(loc.get("fleet", "")))
+			if fleet != null:
+				fleet.aboard_force_ids.erase(force_id)
 		forces.erase(force_id)
 	var fig = armies.get_node_or_null(force_id)
 	if fig != null:
@@ -5567,6 +6472,9 @@ func _spawn_army_figure(new_id: String, units: Array, cell: Vector2i, starting_m
 func reset_all_army_movement() -> void:
 	for army in armies.get_children():
 		army.reset_movement()
+	if fleets != null:
+		for f in fleets.get_children():
+			f.reset_movement()
 
 
 func update_all_army_visuals() -> void:
@@ -5575,6 +6483,9 @@ func update_all_army_visuals() -> void:
 	if caravans != null:
 		for c in caravans.get_children():
 			c.set_greyed(c.is_controllable_by(my_pl_id) and c.movement_left <= 0)
+	if fleets != null:
+		for f in fleets.get_children():
+			f.set_greyed(f.is_controllable_by(my_pl_id) and f.movement_left <= 0)
 
 
 func get_objects_with_pathfinding_blocked_tiles() -> Array:
@@ -5681,10 +6592,15 @@ func calculate_new_turn_game_data():
 	#calculate and then display the new data
 	add_resources()
 	tick_army_upkeep()
+	# Clear province-fed flags, feed local armies + civilians from granaries, then cargo food.
+	_clear_province_fed_flags()
+	tick_all_province_rations()
 	tick_army_food()
 	for prov in provinces.get_children():
 		if prov.has_method("snapshot_season_start"):
 			prov.snapshot_season_start()
+	# Settlement sprites lag one turn behind live population tiers.
+	refresh_all_settlement_visual_stages()
 	update_visuals_and_stats()
 	province_borders.rebuild()
 	build_province_neighbors()
@@ -5698,6 +6614,124 @@ func tick_all_agriculture() -> void:
 	for prov in provinces.get_children():
 		if prov.has_method("tick_agriculture"):
 			prov.tick_agriculture(ended_season, new_season, rng)
+
+
+func _clear_province_fed_flags() -> void:
+	for fid in forces:
+		if forces[fid].has("province_fed"):
+			forces[fid]["province_fed"] = false
+
+
+## Seasonal grain need for this player's forces currently in `prov`.
+func province_army_grain_need(prov: Node, player_id: int) -> int:
+	var total := 0
+	for fid in forces:
+		if get_force_controller(fid) != player_id:
+			continue
+		if province_under_force(fid) != prov:
+			continue
+		var men := GlobalUnits.total_men(forces[fid]["units"])
+		if men <= 0:
+			continue
+		total += GlobalUnits.force_grain_need(men, force_is_garrison(fid))
+	return total
+
+
+## Spend up to `budget` grain feeding this player's forces in `prov` (full need each).
+## Marks fed forces with province_fed. Returns grain spent (caller debits stock).
+func feed_province_armies_from_stock(prov: Node, player_id: int, budget: int) -> int:
+	var left := maxi(0, budget)
+	var spent := 0
+	var fids: Array = forces.keys()
+	fids.sort() # stable order across peers
+	for fid in fids:
+		if not forces.has(fid):
+			continue
+		if get_force_controller(fid) != player_id:
+			continue
+		if province_under_force(fid) != prov:
+			continue
+		var men := GlobalUnits.total_men(forces[fid]["units"])
+		if men <= 0:
+			continue
+		var need := GlobalUnits.force_grain_need(men, force_is_garrison(fid))
+		if need <= 0:
+			forces[fid]["province_fed"] = true
+			forces[fid]["food_shortfall_streak"] = 0
+			continue
+		if need > left:
+			continue
+		left -= need
+		spent += need
+		forces[fid]["province_fed"] = true
+		forces[fid]["food_shortfall_streak"] = 0
+		_sync_force_hunger_fx(fid)
+	return spent
+
+
+func tick_all_province_rations() -> void:
+	var shrinks_by_player: Dictionary = {}
+	# Seeded so over-cap pop jitter stays in sync across peers.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash("%s-%s-rations" % [turn, int(season)])
+	var prov_list: Array = provinces.get_children()
+	prov_list.sort_custom(func(a, b) -> bool: return String(a.name) < String(b.name))
+	for prov in prov_list:
+		if not prov.has_method("tick_rations"):
+			continue
+		var reports: Dictionary = prov.tick_rations(rng)
+		for pid in reports:
+			var key := int(pid)
+			if not shrinks_by_player.has(key):
+				shrinks_by_player[key] = []
+			for entry in reports[pid]:
+				shrinks_by_player[key].append(entry)
+	for pid in shrinks_by_player:
+		_make_civilian_food_event(int(pid), shrinks_by_player[pid])
+
+
+func _make_civilian_food_event(player_id: int, entries: Array) -> void:
+	if entries.is_empty():
+		return
+	var lines: PackedStringArray = []
+	lines.append("Population fell in your holdings after last season's rations:")
+	lines.append("")
+	var world_pos := Vector2.ZERO
+	for entry in entries:
+		var req_name := str(entry.get("ration_name", GlobalUnits.ration_name(int(entry.get("ration", 0)))))
+		var eff_name := str(entry.get("ration_effective_name", req_name))
+		var ration_txt := req_name
+		if eff_name != req_name:
+			ration_txt = "%s (fed as %s)" % [req_name, eff_name]
+		lines.append(
+			"%s: %d → %d (−%d) · grain stock %d · rations %s"
+			% [
+				str(entry.get("province_name", "Province")),
+				int(entry.get("old_pop", 0)),
+				int(entry.get("new_pop", 0)),
+				int(entry.get("dropped", 0)),
+				int(entry.get("grain_stock", 0)),
+				ration_txt,
+			]
+		)
+		if world_pos == Vector2.ZERO:
+			var prov := _get_province_by_id(str(entry.get("province_id", "")))
+			if prov != null and prov is Node2D:
+				world_pos = (prov as Node2D).global_position
+	var event := {
+		"kind": GameEvents.KIND.FOOD,
+		"food_kind": "civilian_shrink",
+		"text": "\n".join(lines),
+		"turn": turn,
+		"season": int(season),
+		"place_name": "",
+		"world_x": world_pos.x,
+		"world_y": world_pos.y,
+		"participant_ids": [player_id],
+		"actor_id": -1,
+	}
+	var eid := _register_event(event)
+	_deliver_event_to_players(eid, [player_id], -1, false)
 
 	
 func set_players_turn():
@@ -5735,6 +6769,16 @@ func bump_season_i_turn():
 		new_season = 0
 	
 	season = new_season as SEASONS
+
+func refresh_all_settlement_visual_stages() -> void:
+	for prov in provinces.get_children():
+		var container = prov.get_node_or_null("settlements")
+		if container == null:
+			continue
+		for b in container.get_children():
+			if b.has_method("refresh_visual_stage"):
+				b.refresh_visual_stage()
+
 
 func update_visuals_and_stats():
 	update_stats()
@@ -5792,12 +6836,9 @@ func recalculate_all_settlements_marks() -> void:
 
 
 func add_marks_to_players() -> void:
+	# Settlement tax no longer pays the wallet — it fills settlement coffers in
+	# tick_holding_rations. Refresh forecast only (silver mines pay via agriculture).
 	recalculate_all_settlements_marks()
-	for prov in provinces.get_children():
-		var will_by_player: Dictionary = prov.resources["marks"]["will"]
-		for player_id in will_by_player:
-			if players.has(player_id):
-				players[player_id].game_data["marks"] += int(will_by_player[player_id])
 
 
 func add_resources():
@@ -5830,7 +6871,8 @@ func force_display_name(fid: String) -> String:
 	if not forces.has(fid):
 		return "Army"
 	var loc: Dictionary = forces[fid].get("location", {})
-	if str(loc.get("kind", "")) == "garrison":
+	var kind := str(loc.get("kind", ""))
+	if kind == "garrison":
 		var b := _building_from_key(str(loc.get("building", "")))
 		var bname := _building_display_name(b) if b is Node2D else "Building"
 		var spot := int(loc.get("spot", GlobalUnits.SPOT.FLAT))
@@ -5844,6 +6886,8 @@ func force_display_name(fid: String) -> String:
 		if prov_name != "":
 			return "%s garrison — %s%s" % [bname, prov_name, spot_txt]
 		return "%s garrison%s" % [bname, spot_txt]
+	if kind == "aboard":
+		return "Army %s (aboard)" % fid
 	var fig = armies.get_node_or_null(fid)
 	var base_name := "Army %s" % str(fig.name) if fig != null else "Army %s" % fid
 	if is_force_sieging(fid):
@@ -5855,6 +6899,7 @@ func force_display_name(fid: String) -> String:
 func get_player_upkeep_preview(pid: int) -> Dictionary:
 	var levy_raw := 0.0
 	var ss_raw := 0.0
+	var ship_raw := 0.0
 	var rows: Array = []
 	for fid in forces.keys():
 		var units: Array = forces[fid]["units"]
@@ -5880,11 +6925,36 @@ func get_player_upkeep_preview(pid: int) -> Dictionary:
 			"starving": bool(food.get("starving", false)),
 			"food_warning": bool(food.get("warning", false)),
 		})
+	if fleets != null:
+		for f in fleets.get_children():
+			if int(f.player_owner) != pid:
+				continue
+			var ships := int(f.ship_count)
+			var cost := ships * GlobalUnits.UPKEEP_TRANSPORT_SHIP
+			ship_raw += float(cost)
+			rows.append({
+				"force_id": "",
+				"fleet_id": String(f.name),
+				"name": "Fleet %s (%d ships)" % [String(f.name), ships],
+				"levy": 0,
+				"sellsword": 0,
+				"ships": cost,
+				"total": cost,
+				"men": f.men_aboard() if f.has_method("men_aboard") else 0,
+				"is_garrison": false,
+				"grain": 0,
+				"grain_need": 0,
+				"food_seasons": -1,
+				"in_dejure": false,
+				"starving": false,
+				"food_warning": false,
+			})
 	rows.sort_custom(func(a, b): return str(a["name"]) < str(b["name"]))
 	return {
 		"levy": int(ceili(levy_raw)),
 		"sellsword": int(ceili(ss_raw)),
-		"total": int(ceili(levy_raw + ss_raw)),
+		"ships": int(ceili(ship_raw)),
+		"total": int(ceili(levy_raw + ss_raw + ship_raw)),
 		"forces": rows,
 		"strikes": get_upkeep_strikes(pid),
 		"pay_streak": get_upkeep_pay_streak(pid),
@@ -6099,12 +7169,28 @@ func get_force_food_info(fid: String) -> Dictionary:
 	}
 
 
+func force_uses_province_granary(fid: String) -> bool:
+	if not force_in_supply_dejure(fid):
+		return false
+	var prov = province_under_force(fid)
+	var ctrl := get_force_controller(fid)
+	return (
+		prov != null
+		and prov.has_method("player_has_holding")
+		and prov.player_has_holding(ctrl)
+	)
+
+
 func force_food_status_text(fid: String) -> String:
 	var info := get_force_food_info(fid)
 	if int(info["men"]) <= 0:
 		return "Food: —"
-	if bool(info["in_dejure"]):
+	if bool(info["in_dejure"]) and not force_uses_province_granary(fid):
 		return "Food: supplied (de jure) · grain held %d" % int(info["grain"])
+	if force_uses_province_granary(fid):
+		return "Food: provincial granary · need %d/season · cargo %d" % [
+			int(info["need"]), int(info["grain"])
+		]
 	var seasons := int(info["seasons_left"])
 	var status := "ok"
 	if bool(info["starving"]):
@@ -6182,6 +7268,8 @@ func _hunger_fx_host_for_force(fid: String) -> Node2D:
 		var loc: Dictionary = forces[fid].get("location", {})
 		var b := _building_from_key(str(loc.get("building", "")))
 		return b as Node2D
+	if force_is_aboard(fid):
+		return get_fleet_by_id(get_force_fleet_id(fid))
 	return armies.get_node_or_null(fid) as Node2D
 
 
@@ -6220,9 +7308,25 @@ func _sync_force_hunger_fx(fid: String) -> void:
 		if b is Node2D:
 			_set_hunger_drip_on(b as Node2D, _building_any_force_starving(b))
 		return
+	if force_is_aboard(fid):
+		var fleet := get_fleet_by_id(get_force_fleet_id(fid))
+		if fleet != null:
+			_set_hunger_drip_on(fleet, _fleet_any_force_starving(fleet))
+		return
 	var starving := int(forces[fid].get("food_shortfall_streak", 0)) >= 2
 	var fig := armies.get_node_or_null(fid) as Node2D
 	_set_hunger_drip_on(fig, starving)
+
+
+func _fleet_any_force_starving(fleet: Node2D) -> bool:
+	if fleet == null:
+		return false
+	for afid in fleet.aboard_force_ids:
+		if not forces.has(afid):
+			continue
+		if int(forces[afid].get("food_shortfall_streak", 0)) >= 2:
+			return true
+	return false
 
 
 func tick_army_food() -> void:
@@ -6236,10 +7340,25 @@ func tick_army_food() -> void:
 			forces[fid]["food_shortfall_streak"] = 0
 			_sync_force_hunger_fx(fid)
 			continue
-		if force_in_supply_dejure(fid):
+		# Already fed from the provincial granary this season.
+		if bool(forces[fid].get("province_fed", false)):
 			forces[fid]["food_shortfall_streak"] = 0
 			_sync_force_hunger_fx(fid)
 			continue
+		# De jure supply is free only when the controller has no holding granary here
+		# (otherwise armies eat from stock before civilians — see tick_holding_rations).
+		if force_in_supply_dejure(fid):
+			var home_prov = province_under_force(fid)
+			var ctrl := get_force_controller(fid)
+			var has_granary = (
+				home_prov != null
+				and home_prov.has_method("player_has_holding")
+				and home_prov.player_has_holding(ctrl)
+			)
+			if not has_granary:
+				forces[fid]["food_shortfall_streak"] = 0
+				_sync_force_hunger_fx(fid)
+				continue
 
 		var is_g := force_is_garrison(fid)
 		var bkey := ""
@@ -6401,6 +7520,135 @@ func apply_populate_idle_fields(province_id: String, crop: int, player_id: int) 
 		update_menus()
 
 
+func do_set_holding_tax(province_id: String, level: int) -> void:
+	request_set_holding_tax.rpc_id(1, province_id, level, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_set_holding_tax(province_id: String, level: int, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var prov := _get_province_by_id(province_id)
+	if prov == null or not prov.has_method("set_holding_tax"):
+		return
+	if not prov.player_has_holding(player_id):
+		return
+	apply_set_holding_tax.rpc(province_id, GlobalUnits.clamp_tax(level), player_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_set_holding_tax(province_id: String, level: int, player_id: int) -> void:
+	var prov := _get_province_by_id(province_id)
+	if prov == null or not prov.has_method("set_holding_tax"):
+		return
+	prov.set_holding_tax(player_id, level)
+	if prov.has_method("recalculate_marks_will_by_player"):
+		prov.recalculate_marks_will_by_player()
+	if prov.has_method("recalculate_settlements_growth"):
+		prov.recalculate_settlements_growth()
+	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
+		gui_node.update_economy_menu(self)
+
+
+func can_collect_settlement_tax(force_id: String, building: Node) -> bool:
+	if not forces.has(force_id) or building == null:
+		return false
+	if force_is_garrison(force_id) or force_is_aboard(force_id):
+		return false
+	var type_ = building.get("type_")
+	if type_ != GlobalStuff.BUILDING_TYPE.TOWN and type_ != GlobalStuff.BUILDING_TYPE.VILLAGE:
+		return false
+	if is_building_razed(building):
+		return false
+	var ctrl := get_force_controller(force_id)
+	if building.get("player_owner") == null or int(building.player_owner) != ctrl:
+		return false
+	if settlement_tax_marks(building) <= 0:
+		return false
+	return force_has_movement(force_id, GlobalUnits.TAX_COLLECT_MP)
+
+
+func do_collect_settlement_tax(force_id: String, building: Node) -> void:
+	if building == null:
+		return
+	request_collect_settlement_tax.rpc_id(1, force_id, _building_key(building), my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_collect_settlement_tax(force_id: String, building_key: String, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	if not forces.has(force_id):
+		return
+	if get_force_controller(force_id) != player_id:
+		return
+	var building = _building_from_key(building_key)
+	if building == null or not can_collect_settlement_tax(force_id, building):
+		return
+	var amount := settlement_tax_marks(building)
+	if amount <= 0:
+		return
+	apply_collect_settlement_tax.rpc(force_id, building_key, player_id, amount)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_collect_settlement_tax(
+	force_id: String, building_key: String, player_id: int, amount: int
+) -> void:
+	var building = _building_from_key(building_key)
+	if building == null or not forces.has(force_id):
+		return
+	if get_force_controller(force_id) != player_id:
+		return
+	if building.get("player_owner") == null or int(building.player_owner) != player_id:
+		return
+	var have := settlement_tax_marks(building)
+	var take := mini(have, maxi(0, amount))
+	if take <= 0:
+		return
+	if not spend_force_movement(force_id, GlobalUnits.TAX_COLLECT_MP):
+		return
+	building.tax_marks = have - take
+	if players.has(player_id):
+		players[player_id].game_data["marks"] = int(players[player_id].game_data.get("marks", 0)) + take
+	if is_instance_valid(gui_node):
+		gui_node.show_info_popup("Collected %d marks in tax" % take)
+		if players.has(my_pl_id):
+			gui_node.update_money(players[my_pl_id].game_data["marks"])
+		if gui_node.has_method("refresh_army_menu_if_force"):
+			gui_node.refresh_army_menu_if_force(force_id)
+		if gui_node.has_method("update_economy_menu"):
+			gui_node.update_economy_menu(self)
+
+
+func do_set_holding_ration(province_id: String, level: int) -> void:
+	request_set_holding_ration.rpc_id(1, province_id, level, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_set_holding_ration(province_id: String, level: int, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var prov := _get_province_by_id(province_id)
+	if prov == null or not prov.has_method("set_holding_ration"):
+		return
+	if not prov.player_has_holding(player_id):
+		return
+	apply_set_holding_ration.rpc(province_id, GlobalUnits.clamp_ration(level), player_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_set_holding_ration(province_id: String, level: int, player_id: int) -> void:
+	var prov := _get_province_by_id(province_id)
+	if prov == null or not prov.has_method("set_holding_ration"):
+		return
+	prov.set_holding_ration(player_id, level)
+	if prov.has_method("recalculate_settlements_growth"):
+		prov.recalculate_settlements_growth()
+	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
+		gui_node.update_economy_menu(self)
+
+
 func do_set_holding_labor(province_id: String, amount: int) -> void:
 	# Legacy: treat as grain category.
 	do_set_holding_labor_category(province_id, "grain", amount)
@@ -6489,6 +7737,62 @@ func apply_build_economy(building_key: String, subtype: int, player_id: int, cos
 		update_menus()
 
 
+func do_upgrade_economy(building: Node) -> void:
+	if building == null:
+		return
+	request_upgrade_economy.rpc_id(1, _building_key(building), my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_upgrade_economy(building_key: String, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	if not players.has(player_id):
+		return
+	var building = _building_from_key(building_key)
+	if building == null or building.get("type_") == null:
+		return
+	if int(building.type_) != GlobalStuff.BUILDING_TYPE.ECONOMY:
+		return
+	var prov := find_province_for_building(building)
+	if prov == null or not prov.has_dejure(player_id):
+		return
+	if int(building.get("player_owner")) != player_id:
+		return
+	if not building.has_method("can_upgrade") or not building.can_upgrade():
+		return
+	var cost := int(building.upgrade_cost())
+	var marks := int(players[player_id].game_data.get("marks", 0))
+	if marks < cost:
+		return
+	apply_upgrade_economy.rpc(building_key, player_id, cost)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_upgrade_economy(building_key: String, player_id: int, cost: int) -> void:
+	var building = _building_from_key(building_key)
+	if building == null or not building.has_method("apply_upgrade"):
+		return
+	if not players.has(player_id):
+		return
+	var marks := int(players[player_id].game_data.get("marks", 0))
+	if marks < cost:
+		return
+	players[player_id].game_data["marks"] = marks - cost
+	building.apply_upgrade()
+	var prov := find_province_for_building(building)
+	if prov != null and prov.has_method("_update_material_will"):
+		prov._update_material_will()
+	if player_id == my_pl_id and is_instance_valid(gui_node):
+		gui_node.update_money(players[my_pl_id].game_data["marks"])
+	if is_instance_valid(gui_node):
+		if gui_node.has_method("refresh_economy_building_popup_if"):
+			gui_node.refresh_economy_building_popup_if(self, building)
+		if gui_node.has_method("update_economy_menu"):
+			gui_node.update_economy_menu(self)
+		update_menus()
+
+
 func do_set_blacksmith_recipe(building: Node, weapon_key: String) -> void:
 	if building == null:
 		return
@@ -6571,6 +7875,145 @@ func apply_demolish_economy(building_key: String) -> void:
 		if gui_node.has_method("refresh_economy_building_popup_if"):
 			gui_node.refresh_economy_building_popup_if(self, building)
 		update_menus()
+
+
+# --- Castle construction ----------------------------------------------------
+
+func do_retarget_castle(building: Node, target_level: int) -> void:
+	if building == null:
+		return
+	request_retarget_castle.rpc_id(1, _building_key(building), target_level, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_retarget_castle(building_key: String, target_level: int, player_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	if not players.has(player_id):
+		return
+	var building = _building_from_key(building_key)
+	if building == null or building.get("type_") == null:
+		return
+	if int(building.type_) != GlobalStuff.BUILDING_TYPE.CASTLE:
+		return
+	if not building.has_method("preview_retarget"):
+		return
+	var prov := find_province_for_building(building)
+	if prov == null or not prov.has_dejure(player_id):
+		return
+	var preview: Dictionary = building.preview_retarget(target_level)
+	if preview.is_empty():
+		return
+	var pay: Dictionary = preview.get("pay", {})
+	for key in ["wood", "stone"]:
+		var need := int(pay.get(key, 0))
+		if need > 0 and prov.get_player_material(player_id, key) < need:
+			return
+	apply_retarget_castle.rpc(building_key, target_level, player_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_retarget_castle(building_key: String, target_level: int, player_id: int) -> void:
+	var building = _building_from_key(building_key)
+	if building == null or not building.has_method("preview_retarget"):
+		return
+	var prov := find_province_for_building(building)
+	if prov == null:
+		return
+	var preview: Dictionary = building.preview_retarget(target_level)
+	if preview.is_empty():
+		return
+	var pay: Dictionary = preview.get("pay", {})
+	for key in ["wood", "stone"]:
+		var need := int(pay.get(key, 0))
+		if need > 0:
+			if prov.get_player_material(player_id, key) < need:
+				return
+	for key in ["wood", "stone"]:
+		var need := int(pay.get(key, 0))
+		if need > 0:
+			prov.add_player_material(player_id, key, -need)
+	var expel := bool(preview.get("expel", false))
+	if expel:
+		_expel_all_castle_garrison(building, player_id)
+	building.apply_retarget_state(target_level, preview)
+	if bool(preview.get("complete_immediately", false)):
+		var refund: Dictionary = building.take_completion_refund()
+		for key in ["wood", "stone"]:
+			var amt := int(refund.get(key, 0))
+			if amt > 0:
+				prov.add_player_material(player_id, key, amt)
+	for pid in prov.get_holding_controllers():
+		prov.clamp_all_labor(pid, int(season))
+	if prov.has_method("_update_material_will"):
+		prov._update_material_will()
+	building.player_owner = player_id
+	if building.has_method("set_flags"):
+		building.set_flags()
+	if is_instance_valid(gui_node):
+		if gui_node.has_method("refresh_castle_popup_if"):
+			gui_node.refresh_castle_popup_if(self, building)
+		update_menus()
+
+
+## Dump every garrison stack onto the nearest free map tiles (BFS from approach).
+func _expel_all_castle_garrison(building: Node, fallback_controller: int) -> void:
+	if building == null:
+		return
+	var all_units: Array = get_all_building_garrison(building)
+	if GlobalUnits.total_men(all_units) <= 0:
+		return
+	var cell := get_nearest_free_cell_for_building(building)
+	if cell == Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
+		return
+	var building_key := _building_key(building)
+	var vip_ids: Array = []
+	var merged_cargo := GlobalUnits.empty_caravan_cargo()
+	for fid in _building_garrison_force_ids(building):
+		for vid in get_vips_on_force(fid):
+			vip_ids.append(vid)
+		merged_cargo = GlobalUnits.add_caravan_stocks(merged_cargo, get_force_cargo(str(fid)))
+	for spot in [GlobalUnits.SPOT.INSIDE, GlobalUnits.SPOT.OUTSIDE]:
+		var gid := _garrison_force_id(building_key, spot)
+		if forces.has(gid):
+			forces.erase(gid)
+	_next_runtime_force += 1
+	var new_id := "rt_%d" % _next_runtime_force
+	var controller := GlobalUnits.primary_owner(all_units)
+	if controller < 0:
+		controller = fallback_controller
+	_spawn_army_figure(new_id, all_units, cell, 0, controller)
+	set_force_cargo(new_id, merged_cargo)
+	move_vips_to_force(vip_ids, new_id)
+	pathfinding.rebuild_occupancy()
+	refresh_building_flags(building_key)
+	update_all_army_visuals()
+	refresh_all_vip_crowns()
+
+
+## Nearest walkable unoccupied cell, searching outward from approach cells.
+func get_nearest_free_cell_for_building(b: Node) -> Vector2i:
+	var approach_cells = pathfinding.get_approach_cells(b)
+	var queue: Array[Vector2i] = []
+	var seen := {}
+	for c in approach_cells:
+		queue.append(c)
+		seen[c] = true
+	var i := 0
+	while i < queue.size():
+		var cell: Vector2i = queue[i]
+		i += 1
+		if pathfinding.walkable_cells.has(cell) and not pathfinding.occupancy.has(cell):
+			return cell
+		for dir in pathfinding.EDGE_DIRS:
+			var n: Vector2i = cell + dir
+			if seen.has(n):
+				continue
+			if not pathfinding.walkable_cells.has(n):
+				continue
+			seen[n] = true
+			queue.append(n)
+	return Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
 
 
 func _provinces_for_player(player_id: int) -> Array:

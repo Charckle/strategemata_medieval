@@ -30,6 +30,10 @@ shape = SubResource("ConvexPolygonShape2D_70b0n")
 [node name="Flag" parent="." unique_id=1751259942 instance=ExtResource("4_flag")]
 position = Vector2(65, 4)
 
+[node name="OutsideFlag" parent="." instance=ExtResource("4_flag")]
+position = Vector2(22, 36)
+banner_pids_method = "get_outside_banner_pids"
+
 [node name="crown" type="Sprite2D" parent="." unique_id=1979882948]
 visible = false
 position = Vector2(65, 1)

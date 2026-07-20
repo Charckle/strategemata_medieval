@@ -71,14 +71,22 @@ func is_built() -> bool:
 	return st != int(STAGES.EMPTY) and st != int(STAGES.RAZED)
 
 
+func _stage_index() -> int:
+	## 0=Small, 1=Medium, 2=Big; -1 if not a sized built stage.
+	match int(stage):
+		1: return 0 # SMALL
+		2: return 1 # MEDIUM
+		3: return 2 # BIG
+		_: return -1
+
+
 func worker_cap() -> int:
 	if not is_built():
 		return 0
-	match int(stage):
-		1: return GlobalUnits.ECONOMY_WORKERS_SMALL # SMALL
-		2: return GlobalUnits.ECONOMY_WORKERS_MEDIUM
-		3: return GlobalUnits.ECONOMY_WORKERS_BIG
-		_: return GlobalUnits.ECONOMY_WORKERS_SMALL
+	var idx := _stage_index()
+	if idx < 0:
+		return GlobalUnits.economy_workers_for(int(subtype), 0)
+	return GlobalUnits.economy_workers_for(int(subtype), idx)
 
 
 func labor_category() -> String:
@@ -106,16 +114,33 @@ func allowed_build_subtypes() -> Array:
 
 
 func build_cost_for(sub: int) -> int:
-	match sub as SUBTYPES:
-		SUBTYPES.WOODCUTTER: return GlobalUnits.ECONOMY_COST_WOODCUTTER
-		SUBTYPES.BLACKSMITH: return GlobalUnits.ECONOMY_COST_BLACKSMITH
-		SUBTYPES.STONEQUARRY, SUBTYPES.IRONMINE, SUBTYPES.SILVERMINE:
-			return GlobalUnits.ECONOMY_COST_MINE
-		_: return 0
+	return GlobalUnits.economy_stage_cost(sub, 0)
 
 
 func can_build(sub: int) -> bool:
 	return allowed_build_subtypes().has(sub as SUBTYPES)
+
+
+func can_upgrade() -> bool:
+	if not is_built():
+		return false
+	var idx := _stage_index()
+	return idx == 0 or idx == 1
+
+
+func next_stage() -> int:
+	match int(stage):
+		1: return int(STAGES.MEDIUM) # SMALL → MEDIUM
+		2: return int(STAGES.BIG) # MEDIUM → BIG
+		_: return int(stage)
+
+
+func upgrade_cost() -> int:
+	if not can_upgrade():
+		return 0
+	var idx := _stage_index()
+	# Cost of the stage we are upgrading into (Medium=1, Big=2).
+	return GlobalUnits.economy_stage_cost(int(subtype), idx + 1)
 
 
 func apply_build(sub: int, owner_id: int) -> void:
@@ -126,6 +151,17 @@ func apply_build(sub: int, owner_id: int) -> void:
 		craft_weapon = "maces"
 	else:
 		craft_weapon = ""
+	update_for_stage()
+	set_flags()
+
+
+func apply_upgrade() -> void:
+	if not can_upgrade():
+		return
+	match int(stage):
+		1: stage = STAGES.MEDIUM
+		2: stage = STAGES.BIG
+		_: return
 	update_for_stage()
 	set_flags()
 
@@ -175,22 +211,30 @@ func change_sprite() -> void:
 		return
 	building_spr.visible = true
 	var textures := {
-		SUBTYPES.WOODCUTTER: {STAGES.SMALL: preload("uid://c43brywdf0lxo")},
-		SUBTYPES.STONEQUARRY: {STAGES.SMALL: preload("uid://ft668a4yuq1k")},
+		SUBTYPES.WOODCUTTER: {
+			STAGES.SMALL: preload("res://sprites/overworld/objects/province/economy/woodcutter/woodcutter.png"),
+			STAGES.MEDIUM: preload("res://sprites/overworld/objects/province/economy/woodcutter/woodcutter_lvl2.png"),
+			STAGES.BIG: preload("res://sprites/overworld/objects/province/economy/woodcutter/woodcutter_lvl3.png"),
+		},
+		SUBTYPES.STONEQUARRY: {
+			STAGES.SMALL: preload("res://sprites/overworld/objects/province/economy/stonequarry/stonequarry.png"),
+			STAGES.MEDIUM: preload("res://sprites/overworld/objects/province/economy/stonequarry/stonequarry_lvl2.png"),
+			STAGES.BIG: preload("res://sprites/overworld/objects/province/economy/stonequarry/stonequarry_lvl3.png"),
+		},
 		SUBTYPES.BLACKSMITH: {
-			STAGES.SMALL: preload("uid://cyg7nwmf3kopv"),
-			STAGES.MEDIUM: preload("uid://cyg7nwmf3kopv"),
-			STAGES.BIG: preload("uid://cyg7nwmf3kopv"),
+			STAGES.SMALL: preload("res://sprites/overworld/objects/province/economy/blacksmith/blacksmith.png"),
+			STAGES.MEDIUM: preload("res://sprites/overworld/objects/province/economy/blacksmith/blacksmith_lvl2.png"),
+			STAGES.BIG: preload("res://sprites/overworld/objects/province/economy/blacksmith/blacksmith_lvl3.png"),
 		},
 		SUBTYPES.IRONMINE: {
-			STAGES.SMALL: preload("uid://cuidag43bhr3p"),
-			STAGES.MEDIUM: preload("uid://cuidag43bhr3p"),
-			STAGES.BIG: preload("uid://cuidag43bhr3p"),
+			STAGES.SMALL: preload("res://sprites/overworld/objects/province/economy/iron_mine/iron_mine.png"),
+			STAGES.MEDIUM: preload("res://sprites/overworld/objects/province/economy/iron_mine/iron_mine_lvl2.png"),
+			STAGES.BIG: preload("res://sprites/overworld/objects/province/economy/iron_mine/iron_mine_lvl3.png"),
 		},
 		SUBTYPES.SILVERMINE: {
-			STAGES.SMALL: preload("uid://bwmwh435mm4nd"),
-			STAGES.MEDIUM: preload("uid://bwmwh435mm4nd"),
-			STAGES.BIG: preload("uid://bwmwh435mm4nd"),
+			STAGES.SMALL: preload("res://sprites/overworld/objects/province/economy/silver_mine/silver_mine.png"),
+			STAGES.MEDIUM: preload("res://sprites/overworld/objects/province/economy/silver_mine/silver_mine_lvl2.png"),
+			STAGES.BIG: preload("res://sprites/overworld/objects/province/economy/silver_mine/silver_mine_lvl3.png"),
 		},
 	}
 	var subtype_tex: Dictionary = textures.get(subtype, {})
@@ -198,7 +242,7 @@ func change_sprite() -> void:
 	if tex != null:
 		building_spr.texture = tex
 	else:
-		building_spr.texture = preload("uid://c43brywdf0lxo")
+		building_spr.texture = preload("res://sprites/overworld/objects/province/economy/woodcutter/woodcutter.png")
 
 
 func _unbuilt_deposit_texture() -> Texture2D:

@@ -3,11 +3,14 @@ extends Node
 @onready var base_map = get_parent()
 @onready var armies = base_map.get_node("armies")
 @onready var caravans = base_map.get_node_or_null("caravans")
+@onready var fleets = base_map.get_node_or_null("fleets")
 @onready var path_line = base_map.get_node("PathLine")
 @onready var tilemap = base_map.get_node("tilemap")
 
 var astar_graph: AStar2D
 var walkable_cells: Dictionary = {}
+## Sea tiles (custom data "sea"); fleets path here only.
+var sea_cells: Dictionary = {}
 var cell_to_point_id: Dictionary = {}
 var point_id_to_cell: Dictionary = {}
 var blocked_cell_to_object: Dictionary = {}   # Vector2i -> Node
@@ -18,6 +21,9 @@ var selected_army: Node2D = null
 var current_path: Array[Vector2i] = []
 # Cell -> army or caravan Node currently standing on it (rebuilt after every move).
 var occupancy: Dictionary = {}
+# Cell -> Array of fleet Nodes on that sea tile (stacking allowed).
+var fleet_occupancy: Dictionary = {}
+const COST_SEA := 1
 
 # Preview visuals (created at runtime).
 var rest_line: Line2D = null            # out-of-range portion of the previewed path
@@ -31,6 +37,7 @@ const ARMY_CENTER_OFFSET := Vector2(32, 16)
 # MP cost to enter a cell (charged on the destination tile).
 const COST_ROAD := 1
 const COST_OFF_ROAD := 2
+const COST_HILLS := 4
 # Isometric cell space: the only true neighbors are the 4 cardinal cell
 # directions (tiles sharing a diamond edge). A (1,1)-style step touches only at
 # a vertex and is NOT adjacent, so movement is strictly edge-based.
@@ -66,11 +73,20 @@ func _setup_preview_nodes() -> void:
 
 func rebuild_occupancy() -> void:
 	occupancy.clear()
+	fleet_occupancy.clear()
 	for army in armies.get_children():
 		occupancy[get_army_cell(army)] = army
 	if caravans != null:
 		for c in caravans.get_children():
 			occupancy[get_army_cell(c)] = c
+	if fleets != null:
+		for f in fleets.get_children():
+			var cell := get_army_cell(f)
+			if not fleet_occupancy.has(cell):
+				fleet_occupancy[cell] = []
+			fleet_occupancy[cell].append(f)
+	if base_map != null and base_map.has_method("refresh_fleet_stack_visuals"):
+		base_map.refresh_fleet_stack_visuals()
 
 
 func cell_center_global(cell: Vector2i) -> Vector2:
@@ -85,8 +101,24 @@ func place_caravan_at_cell(caravan: Node2D, cell: Vector2i) -> void:
 	place_army_at_cell(caravan, cell)
 
 
+func place_fleet_at_cell(fleet: Node2D, cell: Vector2i) -> void:
+	place_army_at_cell(fleet, cell)
+
+
 func _is_caravan(node: Node) -> bool:
 	return node != null and node.has_method("is_caravan") and node.is_caravan()
+
+
+func _is_fleet(node: Node) -> bool:
+	return node != null and node.has_method("is_fleet") and node.is_fleet()
+
+
+func fleets_at_cell(cell: Vector2i) -> Array:
+	return fleet_occupancy.get(cell, [])
+
+
+func is_sea_cell(cell: Vector2i) -> bool:
+	return sea_cells.has(cell)
 
 
 func _unit_controller(node: Node2D) -> int:
@@ -100,8 +132,10 @@ func _unit_controller(node: Node2D) -> int:
 ## True when `occupant` blocks `mover` from entering `cell` mid-path.
 ## Friendly/allied armies may pass through each other. Caravans never share a
 ## tile with other caravans; armies cannot enter a caravan tile (approach instead).
-## Caravans may pass through friendly/allied armies.
+## Caravans may pass through friendly/allied armies. Fleets ignore land occupancy.
 func _occupant_blocks_entry(mover: Node2D, cell: Vector2i) -> bool:
+	if _is_fleet(mover):
+		return false
 	if not occupancy.has(cell):
 		return false
 	var occ: Node2D = occupancy[cell]
@@ -123,8 +157,10 @@ func _occupant_blocks_entry(mover: Node2D, cell: Vector2i) -> bool:
 	return true
 
 
-## Never end a move on an occupied tile (even friendly).
+## Never end a move on an occupied tile (even friendly). Fleets may stack.
 func _cell_blocked_for_stop(mover: Node2D, cell: Vector2i) -> bool:
+	if _is_fleet(mover):
+		return false
 	if not occupancy.has(cell):
 		return false
 	return occupancy[cell] != mover
@@ -154,25 +190,45 @@ func is_road_cell(cell: Vector2i) -> bool:
 	return bool(tile_data.get_custom_data("road"))
 
 
+func is_hills_cell(cell: Vector2i) -> bool:
+	if map_layer == null:
+		return false
+	var tile_data := map_layer.get_cell_tile_data(cell)
+	if tile_data == null:
+		return false
+	return bool(tile_data.get_custom_data("hills"))
+
+
 ## MP cost to enter `cell` (start cell is never charged).
-func enter_cost(cell: Vector2i) -> int:
-	return COST_ROAD if is_road_cell(cell) else COST_OFF_ROAD
+## Road takes precedence over hills. Sea is flat 1 MP for fleets.
+func enter_cost(cell: Vector2i, mover: Node2D = null) -> int:
+	if mover != null and _is_fleet(mover):
+		return COST_SEA
+	if is_road_cell(cell):
+		return COST_ROAD
+	if is_hills_cell(cell):
+		return COST_HILLS
+	return COST_OFF_ROAD
 
 
 ## Sum of enter-costs along a path (index 0 is free; each later cell is charged).
-func path_mp_cost(path_cells: Array[Vector2i]) -> int:
+func path_mp_cost(path_cells: Array[Vector2i], mover: Node2D = null) -> int:
+	if mover == null:
+		mover = selected_army
 	var total := 0
 	for i in range(1, path_cells.size()):
-		total += enter_cost(path_cells[i])
+		total += enter_cost(path_cells[i], mover)
 	return total
 
 
 ## Farthest path index affordable with `mp` movement points.
-func _farthest_affordable_index(path_cells: Array[Vector2i], mp: int) -> int:
+func _farthest_affordable_index(path_cells: Array[Vector2i], mp: int, mover: Node2D = null) -> int:
+	if mover == null:
+		mover = selected_army
 	var spent := 0
 	var best := 0
 	for i in range(1, path_cells.size()):
-		var step_cost := enter_cost(path_cells[i])
+		var step_cost := enter_cost(path_cells[i], mover)
 		if spent + step_cost > mp:
 			break
 		spent += step_cost
@@ -185,17 +241,22 @@ func _setup_astar_graph() -> void:
 	roads_layer = _get_roads_layer()
 
 	astar_graph = AStar2D.new()
+	walkable_cells.clear()
+	sea_cells.clear()
+	cell_to_point_id.clear()
+	point_id_to_cell.clear()
 
-	# set walkable tiles
+	# set walkable + sea tiles
 	for cell in map_layer.get_used_cells():
 		var tile_data = map_layer.get_cell_tile_data(cell)
 		if tile_data == null:
 			continue
 
 		var is_walkable = tile_data.get_custom_data("walkable")
-
 		if is_walkable:
 			walkable_cells[cell] = true
+		if bool(tile_data.get_custom_data("sea")):
+			sea_cells[cell] = true
 
 	# remove cells covered by objects (they return list of global tile-center positions)
 	blocked_cell_to_object.clear()
@@ -237,6 +298,12 @@ func _setup_astar_graph() -> void:
 				astar_graph.connect_points(from_id, to_id, true)
 
 
+func _mover_graph_has(cell: Vector2i, mover: Node2D) -> bool:
+	if _is_fleet(mover):
+		return sea_cells.has(cell)
+	return walkable_cells.has(cell)
+
+
 
 func get_walkable_cells() -> Dictionary:
 	return walkable_cells
@@ -261,6 +328,7 @@ func get_approach_cells(node: Node) -> Array[Vector2i]:
 
 # Cells reachable from a start cell within max_mp movement points (Dijkstra).
 # Friendly/allied armies are pass-through; enemies and caravans block entry.
+# Fleets use sea tiles only (flat 1 MP, no fleet blocking).
 func get_reachable_cells(from_cell: Vector2i, max_mp: int, mover: Node2D = null) -> Dictionary:
 	if mover == null:
 		mover = selected_army
@@ -281,13 +349,15 @@ func get_reachable_cells(from_cell: Vector2i, max_mp: int, mover: Node2D = null)
 			continue
 		for dir in EDGE_DIRS:
 			var n: Vector2i = cell + dir
-			if not walkable_cells.has(n):
+			if mover != null and not _mover_graph_has(n, mover):
+				continue
+			elif mover == null and not walkable_cells.has(n):
 				continue
 			if mover != null and _occupant_blocks_entry(mover, n):
 				continue
 			elif mover == null and occupancy.has(n) and n != from_cell:
 				continue
-			var next_cost: int = cost + enter_cost(n)
+			var next_cost: int = cost + enter_cost(n, mover)
 			if next_cost > max_mp:
 				continue
 			if result.has(n) and int(result[n]) <= next_cost:
@@ -320,7 +390,7 @@ func _best_path_to_cells(from_cell: Vector2i, target_cells: Array[Vector2i], mov
 		var path_cells: Array[Vector2i] = _find_path_cells(from_cell, target_cell, mover)
 		if path_cells.is_empty():
 			continue
-		var cost := path_mp_cost(path_cells)
+		var cost := path_mp_cost(path_cells, mover)
 		if best_path.is_empty() or cost < best_cost:
 			best_path = path_cells
 			best_cost = cost
@@ -347,12 +417,16 @@ func has_path_from(from_cell: Vector2i, target_cell: Vector2i) -> bool:
 
 # Path preferring roads; enemies/caravans block entry, friends are pass-through.
 # Destination must be free to stop on (never end on an occupied tile).
+# Fleets path on sea only and may end on tiles with other fleets.
 func _find_path_cells(from_cell: Vector2i, target_cell: Vector2i, mover: Node2D = null) -> Array[Vector2i]:
 	if mover == null:
 		mover = selected_army
-	if not _is_walkable_cell(from_cell) or not _is_walkable_cell(target_cell):
+	if mover != null:
+		if not _mover_graph_has(from_cell, mover) or not _mover_graph_has(target_cell, mover):
+			return []
+	elif not _is_walkable_cell(from_cell) or not _is_walkable_cell(target_cell):
 		return []
-	# Cannot end on an occupied tile.
+	# Cannot end on an occupied tile (fleets exempt).
 	if mover != null and _cell_blocked_for_stop(mover, target_cell) and target_cell != from_cell:
 		return []
 	elif mover == null and occupancy.has(target_cell) and target_cell != from_cell:
@@ -383,13 +457,15 @@ func _find_path_cells(from_cell: Vector2i, target_cell: Vector2i, mover: Node2D 
 		for dir_variant in EDGE_DIRS:
 			var dir: Vector2i = dir_variant
 			var n: Vector2i = current + dir
-			if not walkable_cells.has(n):
+			if mover != null and not _mover_graph_has(n, mover):
+				continue
+			elif mover == null and not walkable_cells.has(n):
 				continue
 			if mover != null and _occupant_blocks_entry(mover, n):
 				continue
 			elif mover == null and occupancy.has(n) and n != from_cell:
 				continue
-			var next_cost: int = cost + enter_cost(n)
+			var next_cost: int = cost + enter_cost(n, mover)
 			if cost_so_far.has(n) and int(cost_so_far[n]) <= next_cost:
 				continue
 			cost_so_far[n] = next_cost
@@ -413,8 +489,8 @@ func find_path_for_mover(mover: Node2D, from_cell: Vector2i, target_cells: Array
 	return _best_path_to_cells(from_cell, target_cells, mover)
 
 
-func farthest_affordable_index(path_cells: Array[Vector2i], mp: int) -> int:
-	return _farthest_affordable_index(path_cells, mp)
+func farthest_affordable_index(path_cells: Array[Vector2i], mp: int, mover: Node2D = null) -> int:
+	return _farthest_affordable_index(path_cells, mp, mover)
 
 
 func cell_blocked_for_stop(mover: Node2D, cell: Vector2i) -> bool:
@@ -504,6 +580,10 @@ func _resolve_target_path(from_cell: Vector2i, cell: Vector2i) -> Array[Vector2i
 	# Hovering the selected army's own tile — stay put.
 	if cell == from_cell or occupancy.get(cell) == selected_army:
 		return [from_cell]
+	if _is_fleet(selected_army):
+		if sea_cells.has(cell):
+			return _find_path_cells(from_cell, cell, selected_army)
+		return []
 	# Free tile, or friendly pass-through tile we won't stop on as destination
 	# unless vacant — only allow direct path onto unoccupied cells.
 	if _is_walkable_cell(cell) and not occupancy.has(cell):
@@ -530,7 +610,7 @@ func _render_path_preview(path_cells: Array[Vector2i]) -> void:
 	if path_cells.is_empty():
 		return
 	current_path = path_cells
-	var stop_i: int = _farthest_affordable_index(path_cells, selected_army.movement_left)
+	var stop_i: int = _farthest_affordable_index(path_cells, selected_army.movement_left, selected_army)
 
 	for i in range(0, stop_i + 1):
 		path_line.add_point(base_map.to_local(_get_cell_center_global(path_cells[i])))
@@ -549,6 +629,10 @@ func _confirm_move() -> bool:
 
 	var mouse_cell := get_cell_at_mouse()
 	var army_cell := get_army_cell(selected_army)
+
+	# Fleet movement / embark / disembark.
+	if _is_fleet(selected_army):
+		return _confirm_fleet_move(selected_army, army_cell, mouse_cell)
 
 	# Same tile as the selected army → open its menu (not a zero-length move).
 	if mouse_cell == army_cell or occupancy.get(mouse_cell) == selected_army:
@@ -597,6 +681,49 @@ func _confirm_move() -> bool:
 	return _execute_move_along_path(null, null)
 
 
+func _confirm_fleet_move(fleet: Node2D, fleet_cell: Vector2i, mouse_cell: Vector2i) -> bool:
+	# Same sea tile → fleet menu / stack picker.
+	if mouse_cell == fleet_cell:
+		base_map.open_selected_army_menu(fleet)
+		return true
+
+	# Adjacent land army → embark pickup.
+	if occupancy.has(mouse_cell) and _cells_edge_adjacent(fleet_cell, mouse_cell):
+		var target: Node2D = occupancy[mouse_cell]
+		if not _is_caravan(target) and not _is_fleet(target):
+			deselect_army()
+			base_map.open_fleet_embark_prompt(fleet, target)
+			return true
+
+	# Adjacent free land → disembark.
+	if walkable_cells.has(mouse_cell) and not occupancy.has(mouse_cell) \
+			and _cells_edge_adjacent(fleet_cell, mouse_cell):
+		deselect_army()
+		base_map.open_fleet_disembark_prompt(fleet, mouse_cell)
+		return true
+
+	# Adjacent own fleet on another sea tile → combine vs stack.
+	if sea_cells.has(mouse_cell) and _cells_edge_adjacent(fleet_cell, mouse_cell):
+		var others: Array = fleets_at_cell(mouse_cell)
+		var own_other: Node2D = null
+		for f in others:
+			if f != fleet and _unit_controller(f) == _unit_controller(fleet):
+				own_other = f
+				break
+		if own_other != null:
+			deselect_army()
+			base_map.open_fleet_combine_prompt(fleet, own_other, mouse_cell)
+			return true
+
+	# Sea path move.
+	if current_path.size() == 1 and current_path[0] == fleet_cell:
+		base_map.open_selected_army_menu(fleet)
+		return true
+	if current_path.size() < 2:
+		return false
+	return _execute_move_along_path(null, null)
+
+
 # Move toward a garrisonable building's approach cells. When the army can reach
 # an approach tile with MP left, queues opening the garrison transfer menu.
 func confirm_move_to_building(building: Node) -> bool:
@@ -612,14 +739,19 @@ func confirm_move_to_building(building: Node) -> bool:
 
 # Move toward another army/caravan's approach cells. When arrival leaves MP,
 # queues merge/attack/capture interaction (same pattern as garrison).
+# Fleet→fleet: path onto the target's sea tile (stacking allowed).
 func confirm_move_to_army(target: Node2D) -> bool:
 	if selected_army == null or target == null:
 		return false
 	var from_cell := get_army_cell(selected_army)
 	var target_cell := get_army_cell(target)
-	var path_cells := _best_path_to_cells(
-		from_cell, _approach_cells_of_cell(target_cell, selected_army), selected_army
-	)
+	var path_cells: Array[Vector2i]
+	if _is_fleet(selected_army) and _is_fleet(target):
+		path_cells = _find_path_cells(from_cell, target_cell, selected_army)
+	else:
+		path_cells = _best_path_to_cells(
+			from_cell, _approach_cells_of_cell(target_cell, selected_army), selected_army
+		)
 	if path_cells.size() < 2:
 		return false
 	_render_path_preview(path_cells)
@@ -629,7 +761,7 @@ func confirm_move_to_army(target: Node2D) -> bool:
 func _execute_move_along_path(garrison_building: Node, target_army: Node2D) -> bool:
 	if selected_army == null or current_path.size() < 2:
 		return false
-	var stop_i: int = _farthest_affordable_index(current_path, selected_army.movement_left)
+	var stop_i: int = _farthest_affordable_index(current_path, selected_army.movement_left, selected_army)
 	if stop_i <= 0:
 		return false  # no movement points left this turn
 
@@ -647,13 +779,18 @@ func _execute_move_along_path(garrison_building: Node, target_army: Node2D) -> b
 	var end_cell: Vector2i = current_path[stop_i]
 	var spent_mp := 0
 	for i in range(1, stop_i + 1):
-		spent_mp += enter_cost(current_path[i])
+		spent_mp += enter_cost(current_path[i], army)
 	var army_name := String(army.name)
 	var remaining_mp = army.movement_left - spent_mp
+	var is_fleet_mover := _is_fleet(army)
 
 	# Moving onto a building/merchant/field approach with MP left: open interaction UI.
+	var can_garrison := garrison_building != null and garrison_building.has_method("get_garrison_capacity")
+	if can_garrison and garrison_building.has_method("is_army_interactable") \
+			and not garrison_building.is_army_interactable():
+		can_garrison = false
 	var pending_ok = garrison_building != null and (
-		garrison_building.has_method("get_garrison_capacity")
+		can_garrison
 		or (
 			garrison_building.get("type_") != null
 			and garrison_building.type_ == GlobalStuff.BUILDING_TYPE.MERCHANT
@@ -664,20 +801,31 @@ func _execute_move_along_path(garrison_building: Node, target_army: Node2D) -> b
 			and garrison_building.type_ == GlobalStuff.BUILDING_TYPE.FIELD
 		)
 	)
-	if pending_ok and end_cell in get_approach_cells(garrison_building) and remaining_mp > 0:
+	if not is_fleet_mover and pending_ok and end_cell in get_approach_cells(garrison_building) and remaining_mp > 0:
 		base_map.set_pending_garrison(army_name, army.force_id, garrison_building)
 
 	# Same for army/caravan targets: arrive on approach with MP left → interact UI.
-	if target_army != null and remaining_mp > 0:
+	if not is_fleet_mover and target_army != null and remaining_mp > 0:
 		var target_cell := get_army_cell(target_army)
 		if _cells_edge_adjacent(end_cell, target_cell):
 			base_map.set_pending_army_interaction(army_name, target_army)
+
+	# Fleet arrives on a sea tile that already has own fleets → combine/stack prompt.
+	if is_fleet_mover and remaining_mp >= 0:
+		var others: Array = fleets_at_cell(end_cell)
+		for f in others:
+			if f != army and _unit_controller(f) == _unit_controller(army):
+				base_map.set_pending_fleet_combine(army_name, f)
+				break
 
 	deselect_army()
 	# Pathfinding and the building Area2D can both receive this click. After we
 	# deselect, a second pass would open the empty building info card — block it.
 	base_map.suppress_building_click_this_frame()
-	base_map.request_army_move.rpc_id(1, army_name, end_cell.x, end_cell.y, spent_mp)
+	if is_fleet_mover:
+		base_map.request_fleet_move.rpc_id(1, army_name, end_cell.x, end_cell.y, spent_mp)
+	else:
+		base_map.request_army_move.rpc_id(1, army_name, end_cell.x, end_cell.y, spent_mp)
 	# Army teleports under the cursor on call_local; suppress the follow-up
 	# Area2D click on this same frame so the Army Menu does not reopen.
 	base_map.suppress_army_click_this_frame()

@@ -1,0 +1,26 @@
+[gd_scene format=3 uid="uid://c8transportship01"]
+
+[ext_resource type="PackedScene" uid="uid://bumabll72sky" path="res://objects/overworld/othr/flag/flag.tscn" id="1_flag"]
+[ext_resource type="Script" path="res://objects/overworld/othr/transport_ship/transport_ship.gd" id="1_script"]
+[ext_resource type="Texture2D" uid="uid://tewjidb6wp6t" path="res://sprites/overworld/objects/othr/transport_ship/transport_ship.png" id="2_fig"]
+
+[sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_ship"]
+points = PackedVector2Array(32, 0, 0, 16, 32, 32, 64, 16)
+
+[node name="TransportShip" type="Node2D"]
+script = ExtResource("1_script")
+movement_points = 20
+
+[node name="Flag" parent="." instance=ExtResource("1_flag")]
+position = Vector2(36, 2)
+
+[node name="figure" type="Sprite2D" parent="."]
+position = Vector2(30, 4)
+texture = ExtResource("2_fig")
+
+[node name="Area2D" type="Area2D" parent="."]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Area2D"]
+shape = SubResource("ConvexPolygonShape2D_ship")
+
+[connection signal="input_event" from="Area2D" to="." method="_on_area_input_event"]

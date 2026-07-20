@@ -3,7 +3,8 @@ extends Node2D
 ## Dynamically generated province borders.
 ##
 ## Solid lines: province territory grown from every building via multi-source
-## BFS (MAX_RANGE), colored by province.player_owner.
+## BFS (MAX_RANGE) over land tiles (walkable and impassable; sea excluded),
+## colored by province.player_owner.
 ##
 ## Dashed lines: within a province, all buildings compete by player owner
 ## (same multi-source BFS as solid borders). Only claims by players other than
@@ -63,10 +64,15 @@ func rebuild() -> void:
 		return
 
 	var ml: TileMapLayer = pathfinding.map_layer
-	var walkable: Dictionary = pathfinding.walkable_cells
+	# Territory grows over all land tiles; only sea is a hard wall.
+	var claimable: Dictionary = {}
+	var sea: Dictionary = pathfinding.sea_cells
+	for cell in ml.get_used_cells():
+		if not sea.has(cell):
+			claimable[cell] = true
 
-	_rebuild_province_territory(provinces, ml, walkable)
-	_rebuild_occupation_territory(provinces, ml, walkable)
+	_rebuild_province_territory(provinces, ml, claimable)
+	_rebuild_occupation_territory(provinces, ml, claimable)
 	_build_segments(ml)
 	_rebuild_focus_segments(ml)
 	queue_redraw()
@@ -84,7 +90,7 @@ func set_focused_province(prov) -> void:
 	queue_redraw()
 
 
-func _rebuild_province_territory(provinces: Node, ml: TileMapLayer, walkable: Dictionary) -> void:
+func _rebuild_province_territory(provinces: Node, ml: TileMapLayer, claimable: Dictionary) -> void:
 	# 1) Seed every building's footprint tile(s), tagged with its province.
 	var frontier: Array[Vector2i] = []
 	for prov in provinces.get_children():
@@ -136,7 +142,7 @@ func _rebuild_province_territory(provinces: Node, ml: TileMapLayer, walkable: Di
 				var n: Vector2i = cell + d
 				if _dist.has(n):
 					continue
-				if not walkable.has(n):
+				if not claimable.has(n):
 					continue
 				if claims.has(n) and claims[n] != prov:
 					claims[n] = null
@@ -161,7 +167,7 @@ func _effective_owner(building: Node) -> int:
 	return -1
 
 
-func _rebuild_occupation_territory(provinces: Node, ml: TileMapLayer, walkable: Dictionary) -> void:
+func _rebuild_occupation_territory(provinces: Node, ml: TileMapLayer, claimable: Dictionary) -> void:
 	# All buildings compete by player. Dashed drawing later keeps only foreign claims.
 	# cell -> province for each occupation claim (stay inside that province).
 	var occ_province: Dictionary = {}
@@ -205,7 +211,7 @@ func _rebuild_occupation_territory(provinces: Node, ml: TileMapLayer, walkable: 
 				var n: Vector2i = cell + d
 				if _occ_dist.has(n):
 					continue
-				if not walkable.has(n):
+				if not claimable.has(n):
 					continue
 				# Never bleed outside the solid province territory.
 				if owner_of.get(n) != seed_prov:

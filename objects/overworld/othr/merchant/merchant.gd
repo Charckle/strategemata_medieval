@@ -1,6 +1,6 @@
 extends Node2D
 
-## Roaming merchant camp: occupies one walkable tile, sells weapons to the de jure owner.
+## Roaming merchant camp: occupies one walkable tile; de jure owner can buy/sell weapons & materials.
 
 var type_ = GlobalStuff.BUILDING_TYPE.MERCHANT
 
