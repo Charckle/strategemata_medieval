@@ -6,6 +6,7 @@
 [ext_resource type="Script" uid="uid://d3vsm8ioijocw" path="res://objects/overworld/othr/flag/flag_spr.gd" id="4_08tbm"]
 
 [node name="Flag" type="Node2D" unique_id=1083155820]
+z_index = 50
 script = ExtResource("3_flag")
 
 [node name="pole_spr" type="Sprite2D" parent="." unique_id=582824306]

@@ -77,8 +77,11 @@ const WOUND_MP_FREE_FRACTION := 0.10
 const WOUND_MP_MAX_FRACTION := 0.50
 const WOUND_MP_MAX_PENALTY := 0.50
 
-# Weapon stockpile keys (province.resources["weapons"]).
+# Weapon stockpile keys (province arsenal + cargo). Horses live on holdings, not in
+# resources["weapons"] player buckets — see WEAPON_STOCK_KEYS.
 const WEAPON_KEYS := ["maces", "pikes", "bows", "swords", "crossbows", "horses", "armour"]
+# Forged / stored kit tracked per-player in province.resources["weapons"].
+const WEAPON_STOCK_KEYS := ["maces", "pikes", "bows", "swords", "crossbows", "armour"]
 
 # Unit type -> weapon costs (knights need horse + armour).
 const UNIT_WEAPON_COST := {
@@ -258,13 +261,19 @@ const MATERIAL_MARK_PRICES := {
 }
 
 # --- Fields / agriculture ---------------------------------------------------
-# Winter: plan grain fields (map looks sown). Seed (GRAIN_SEED_PER_FIELD) is spent
-# when leaving winter. Labor scales with planted fields. Harvest when leaving autumn.
+# Winter: plan grain + assign sow labor. Seed spent when leaving winter only for
+# fields covered by labor (and seed stock). Spring/summer: tend planted fields.
+# Autumn: higher labor for harvest; yield paid when leaving autumn.
 # Horses: each pasture hosts up to HORSES_PER_FIELD; labor need is per occupied
 # pasture; foals scale with (horses/cap)×(workers/need) every season incl. winter.
 const GRAIN_SEED_PER_FIELD := 5
 const GRAIN_YIELD_PER_FIELD := 80
-const PEOPLE_PER_GRAIN_FIELD := 8
+## People per grain field in winter (sow) and autumn (harvest).
+const PEOPLE_PER_GRAIN_FIELD_PEAK := 20
+## People per grain field in spring and summer (tend).
+const PEOPLE_PER_GRAIN_FIELD_TEND := 10
+## Legacy alias = tend rate (prefer people_per_grain_field(season)).
+const PEOPLE_PER_GRAIN_FIELD := PEOPLE_PER_GRAIN_FIELD_TEND
 const PEOPLE_PER_HORSE_FIELD := 10
 const HORSES_PER_FIELD := 20
 const FOAL_EFF_HIGH := 0.75
@@ -273,7 +282,29 @@ const FOAL_HIGH_MIN := 2
 const FOAL_HIGH_MAX := 5
 const FOAL_MID_MIN := 1
 const FOAL_MID_MAX := 3
+## Legacy single-grain seed; prefer PROVINCE_START_* kit.
 const STARTING_GRAIN := 40
+
+
+## Winter (0) + autumn (3) = peak sow/harvest labor; spring/summer = tend.
+func people_per_grain_field(season: int) -> int:
+	if season == 0 or season == 3:
+		return PEOPLE_PER_GRAIN_FIELD_PEAK
+	return PEOPLE_PER_GRAIN_FIELD_TEND
+
+# Default holding kit applied once per province owner at map start.
+const PROVINCE_START_GRAIN := 1000
+const PROVINCE_START_WOOD := 200
+const PROVINCE_START_IRON := 200
+const PROVINCE_START_MARKS := 400
+const PROVINCE_START_MACES := 50
+const PROVINCE_START_PIKES := 50
+const PROVINCE_START_BOWS := 50
+
+# Local council AI targets (town garrison only).
+const COUNCIL_TARGET_MACEMEN := 100
+const COUNCIL_TARGET_PIKEMEN := 100
+const COUNCIL_TARGET_ARCHERS := 100
 
 # Labor category keys shared by fields + economy + castle construction.
 const LABOR_CATEGORIES := ["grain", "horses", "wood", "stone", "iron", "silver", "blacksmith", "castle"]
@@ -478,6 +509,68 @@ func empty_weapon_stock() -> Dictionary:
 	var out := {}
 	for k in WEAPON_KEYS:
 		out[k] = 0
+	return out
+
+
+## Per-player forged-weapon buckets: resources["weapons"][key]["has"][pid].
+func empty_per_player_weapon_buckets() -> Dictionary:
+	var out := {}
+	for k in WEAPON_STOCK_KEYS:
+		out[k] = {"has": empty_per_player_amount()}
+	return out
+
+
+## Ensure province.resources["weapons"] is per-player buckets (not a flat stock).
+func ensure_weapons_resources(resources: Dictionary) -> void:
+	if resources == null:
+		return
+	if not resources.has("weapons") or not (resources["weapons"] is Dictionary):
+		resources["weapons"] = empty_per_player_weapon_buckets()
+		return
+	var w: Dictionary = resources["weapons"]
+	# Legacy flat stock {"maces": n, ...} — discard (no migration).
+	if w.has("maces") and typeof(w["maces"]) == TYPE_INT:
+		resources["weapons"] = empty_per_player_weapon_buckets()
+		return
+	for k in WEAPON_STOCK_KEYS:
+		if not w.has(k) or not (w[k] is Dictionary):
+			w[k] = {"has": empty_per_player_amount()}
+		elif not w[k].has("has") or not (w[k]["has"] is Dictionary):
+			w[k]["has"] = empty_per_player_amount()
+		else:
+			recompute_per_player_all(w[k]["has"])
+
+
+func get_player_weapon_amount(resources: Dictionary, player_id: int, key: String) -> int:
+	if player_id < 0 or key not in WEAPON_STOCK_KEYS:
+		return 0
+	ensure_weapons_resources(resources)
+	return int(resources["weapons"][key]["has"].get(player_id, 0))
+
+
+func add_player_weapon_amount(resources: Dictionary, player_id: int, key: String, amount: int) -> void:
+	if player_id < 0 or amount == 0 or key not in WEAPON_STOCK_KEYS:
+		return
+	ensure_weapons_resources(resources)
+	var has: Dictionary = resources["weapons"][key]["has"]
+	has[player_id] = maxi(0, int(has.get(player_id, 0)) + amount)
+	recompute_per_player_all(has)
+
+
+## Add forged weapons (skips horses) into a player's province bucket.
+func add_player_weapon_stock(resources: Dictionary, player_id: int, add: Dictionary) -> void:
+	if player_id < 0:
+		return
+	for k in WEAPON_STOCK_KEYS:
+		add_player_weapon_amount(resources, player_id, k, int(add.get(k, 0)))
+
+
+## Province-wide forged totals (horses left at 0 — overlay from holdings).
+func weapons_province_totals(resources: Dictionary) -> Dictionary:
+	ensure_weapons_resources(resources)
+	var out := empty_weapon_stock()
+	for k in WEAPON_STOCK_KEYS:
+		out[k] = int(resources["weapons"][k]["has"].get("all", 0))
 	return out
 
 
@@ -1144,7 +1237,16 @@ func is_fighting_stack(stack: Dictionary) -> bool:
 	return stack_status(stack) == STATUS.FIGHTING
 
 
-func make_stack(type_: int, owner: int, source_: int, count: int, status_: int = STATUS.FIGHTING, recover_in: int = 0, join_pending: bool = false) -> Dictionary:
+func make_stack(
+	type_: int,
+	owner: int,
+	source_: int,
+	count: int,
+	status_: int = STATUS.FIGHTING,
+	recover_in: int = 0,
+	join_pending: bool = false,
+	militia: bool = false
+) -> Dictionary:
 	var s := {"type": type_, "owner": owner, "source": source_, "count": count}
 	if status_ != STATUS.FIGHTING:
 		s["status"] = status_
@@ -1152,7 +1254,13 @@ func make_stack(type_: int, owner: int, source_: int, count: int, status_: int =
 		s["recover_in"] = recover_in
 	if join_pending:
 		s["join_pending"] = true
+	if militia:
+		s["militia"] = true
 	return s
+
+
+func is_militia_stack(s: Dictionary) -> bool:
+	return bool(s.get("militia", false))
 
 
 func _copy_stack(s: Dictionary) -> Dictionary:
@@ -1168,6 +1276,8 @@ func _copy_stack(s: Dictionary) -> Dictionary:
 		out["recover_in"] = s["recover_in"]
 	if s.has("join_pending"):
 		out["join_pending"] = s["join_pending"]
+	if is_militia_stack(s):
+		out["militia"] = true
 	return out
 
 
@@ -1187,6 +1297,7 @@ func _stacks_mergeable(a: Dictionary, b: Dictionary) -> bool:
 		and stack_status(a) == stack_status(b)
 		and int(a.get("recover_in", 0)) == int(b.get("recover_in", 0))
 		and bool(a.get("join_pending", false)) == bool(b.get("join_pending", false))
+		and is_militia_stack(a) == is_militia_stack(b)
 	)
 
 
@@ -1326,10 +1437,23 @@ func units_from_spec(spec: Array) -> Array:
 			int(entry.get("count", 0)),
 			int(entry.get("status", STATUS.FIGHTING)),
 			int(entry.get("recover_in", 0)),
-			bool(entry.get("join_pending", false))
+			bool(entry.get("join_pending", false)),
+			bool(entry.get("militia", false))
 		)
 		add_stack(out, stack)
 	return out
+
+
+## Split units into militia vs regular garrison stacks (preserves order within each).
+func split_militia_units(units: Array) -> Dictionary:
+	var militia: Array = []
+	var regular: Array = []
+	for s in units:
+		if is_militia_stack(s):
+			add_stack(militia, s)
+		else:
+			add_stack(regular, s)
+	return {"militia": militia, "regular": regular}
 
 
 # Human-readable multi-line breakdown for popups/menus.
@@ -1347,6 +1471,8 @@ func describe_units(units: Array) -> String:
 				line += " (%d seasons)" % rec
 		if bool(s.get("join_pending", false)):
 			line += " (join pending)"
+		if is_militia_stack(s):
+			line += " (militia)"
 		lines.append(line)
 	return "\n".join(lines)
 
@@ -1383,6 +1509,7 @@ func apply_side_casualties(units: Array, dead_frac: float, wound_frac: float) ->
 			add_stack(remaining, s)
 			continue
 		var n := int(s["count"])
+		var mil := is_militia_stack(s)
 		var dead_n := int(floor(float(n) * dead_frac))
 		var wound_n := int(floor(float(n) * wound_frac))
 		if dead_n + wound_n > n:
@@ -1391,13 +1518,19 @@ func apply_side_casualties(units: Array, dead_frac: float, wound_frac: float) ->
 		dead_total += dead_n
 		wound_total += wound_n
 		if dead_n > 0:
-			add_stack(dead_stacks, make_stack(int(s["type"]), int(s["owner"]), int(s["source"]), dead_n))
+			add_stack(dead_stacks, make_stack(
+				int(s["type"]), int(s["owner"]), int(s["source"]), dead_n,
+				STATUS.FIGHTING, 0, false, mil
+			))
 		if live_n > 0:
-			add_stack(remaining, make_stack(int(s["type"]), int(s["owner"]), int(s["source"]), live_n))
+			add_stack(remaining, make_stack(
+				int(s["type"]), int(s["owner"]), int(s["source"]), live_n,
+				STATUS.FIGHTING, 0, false, mil
+			))
 		if wound_n > 0:
 			add_stack(wounded_out, make_stack(
 				int(s["type"]), int(s["owner"]), int(s["source"]), wound_n,
-				STATUS.WOUNDED, WOUND_RECOVER_SEASONS
+				STATUS.WOUNDED, WOUND_RECOVER_SEASONS, false, mil
 			))
 	return {
 		"remaining": remaining,

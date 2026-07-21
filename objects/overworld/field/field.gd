@@ -76,11 +76,9 @@ func update_visuals_for_season(season: int) -> void:
 				2: grown_stage = GROWN_STAGES.SUMMER
 				3: grown_stage = GROWN_STAGES.AUTUMN
 				_: grown_stage = GROWN_STAGES.EMPTY
-		elif int(season) == 0:
-			# Winter plan marker: looks sown; seed spent when leaving winter.
-			grown_stage = GROWN_STAGES.WINTER
 		else:
-			grown_stage = GROWN_STAGES.EMPTY
+			# Planned / assigned grain — keep winter look year-round until sown.
+			grown_stage = GROWN_STAGES.WINTER
 	update_visuals()
 
 

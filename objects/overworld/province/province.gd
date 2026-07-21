@@ -309,24 +309,31 @@ func create_de_resorce_dict():
 		"marks": {
 			"will": {}  # player_id -> amount; "all" -> sum of all players
 		},
-		"weapons": GlobalUnits.empty_weapon_stock(),
+		# Per-player forged kit: weapons[key]["has"][pid]. Horses stay on holdings.
+		"weapons": GlobalUnits.empty_per_player_weapon_buckets(),
 	}
 	resources = _resource
 	holdings = {}
 
 
+## Province-wide forged totals (+ sum of holding horses). Prefer get_weapons_for.
 func get_weapons() -> Dictionary:
-	if resources == null or not resources.has("weapons"):
-		if resources == null:
-			create_de_resorce_dict()
-		else:
-			resources["weapons"] = GlobalUnits.empty_weapon_stock()
-	return resources["weapons"]
+	if resources == null:
+		create_de_resorce_dict()
+	GlobalUnits.ensure_weapons_resources(resources)
+	var w := GlobalUnits.weapons_province_totals(resources)
+	w["horses"] = _total_holding_horses()
+	return w
 
 
-## Weapons stock for a player: shared arsenal, but horses are per-holding.
+## Weapons stock for a player: per-player forged kit; horses are per-holding.
 func get_weapons_for(player_id: int) -> Dictionary:
-	var w := get_weapons().duplicate()
+	if resources == null:
+		create_de_resorce_dict()
+	GlobalUnits.ensure_weapons_resources(resources)
+	var w := GlobalUnits.empty_weapon_stock()
+	for k in GlobalUnits.WEAPON_STOCK_KEYS:
+		w[k] = GlobalUnits.get_player_weapon_amount(resources, player_id, k)
 	w["horses"] = get_player_horses(player_id)
 	return w
 
@@ -401,15 +408,14 @@ func add_player_horses(player_id: int, amount: int) -> void:
 		return
 	var h := ensure_holding(player_id)
 	h["horses"] = maxi(0, int(h.get("horses", 0)) + amount)
-	_sync_weapons_horses_total()
 	_refresh_horse_field_visuals()
 
 
-func _sync_weapons_horses_total() -> void:
+func _total_holding_horses() -> int:
 	var total := 0
 	for pid in holdings:
 		total += int(holdings[pid].get("horses", 0))
-	get_weapons()["horses"] = total
+	return total
 
 
 func can_afford_weapons_for(player_id: int, need: Dictionary) -> bool:
@@ -417,19 +423,26 @@ func can_afford_weapons_for(player_id: int, need: Dictionary) -> bool:
 
 
 func subtract_weapons_for(player_id: int, need: Dictionary) -> void:
+	if player_id < 0:
+		return
 	var horses := int(need.get("horses", 0))
-	var rest := need.duplicate()
-	rest["horses"] = 0
-	GlobalUnits.subtract_weapons(get_weapons(), rest)
+	if resources == null:
+		create_de_resorce_dict()
+	for k in GlobalUnits.WEAPON_STOCK_KEYS:
+		var amt := int(need.get(k, 0))
+		if amt > 0:
+			GlobalUnits.add_player_weapon_amount(resources, player_id, k, -amt)
 	if horses != 0:
 		add_player_horses(player_id, -horses)
 
 
 func add_weapons_for(player_id: int, add: Dictionary) -> void:
+	if player_id < 0:
+		return
 	var horses := int(add.get("horses", 0))
-	var rest := add.duplicate()
-	rest["horses"] = 0
-	GlobalUnits.add_weapons(get_weapons(), rest)
+	if resources == null:
+		create_de_resorce_dict()
+	GlobalUnits.add_player_weapon_stock(resources, player_id, add)
 	if horses != 0:
 		add_player_horses(player_id, horses)
 
@@ -567,12 +580,7 @@ func set_labor_category(player_id: int, category: String, amount: int, season: i
 		others += int(labor.get(cat, 0))
 	var remaining := maxi(0, pop - others)
 	var cap := labor_category_cap(player_id, category, season)
-	# Grain fields idle in winter (cap 0). Horse pastures stay workable year-round.
-	var max_v := remaining
-	if category == "grain":
-		max_v = mini(remaining, cap) if season != 0 else 0
-	else:
-		max_v = mini(remaining, cap)
+	var max_v := mini(remaining, cap)
 	labor[category] = clampi(amount, 0, max_v)
 	h["labor_assigned"] = total_labor_assigned(player_id)
 
@@ -590,30 +598,72 @@ func get_labor_assigned(player_id: int) -> int:
 
 
 func clamp_all_labor(player_id: int, season: int) -> void:
+	var h := ensure_holding(player_id)
+	var labor: Dictionary = h["labor"]
+	var pop := owned_settlement_population(player_id)
+	# Cap each category on its own building/farm need first.
+	var total := 0
 	for cat in GlobalUnits.LABOR_CATEGORIES:
-		set_labor_category(player_id, cat, get_labor_category(player_id, cat), season)
+		var cap := labor_category_cap(player_id, str(cat), season)
+		var v := clampi(int(labor.get(cat, 0)), 0, cap)
+		labor[cat] = v
+		total += v
+	# If assignments still exceed population, scale down proportionally
+	# (avoids wiping early categories like grain when a levy shrinks the pool).
+	if total > pop and total > 0:
+		var cats: Array = GlobalUnits.LABOR_CATEGORIES
+		var old := {}
+		for cat in cats:
+			old[cat] = int(labor[cat])
+		var kept := 0
+		for cat2 in cats:
+			var nv := int(floor(float(old[cat2]) * float(pop) / float(total)))
+			labor[cat2] = nv
+			kept += nv
+		# Hand leftover seats from flooring back to categories that had workers.
+		var leftover := pop - kept
+		for cat3 in cats:
+			if leftover <= 0:
+				break
+			if int(old[cat3]) <= 0:
+				continue
+			labor[cat3] = int(labor[cat3]) + 1
+			leftover -= 1
+	h["labor_assigned"] = total_labor_assigned(player_id)
 
 
-func seed_test_weapons() -> void:
-	var w := get_weapons()
-	w["maces"] = 40
-	w["pikes"] = 30
-	w["bows"] = 25
-	w["swords"] = 20
-	w["crossbows"] = 10
-	w["armour"] = 15
-	# Horses + starter grain belong to the de jure holding.
+## Default province kit for the de jure holder (materials + weapon stock).
+## Marks are applied on the player treasury at map setup.
+func seed_default_holding_kit() -> void:
 	var pid := int(dejure) if dejure != null else int(player_owner)
+	if pid < 0:
+		return
 	ensure_holding(pid)
-	holdings[pid]["horses"] = 15
-	_sync_weapons_horses_total()
+	if resources == null:
+		create_de_resorce_dict()
+	GlobalUnits.ensure_weapons_resources(resources)
 	if get_player_grain(pid) <= 0:
-		add_player_grain(pid, GlobalUnits.STARTING_GRAIN)
-	# Starter materials so castle construction is testable on authored maps.
+		add_player_grain(pid, GlobalUnits.PROVINCE_START_GRAIN)
 	if get_player_material(pid, "wood") <= 0:
-		add_player_material(pid, "wood", 2000)
-	if get_player_material(pid, "stone") <= 0:
-		add_player_material(pid, "stone", 2000)
+		add_player_material(pid, "wood", GlobalUnits.PROVINCE_START_WOOD)
+	if get_player_material(pid, "iron") <= 0:
+		add_player_material(pid, "iron", GlobalUnits.PROVINCE_START_IRON)
+	# Starter forged kit in the province inventory (not garrison).
+	var seed_kit := {
+		"maces": GlobalUnits.PROVINCE_START_MACES,
+		"pikes": GlobalUnits.PROVINCE_START_PIKES,
+		"bows": GlobalUnits.PROVINCE_START_BOWS,
+	}
+	for k in seed_kit:
+		var has: Dictionary = resources["weapons"][k]["has"]
+		if int(has.get(pid, 0)) <= 0:
+			has[pid] = int(seed_kit[k])
+			GlobalUnits.recompute_per_player_all(has)
+
+
+## Designer / test alias.
+func seed_test_weapons() -> void:
+	seed_default_holding_kit()
 
 
 func snapshot_season_start() -> void:
@@ -711,12 +761,18 @@ func holding_tax_marks_stored(player_id: int) -> int:
 
 
 ## Seed grain reserved for unsown grain fields (winter plan / default priority).
+## In winter, reserve only for fields current sow labor can cover.
 func seed_grain_reserve(player_id: int) -> int:
-	var n := 0
-	for f in get_fields_for_player(player_id):
-		if int(f.crop) == 1 and not bool(f.planted):
-			n += 1
-	return n * GlobalUnits.GRAIN_SEED_PER_FIELD
+	var unsown := count_unsown_grain_fields(player_id)
+	if unsown <= 0:
+		return 0
+	var season := 0
+	if base_map != null and base_map.get("season") != null:
+		season = int(base_map.season)
+	var reserve_fields := unsown
+	if season == 0:
+		reserve_fields = mini(unsown, max_sowable_grain_fields(player_id))
+	return reserve_fields * GlobalUnits.GRAIN_SEED_PER_FIELD
 
 
 ## Average happiness of settlements owned by `player_id` (or all if pid < 0).
@@ -735,7 +791,9 @@ func average_settlement_happiness(player_id: int = -1) -> float:
 	return total / float(n)
 
 
-## Remove `amount` people from owned settlements (proportional). Returns false if not enough.
+## Remove `amount` people from owned settlements. Returns false if not enough.
+## Takes from largest settlements first (greedy) so the full amount is always
+## removed whenever total owned population is sufficient.
 func deduct_population(player_id: int, amount: int) -> bool:
 	if amount <= 0:
 		return true
@@ -746,18 +804,20 @@ func deduct_population(player_id: int, amount: int) -> bool:
 	if available < amount:
 		return false
 	var remaining := amount
-	# Largest settlements first so small villages aren't wiped unevenly.
+	# Largest first — avoid wiping small villages when a big town can cover it.
 	owned.sort_custom(func(a, b): return int(a.population) > int(b.population))
-	for i in range(owned.size()):
+	for s in owned:
 		if remaining <= 0:
 			break
-		var s = owned[i]
-		var left_settlements := owned.size() - i
-		var share := int(ceil(float(remaining) / float(left_settlements)))
-		var take := mini(int(s.population), share)
+		var take := mini(int(s.population), remaining)
 		s.population -= take
 		remaining -= take
 	update_population_in_resources()
+	if remaining <= 0:
+		var season := 0
+		if base_map != null and base_map.get("season") != null:
+			season = int(base_map.season)
+		clamp_all_labor(player_id, season)
 	return remaining <= 0
 
 func allocate_fields_to_settlements() -> void:
@@ -819,6 +879,22 @@ func count_planted_grain_fields(player_id: int) -> int:
 	return n
 
 
+func count_unsown_grain_fields(player_id: int) -> int:
+	var n := 0
+	for f in get_fields_for_player(player_id):
+		if int(f.crop) == 1 and not bool(f.planted):
+			n += 1
+	return n
+
+
+## How many unsown grain fields current grain labor can sow (ignores seed stock).
+func max_sowable_grain_fields(player_id: int) -> int:
+	var per := GlobalUnits.PEOPLE_PER_GRAIN_FIELD_PEAK
+	if per <= 0:
+		return 0
+	return int(get_labor_category(player_id, "grain") / per)
+
+
 ## Expected harvest share for one planted grain field (labor-adjusted).
 func grain_share_for_field(field: Node) -> float:
 	if field == null or int(field.crop) != 1 or not bool(field.planted):
@@ -870,11 +946,13 @@ func get_holding_controllers() -> Array:
 	return out
 
 
-## Labor needed this season for full grain care (0 in winter). Scales with sown fields.
+## Labor needed this season for full grain work.
+## Winter: sow planned (unsown) grain fields. Other seasons: tend/harvest planted fields.
 func grain_labor_required(player_id: int, season: int) -> int:
-	if season == 0: # WINTER
-		return 0
-	return count_planted_grain_fields(player_id) * GlobalUnits.PEOPLE_PER_GRAIN_FIELD
+	var per := GlobalUnits.people_per_grain_field(season)
+	if season == 0: # WINTER — sow labor on planned fields
+		return count_unsown_grain_fields(player_id) * per
+	return count_planted_grain_fields(player_id) * per
 
 
 func get_horse_pasture_fields(player_id: int) -> Array:
@@ -967,7 +1045,9 @@ func get_holding_summary(player_id: int, season: int) -> Dictionary:
 		"grain_labor_need": grain_need,
 		"horse_labor_need": int(alloc["horse_need"]),
 		"seed_per_field": GlobalUnits.GRAIN_SEED_PER_FIELD,
-		"people_per_grain_field": GlobalUnits.PEOPLE_PER_GRAIN_FIELD,
+		"people_per_grain_field": GlobalUnits.people_per_grain_field(season),
+		"sowable_by_labor": max_sowable_grain_fields(player_id),
+		"unsown_grain": count_unsown_grain_fields(player_id),
 		"yield_per_field": GlobalUnits.GRAIN_YIELD_PER_FIELD,
 		"economy_preview": preview,
 		"has_wood": economy_worker_cap(player_id, "wood") > 0,
@@ -1032,6 +1112,38 @@ func transfer_holding_stock_for_settlement(settlement: Node, from_pid: int, to_p
 		if move_h > 0:
 			add_player_horses(from_pid, -move_h)
 			add_player_horses(to_pid, move_h)
+
+
+## After last settlement lost: remaining stock goes to the conqueror.
+func transfer_remaining_holding_stock(from_pid: int, to_pid: int) -> void:
+	if from_pid < 0 or to_pid < 0 or from_pid == to_pid:
+		return
+	ensure_holding(from_pid)
+	ensure_holding(to_pid)
+	if resources == null:
+		create_de_resorce_dict()
+	# Forged weapons.
+	var kit := GlobalUnits.empty_weapon_stock()
+	for k in GlobalUnits.WEAPON_STOCK_KEYS:
+		kit[k] = GlobalUnits.get_player_weapon_amount(resources, from_pid, k)
+	if GlobalUnits.weapon_stock_has_any(kit):
+		subtract_weapons_for(from_pid, kit)
+		add_weapons_for(to_pid, kit)
+	# Materials (grain/wood/stone/iron).
+	for k in GlobalUnits.MATERIAL_KEYS:
+		var amt := get_player_material(from_pid, k)
+		if amt > 0:
+			add_player_material(from_pid, k, -amt)
+			add_player_material(to_pid, k, amt)
+	# Leftover horses + grain potential on the holding.
+	var horses := get_player_horses(from_pid)
+	if horses > 0:
+		add_player_horses(from_pid, -horses)
+		add_player_horses(to_pid, horses)
+	var pot := float(holdings[from_pid].get("grain_potential", 0.0))
+	if pot != 0.0:
+		holdings[from_pid]["grain_potential"] = 0.0
+		holdings[to_pid]["grain_potential"] = float(holdings[to_pid].get("grain_potential", 0.0)) + pot
 
 
 ## Forecast grain split: seed reserve → local armies → civilians at requested ration.
@@ -1436,11 +1548,23 @@ func _update_material_will() -> void:
 		resources[key]["will"] = will
 
 
-## Sow planned grain fields when leaving winter (spends seed until stock runs out).
+## Sow planned grain fields when leaving winter.
+## Limited by sow labor (PEAK people/field) and seed stock; unplanted plans stay grain.
 func _plant_grain_for_holding(player_id: int) -> void:
+	var can_plant := max_sowable_grain_fields(player_id)
+	if can_plant <= 0:
+		return
+	var candidates: Array = []
 	for f in get_fields_for_player(player_id):
 		if int(f.crop) == 1 and not bool(f.planted):
-			try_sow_field(f, player_id)
+			candidates.append(f)
+	candidates.sort_custom(func(a, b): return String(a.name) < String(b.name))
+	var sown := 0
+	for f in candidates:
+		if sown >= can_plant:
+			break
+		if try_sow_field(f, player_id):
+			sown += 1
 
 
 ## Spend seed and mark field sown. Returns false if not grain, already sown, or no seed.
@@ -1478,9 +1602,9 @@ func _tick_holding_agriculture(player_id: int, ended_season: int, new_season: in
 	var h := ensure_holding(player_id)
 	var alloc := _allocate_labor(player_id, ended_season)
 
-	# Grain labor decay (winter: no work expected).
+	# Grain labor decay on growing crops (skip winter sow — potential is granted at plant).
 	var grain_need: int = alloc["grain_need"]
-	if grain_need > 0:
+	if ended_season != 0 and grain_need > 0:
 		var grain_workers: int = alloc["grain_workers"]
 		var coverage := clampf(float(grain_workers) / float(grain_need), 0.0, 1.0)
 		if coverage < 1.0:
@@ -1776,6 +1900,251 @@ func get_status_name_for_viewer(viewer_id: int = NO_DEFACTO) -> String:
 			and int(defacto) == viewer_id and int(dejure) != viewer_id:
 		return "Conquered"
 	return get_status_name()
+
+
+## Dev/admin dump: rations, grain, labor, pop, garrison for every holding controller.
+func get_admin_report(players_dict: Dictionary = {}) -> String:
+	var season := 0
+	if base_map != null and base_map.get("season") != null:
+		season = int(base_map.season)
+	var lines: PackedStringArray = []
+	lines.append("=== %s (%s) ===" % [str(p_name), String(name)])
+	lines.append(
+		"status=%s  dejure=%s  defacto=%s  player_owner=%s"
+		% [
+			get_status_name(),
+			_player_name(players_dict, dejure),
+			_player_name(players_dict, defacto) if defacto != NO_DEFACTO else "—",
+			_player_name(players_dict, player_owner),
+		]
+	)
+	lines.append(
+		"season=%s  pop_all=%d  happiness_avg=%.1f"
+		% [
+			GlobalStuff.get_season_name(season) if GlobalStuff.has_method("get_season_name") else str(season),
+			int(resources["population"]["has"].get("all", 0)) if resources != null else 0,
+			average_settlement_happiness(-1),
+		]
+	)
+	lines.append("")
+	lines.append_array(_admin_troops_lines(players_dict))
+	lines.append("")
+	var pids: Array = get_holding_controllers()
+	pids.sort()
+	if pids.is_empty():
+		lines.append("(no holding controllers)")
+	for pid in pids:
+		var ipid := int(pid)
+		var pname := _player_name(players_dict, ipid)
+		var ptype := "?"
+		if players_dict.has(ipid):
+			var pd = players_dict[ipid]
+			if pd is Object and pd.get("type") != null:
+				match int(pd.type):
+					GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL:
+						ptype = "HUMAN"
+					GlobalStuff.PLAYER_TYPE.AI:
+						ptype = "AI"
+					GlobalStuff.PLAYER_TYPE.LOCAL_COUNCIL:
+						ptype = "COUNCIL"
+					_:
+						ptype = str(pd.type)
+		lines.append("--- holder %d %s [%s] ---" % [ipid, pname, ptype])
+		var ration_info := preview_holding_rations(ipid)
+		lines.append(
+			"ration requested=%s  effective=%s  affordable=%s"
+			% [
+				GlobalUnits.ration_name(int(ration_info.get("requested", 0))),
+				GlobalUnits.ration_name(int(ration_info.get("effective", 0))),
+				str(bool(ration_info.get("affordable", false))),
+			]
+		)
+		lines.append(
+			"grain stock=%d  seed_reserve=%d  army_need=%d  people_budget=%d  civilian_need=%d (promised=%d)"
+			% [
+				int(ration_info.get("stock", 0)),
+				int(ration_info.get("seed_reserve", 0)),
+				int(ration_info.get("army_need", 0)),
+				int(ration_info.get("available_for_people", 0)),
+				int(ration_info.get("civilian_need", 0)),
+				int(ration_info.get("promised_need", 0)),
+			]
+		)
+		lines.append(
+			"tax=%s  holding_pop=%d  marks_treasury=%s"
+			% [
+				GlobalUnits.tax_name(get_holding_tax(ipid)),
+				owned_settlement_population(ipid),
+				str(int(players_dict[ipid].game_data.get("marks", 0))) if players_dict.has(ipid) else "?",
+			]
+		)
+		var labor_bits: PackedStringArray = []
+		for cat in GlobalUnits.LABOR_CATEGORIES:
+			var n := get_labor_category(ipid, cat)
+			if n > 0:
+				labor_bits.append("%s=%d" % [cat, n])
+		lines.append("labor: " + (", ".join(labor_bits) if not labor_bits.is_empty() else "(none)"))
+		lines.append(
+			"fields grain_planted=%d unsown=%d  wood=%d iron=%d"
+			% [
+				count_planted_grain_fields(ipid),
+				count_unsown_grain_fields(ipid),
+				get_player_material(ipid, "wood"),
+				get_player_material(ipid, "iron"),
+			]
+		)
+		var w := get_weapons_for(ipid)
+		lines.append(
+			"weapons maces=%d pikes=%d bows=%d swords=%d"
+			% [int(w.get("maces", 0)), int(w.get("pikes", 0)), int(w.get("bows", 0)), int(w.get("swords", 0))]
+		)
+		# Per-settlement pop / happiness.
+		for s in get_owned_settlements(ipid):
+			var stype := "?"
+			if s.get("type_") != null:
+				match int(s.type_):
+					GlobalStuff.BUILDING_TYPE.TOWN:
+						stype = "town"
+					GlobalStuff.BUILDING_TYPE.VILLAGE:
+						stype = "village"
+					_:
+						stype = str(s.type_)
+			lines.append(
+				"  %s %s: pop=%d happy=%.0f"
+				% [stype, String(s.name), int(s.population), float(s.get("happiness"))]
+			)
+		lines.append("")
+	return "\n".join(lines)
+
+
+func _admin_troops_lines(players_dict: Dictionary) -> PackedStringArray:
+	var lines: PackedStringArray = []
+	lines.append("--- troops in province ---")
+	if base_map == null:
+		lines.append("(no base_map)")
+		return lines
+	var any := false
+	for container_name in ["settlements", "defense", "economy"]:
+		var container = get_node_or_null(container_name)
+		if container == null:
+			continue
+		var buildings: Array = container.get_children()
+		buildings.sort_custom(func(a, b): return String(a.name) < String(b.name))
+		for b in buildings:
+			if not b.has_method("get_garrison_capacity"):
+				continue
+			var kind := _admin_building_kind(b)
+			if b.get("type_") != null and int(b.type_) == GlobalStuff.BUILDING_TYPE.CASTLE:
+				var inside: Array = base_map.get_building_garrison(b, GlobalUnits.SPOT.INSIDE) \
+					if base_map.has_method("get_building_garrison") else []
+				var outside: Array = base_map.get_building_garrison(b, GlobalUnits.SPOT.OUTSIDE) \
+					if base_map.has_method("get_building_garrison") else []
+				var in_n := GlobalUnits.total_men(inside)
+				var out_n := GlobalUnits.total_men(outside)
+				if in_n <= 0 and out_n <= 0:
+					lines.append("  %s %s: empty" % [kind, String(b.name)])
+				else:
+					if in_n > 0:
+						lines.append(
+							"  %s %s inside: %d — %s"
+							% [kind, String(b.name), in_n, _admin_units_summary(inside, players_dict)]
+						)
+					else:
+						lines.append("  %s %s inside: 0" % [kind, String(b.name)])
+					if out_n > 0:
+						lines.append(
+							"  %s %s outside: %d — %s"
+							% [kind, String(b.name), out_n, _admin_units_summary(outside, players_dict)]
+						)
+					else:
+						lines.append("  %s %s outside: 0" % [kind, String(b.name)])
+				any = true
+			else:
+				var units: Array = base_map.get_all_building_garrison(b) \
+					if base_map.has_method("get_all_building_garrison") else []
+				var men := GlobalUnits.total_men(units)
+				if men <= 0:
+					lines.append("  %s %s: empty" % [kind, String(b.name)])
+				else:
+					lines.append(
+						"  %s %s: %d — %s"
+						% [kind, String(b.name), men, _admin_units_summary(units, players_dict)]
+					)
+				any = true
+	# Mobile armies / fleets whose anchor cell is in this province.
+	if base_map.get("forces") != null and base_map.has_method("province_under_force"):
+		var fids: Array = base_map.forces.keys()
+		fids.sort()
+		for fid in fids:
+			if base_map.has_method("force_is_garrison") and base_map.force_is_garrison(str(fid)):
+				continue
+			var under = base_map.province_under_force(str(fid))
+			if under != self:
+				continue
+			var entry: Dictionary = base_map.forces[fid]
+			var units2: Array = entry.get("units", [])
+			var men2 := GlobalUnits.total_men(units2)
+			if men2 <= 0:
+				continue
+			var ctrl := int(entry.get("controller", -1))
+			if base_map.has_method("get_force_controller"):
+				ctrl = int(base_map.get_force_controller(str(fid)))
+			var ctrl_name := _player_name(players_dict, ctrl)
+			lines.append(
+				"  field %s (ctrl=%s): %d — %s"
+				% [str(fid), ctrl_name, men2, _admin_units_summary(units2, players_dict)]
+			)
+			any = true
+	if not any:
+		lines.append("(no garrison capacity buildings / empty)")
+	return lines
+
+
+func _admin_building_kind(b: Node) -> String:
+	if b.get("type_") == null:
+		return "building"
+	match int(b.type_):
+		GlobalStuff.BUILDING_TYPE.TOWN:
+			return "town"
+		GlobalStuff.BUILDING_TYPE.VILLAGE:
+			return "village"
+		GlobalStuff.BUILDING_TYPE.CASTLE:
+			return "castle"
+		GlobalStuff.BUILDING_TYPE.ECONOMY:
+			return "economy"
+		_:
+			return "building"
+
+
+func _admin_units_summary(units: Array, players_dict: Dictionary) -> String:
+	if units.is_empty():
+		return "—"
+	var by_type: Dictionary = {}
+	var order: Array = []
+	for s in units:
+		if not GlobalUnits.is_fighting_stack(s):
+			continue
+		var t := int(s.get("type", -1))
+		var n := int(s.get("count", 0))
+		if n <= 0:
+			continue
+		if not by_type.has(t):
+			by_type[t] = 0
+			order.append(t)
+		by_type[t] = int(by_type[t]) + n
+	if order.is_empty():
+		return GlobalUnits.describe_units(units).replace("\n", "; ")
+	var bits: PackedStringArray = []
+	for t in order:
+		bits.append("%d %s" % [int(by_type[t]), GlobalUnits.unit_name(t)])
+	# Note owners if mixed.
+	var owners := GlobalUnits.owners_in(units)
+	if owners.size() > 1:
+		var onames: PackedStringArray = []
+		for oid in owners:
+			onames.append(_player_name(players_dict, int(oid)))
+		bits.append("owners=[%s]" % ", ".join(onames))
+	return ", ".join(bits)
 
 
 func get_display_data(players_dict: Dictionary, viewer_id: int = NO_DEFACTO) -> Dictionary:

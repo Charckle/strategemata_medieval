@@ -3,7 +3,20 @@ extends Node
 
 enum BUILDING_TYPE { VILLAGE, TOWN, CASTLE, ECONOMY, FIELD, MERCHANT, SELLSWORDS }
 
-enum PLAYER_TYPE { HUMAN_LOCAL, AI }
+enum PLAYER_TYPE { HUMAN_LOCAL, AI, LOCAL_COUNCIL }
+
+## Map-authored unowned province; resolved to a LOCAL_COUNCIL at map start.
+const UNOWNED_PLAYER := -1
+
+
+func is_local_council(type_) -> bool:
+	return int(type_) == int(PLAYER_TYPE.LOCAL_COUNCIL)
+
+
+## AI lords and local councils — no human hotseat turn.
+func is_auto_turn_player(type_) -> bool:
+	var t := int(type_)
+	return t == int(PLAYER_TYPE.AI) or t == int(PLAYER_TYPE.LOCAL_COUNCIL)
 
 enum PLAYER_STATUS {
 	PLAYING,      # normal turn participant
@@ -15,7 +28,7 @@ enum PLAYER_STATUS {
 
 class PlayerData:
 	var player_id : int
-	var type      # HUMAN_LOCAL, AI
+	var type      # HUMAN_LOCAL, AI, LOCAL_COUNCIL
 	# who controls this player
 	var owner_peer_id : int = 1
 	# multiplayer peer that owns this player

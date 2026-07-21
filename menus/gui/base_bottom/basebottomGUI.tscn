@@ -316,13 +316,32 @@ layout_mode = 2
 size_flags_horizontal = 3
 text = "Economy: — / —"
 
-[node name="army" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs" unique_id=2040139437]
+[node name="farming" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs" unique_id=714432200]
 visible = false
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 0
 metadata/_tab_index = 1
+
+[node name="ScrollContainer" type="ScrollContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/farming" unique_id=714432201]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="content" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/farming/ScrollContainer" unique_id=714432202]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="army" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs" unique_id=2040139437]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 0
+metadata/_tab_index = 2
 
 [node name="ScrollContainer" type="ScrollContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/army" unique_id=2040139438]
 layout_mode = 2
@@ -341,7 +360,7 @@ layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 0
-metadata/_tab_index = 2
+metadata/_tab_index = 3
 
 [node name="ScrollContainer" type="ScrollContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/shipyard" unique_id=2040139441]
 layout_mode = 2
@@ -492,6 +511,26 @@ metadata/_tab_index = 3
 layout_mode = 2
 text = "Active wars content"
 
+[node name="Ladder" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=128505892]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 4
+metadata/_tab_index = 4
+
+[node name="hint_lbl" type="Label" parent="war_menu/margin/vbox/tabs/Ladder" unique_id=128505893]
+layout_mode = 2
+autowrap_mode = 3
+text = "Pick one category. Players are listed #1 at top."
+
+[node name="ScrollContainer" type="ScrollContainer" parent="war_menu/margin/vbox/tabs/Ladder" unique_id=128505894]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ladder_list" type="VBoxContainer" parent="war_menu/margin/vbox/tabs/Ladder/ScrollContainer" unique_id=128505895]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+
 [node name="msg_menu" type="PanelContainer" parent="." unique_id=1003245200]
 visible = false
 offset_left = 420.0
@@ -553,10 +592,10 @@ text = "No messages yet."
 
 [node name="settings_menu" type="PanelContainer" parent="." unique_id=1003244573]
 visible = false
-offset_left = 420.0
-offset_top = 200.0
-offset_right = 860.0
-offset_bottom = 520.0
+offset_left = 280.0
+offset_top = 80.0
+offset_right = 1000.0
+offset_bottom = 640.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 script = ExtResource("2_draggable")
 menu_title = "Settings"
