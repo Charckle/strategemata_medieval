@@ -1,9 +1,10 @@
 extends PanelContainer
 
 ## New Game setup: add Human/AI slots, edit human name + heraldry, pick order colour + AI doctrine.
-## Shield editing is a draft popup (Accept / Cancel); row has quick Random.
+## Shield editing uses the shared heraldry modal (Accept / Cancel); row has quick Random.
 
-const SHIELD_SIZE := 72
+const HeraldryEditorScene = preload("res://menus/gui/heraldry_editor/heraldry_editor.gd")
+
 const ROW_SHIELD_SIZE := 36
 const SWATCH_SIZE := 28
 const TYPE_HUMAN := 0
@@ -16,17 +17,8 @@ var _slots_box: VBoxContainer
 var _add_btn: Button
 
 ## Shield draft popup state
-var _shield_overlay: Control
-var _shield_dialog: PanelContainer
+var _heraldry_editor: Control
 var _edit_slot_idx := -1
-var _draft_heraldry: Dictionary = {}
-var _heraldry_preview: TextureRect
-var _opt_division: OptionButton
-var _fields_box: VBoxContainer
-var _field_rows: Array = []
-var _tincture_keys: Array = []
-var _heraldry_syncing := false
-var _heraldry_editors_built := false
 
 
 func _ready() -> void:
@@ -35,7 +27,7 @@ func _ready() -> void:
 
 
 func reset_to_defaults() -> void:
-	_close_shield_editor(false)
+	_close_shield_editor()
 	_slots = [GlobalSet.make_default_human_slot()]
 	_rebuild_slot_list()
 
@@ -102,111 +94,19 @@ func _build_ui() -> void:
 	start_btn.pressed.connect(_on_start_pressed)
 	btns.add_child(start_btn)
 
-	_build_shield_overlay()
 
-
-func _build_shield_overlay() -> void:
-	_shield_overlay = Control.new()
-	_shield_overlay.name = "shield_overlay"
-	_shield_overlay.visible = false
-	_shield_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_shield_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(_shield_overlay)
-
-	var dim := ColorRect.new()
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	dim.color = Color(0, 0, 0, 0.55)
-	dim.gui_input.connect(_on_shield_dim_input)
-	_shield_overlay.add_child(dim)
-
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_shield_overlay.add_child(center)
-
-	_shield_dialog = PanelContainer.new()
-	_shield_dialog.custom_minimum_size = Vector2(360, 0)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.18, 0.12, 0.07, 0.98)
-	sb.set_border_width_all(3)
-	sb.border_color = Color(0.05, 0.03, 0.015, 1)
-	sb.set_corner_radius_all(4)
-	_shield_dialog.add_theme_stylebox_override("panel", sb)
-	center.add_child(_shield_dialog)
-
-	var m := MarginContainer.new()
-	m.add_theme_constant_override("margin_left", 16)
-	m.add_theme_constant_override("margin_top", 14)
-	m.add_theme_constant_override("margin_right", 16)
-	m.add_theme_constant_override("margin_bottom", 14)
-	_shield_dialog.add_child(m)
-
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 8)
-	m.add_child(col)
-
-	var h_title := Label.new()
-	h_title.name = "shield_title"
-	h_title.text = "Edit shield"
-	h_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	h_title.add_theme_font_size_override("font_size", 18)
-	col.add_child(h_title)
-
-	_heraldry_preview = TextureRect.new()
-	_heraldry_preview.custom_minimum_size = Vector2(SHIELD_SIZE, SHIELD_SIZE)
-	_heraldry_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_heraldry_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_heraldry_preview.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	col.add_child(_heraldry_preview)
-
-	var roll_btn := Button.new()
-	roll_btn.text = "Random"
-	roll_btn.pressed.connect(_on_draft_random_pressed)
-	col.add_child(roll_btn)
-
-	_tincture_keys = Heraldry.field_tincture_options()
-
-	var div_row := HBoxContainer.new()
-	div_row.add_theme_constant_override("separation", 8)
-	col.add_child(div_row)
-	var div_lbl := Label.new()
-	div_lbl.text = "Division"
-	div_lbl.custom_minimum_size = Vector2(70, 0)
-	div_row.add_child(div_lbl)
-	_opt_division = OptionButton.new()
-	_opt_division.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for item in Heraldry.division_labels():
-		_opt_division.add_item(str(item))
-	_opt_division.item_selected.connect(_on_division_changed)
-	div_row.add_child(_opt_division)
-
-	_fields_box = VBoxContainer.new()
-	_fields_box.add_theme_constant_override("separation", 6)
-	col.add_child(_fields_box)
-
-	var action_row := HBoxContainer.new()
-	action_row.add_theme_constant_override("separation", 12)
-	action_row.alignment = BoxContainer.ALIGNMENT_END
-	col.add_child(action_row)
-
-	var cancel_btn := Button.new()
-	cancel_btn.text = "Cancel"
-	cancel_btn.custom_minimum_size = Vector2(90, 36)
-	cancel_btn.pressed.connect(_on_shield_cancel)
-	action_row.add_child(cancel_btn)
-
-	var accept_btn := Button.new()
-	accept_btn.text = "Accept"
-	accept_btn.custom_minimum_size = Vector2(90, 36)
-	accept_btn.pressed.connect(_on_shield_accept)
-	action_row.add_child(accept_btn)
-
-	_heraldry_editors_built = true
-
-
-func _on_shield_dim_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_on_shield_cancel()
+func _ensure_heraldry_editor() -> void:
+	if _heraldry_editor != null and is_instance_valid(_heraldry_editor):
+		return
+	_heraldry_editor = HeraldryEditorScene.new()
+	_heraldry_editor.name = "heraldry_editor"
+	_heraldry_editor.accepted.connect(_on_heraldry_accepted)
+	_heraldry_editor.cancelled.connect(_on_heraldry_cancelled)
+	# Parent to fullscreen overlays so the larger modal is not clipped by this panel.
+	var host: Node = get_parent()
+	if host == null:
+		host = self
+	host.add_child(_heraldry_editor)
 
 
 func _rebuild_slot_list() -> void:
@@ -379,7 +279,7 @@ func _on_remove(idx: int) -> void:
 	if was_human and _human_count() <= 1:
 		return
 	if _edit_slot_idx == idx:
-		_close_shield_editor(false)
+		_close_shield_editor()
 	_slots.remove_at(idx)
 	if _edit_slot_idx > idx:
 		_edit_slot_idx -= 1
@@ -397,7 +297,7 @@ func _on_type_changed(idx: int, type_idx: int) -> void:
 		_rebuild_slot_list()
 		return
 	if _edit_slot_idx == idx:
-		_close_shield_editor(false)
+		_close_shield_editor()
 	if want_human:
 		_slots[idx] = {
 			"type": "human",
@@ -452,8 +352,8 @@ func _on_quick_random_shield(idx: int) -> void:
 	_slots[idx]["heraldry"] = Heraldry.random_heraldry()
 	_refresh_slot_shield(idx)
 	# If this slot's editor is open, cancel draft (committed shield already changed).
-	if _edit_slot_idx == idx and _shield_overlay != null and _shield_overlay.visible:
-		_close_shield_editor(false)
+	if _edit_slot_idx == idx and _heraldry_editor != null and _heraldry_editor.is_open():
+		_close_shield_editor()
 
 
 func _open_shield_editor(idx: int) -> void:
@@ -461,168 +361,31 @@ func _open_shield_editor(idx: int) -> void:
 		return
 	if str(_slots[idx].get("type", "")) != "human":
 		return
+	_ensure_heraldry_editor()
 	_edit_slot_idx = idx
 	var src = _slots[idx].get("heraldry", {})
-	_draft_heraldry = Heraldry.normalize(src if src is Dictionary else {})
-	var title := _shield_dialog.find_child("shield_title", true, false)
-	if title != null:
-		title.text = "Edit shield — %s" % str(_slots[idx].get("name", "Lord"))
-	_sync_draft_editors()
-	_shield_overlay.visible = true
-	_shield_overlay.move_to_front()
+	var title := "Edit shield — %s" % str(_slots[idx].get("name", "Lord"))
+	_heraldry_editor.open(src if src is Dictionary else {}, title)
 
 
-func _close_shield_editor(_apply: bool) -> void:
+func _close_shield_editor() -> void:
 	_edit_slot_idx = -1
-	_draft_heraldry = {}
-	if _shield_overlay != null:
-		_shield_overlay.visible = false
+	if _heraldry_editor != null and is_instance_valid(_heraldry_editor):
+		_heraldry_editor.close()
 
 
-func _on_shield_cancel() -> void:
-	_close_shield_editor(false)
-
-
-func _on_shield_accept() -> void:
+func _on_heraldry_accepted(heraldry: Dictionary) -> void:
 	if _edit_slot_idx < 0 or _edit_slot_idx >= _slots.size():
-		_close_shield_editor(false)
+		_edit_slot_idx = -1
 		return
-	_slots[_edit_slot_idx]["heraldry"] = Heraldry.normalize(_draft_heraldry)
 	var idx := _edit_slot_idx
-	_close_shield_editor(true)
+	_slots[idx]["heraldry"] = Heraldry.normalize(heraldry)
+	_edit_slot_idx = -1
 	_refresh_slot_shield(idx)
 
 
-func _on_draft_random_pressed() -> void:
-	_draft_heraldry = Heraldry.random_heraldry()
-	_sync_draft_editors()
-
-
-func _sync_draft_editors() -> void:
-	if not _heraldry_editors_built:
-		return
-	_draft_heraldry = Heraldry.normalize(_draft_heraldry)
-	_heraldry_preview.texture = Heraldry.make_texture(_draft_heraldry, SHIELD_SIZE)
-	_heraldry_syncing = true
-	var division := clampi(int(_draft_heraldry.get("division", 0)), 0, 2)
-	_opt_division.select(division)
-	_rebuild_field_editors(division, _draft_heraldry.get("fields", []))
-	_heraldry_syncing = false
-
-
-func _rebuild_field_editors(division: int, keep_values: Array = []) -> void:
-	while _fields_box.get_child_count() > 0:
-		var ch := _fields_box.get_child(0)
-		_fields_box.remove_child(ch)
-		ch.free()
-	_field_rows.clear()
-	var labels := Heraldry.field_labels(division)
-	var tincture_names: Array = _tincture_keys.map(func(k): return Heraldry.tincture_display_name(str(k)))
-	for i in labels.size():
-		var wrap := VBoxContainer.new()
-		wrap.add_theme_constant_override("separation", 2)
-		var title := Label.new()
-		title.text = str(labels[i])
-		title.add_theme_font_size_override("font_size", 12)
-		wrap.add_child(title)
-		var grid := GridContainer.new()
-		grid.columns = 2
-		grid.add_theme_constant_override("h_separation", 6)
-		grid.add_theme_constant_override("v_separation", 2)
-		var base_opt := _add_field_opt(grid, "Base", tincture_names)
-		var ink_opt := _add_field_opt(grid, "Ink", tincture_names)
-		var pattern_opt := _add_field_opt(grid, "Pattern", Heraldry.pattern_labels())
-		var charge_opt := _add_field_opt(grid, "Charges", Heraldry.charge_layout_labels())
-		var type_opt := _add_field_opt(grid, "Charge", Heraldry.charge_type_labels())
-		wrap.add_child(grid)
-		_fields_box.add_child(wrap)
-		if i < keep_values.size() and keep_values[i] is Dictionary:
-			var f: Dictionary = keep_values[i]
-			_select_key(base_opt, str(f.get("base", "azure")))
-			_select_key(ink_opt, str(f.get("ink", "or")))
-			pattern_opt.select(clampi(int(f.get("pattern", 0)), 0, pattern_opt.item_count - 1))
-			charge_opt.select(clampi(int(f.get("charge", 0)), 0, charge_opt.item_count - 1))
-			type_opt.select(clampi(int(f.get("charge_type", 0)), 0, type_opt.item_count - 1))
-		_field_rows.append({
-			"base": base_opt, "ink": ink_opt, "pattern": pattern_opt,
-			"charge": charge_opt, "charge_type": type_opt,
-		})
-		base_opt.item_selected.connect(_on_draft_changed)
-		ink_opt.item_selected.connect(_on_draft_changed)
-		pattern_opt.item_selected.connect(_on_draft_changed)
-		charge_opt.item_selected.connect(_on_draft_changed)
-		type_opt.item_selected.connect(_on_draft_changed)
-
-
-func _add_field_opt(parent: GridContainer, label_text: String, items: Variant) -> OptionButton:
-	var lbl := Label.new()
-	lbl.text = label_text
-	parent.add_child(lbl)
-	var opt := OptionButton.new()
-	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for item in items:
-		opt.add_item(str(item))
-	parent.add_child(opt)
-	return opt
-
-
-func _select_key(opt: OptionButton, key: String) -> void:
-	var i := _tincture_keys.find(key)
-	if i < 0:
-		i = 0
-	opt.select(clampi(i, 0, opt.item_count - 1))
-
-
-func _on_division_changed(_idx: int = 0) -> void:
-	if _heraldry_syncing:
-		return
-	var prev := _fields_from_editors()
-	_heraldry_syncing = true
-	_rebuild_field_editors(_opt_division.selected, prev)
-	_heraldry_syncing = false
-	_on_draft_changed()
-
-
-func _fields_from_editors() -> Array:
-	var fields: Array = []
-	for row in _field_rows:
-		var base := "azure"
-		var ink := "or"
-		if row["base"].selected >= 0 and row["base"].selected < _tincture_keys.size():
-			base = str(_tincture_keys[row["base"].selected])
-		if row["ink"].selected >= 0 and row["ink"].selected < _tincture_keys.size():
-			ink = str(_tincture_keys[row["ink"].selected])
-		fields.append({
-			"base": base,
-			"ink": ink,
-			"pattern": int(row["pattern"].selected),
-			"charge": int(row["charge"].selected),
-			"charge_type": int(row["charge_type"].selected),
-		})
-	if fields.is_empty():
-		fields.append(Heraldry.default_field())
-	return fields
-
-
-func _on_draft_changed(_idx: int = 0) -> void:
-	if _heraldry_syncing:
-		return
-	var fields := _fields_from_editors()
-	var raw := {
-		"primary": str(fields[0].get("base", "azure")),
-		"division": _opt_division.selected,
-		"fields": fields,
-	}
-	_draft_heraldry = Heraldry.normalize(raw)
-	_heraldry_preview.texture = Heraldry.make_texture(_draft_heraldry, SHIELD_SIZE)
-	if _draft_heraldry.has("fields") and _draft_heraldry["fields"] is Array:
-		_heraldry_syncing = true
-		var af: Array = _draft_heraldry["fields"]
-		for i in mini(_field_rows.size(), af.size()):
-			var f: Dictionary = af[i]
-			_select_key(_field_rows[i]["ink"], str(f.get("ink", "or")))
-			_select_key(_field_rows[i]["base"], str(f.get("base", "azure")))
-		_heraldry_syncing = false
+func _on_heraldry_cancelled() -> void:
+	_edit_slot_idx = -1
 
 
 func _refresh_slot_shield(idx: int) -> void:
@@ -638,14 +401,14 @@ func _refresh_slot_shield(idx: int) -> void:
 
 
 func _on_back_pressed() -> void:
-	_close_shield_editor(false)
+	_close_shield_editor()
 	visible = false
 
 
 func _on_start_pressed() -> void:
 	if _human_count() < 1:
 		return
-	_close_shield_editor(false)
+	_close_shield_editor()
 	var clean_slots: Array = []
 	for s in _slots:
 		var entry := {
@@ -662,8 +425,10 @@ func _on_start_pressed() -> void:
 				d = LordAI.DOCTRINE_DEFENSE
 			entry["ai_doctrine"] = d
 		clean_slots.append(entry)
+	SaveGame.clear_session()
 	GlobalSet.pending_game_setup = {
 		"map_path": GlobalSet.TEST_MAP_01,
 		"slots": clean_slots,
+		"world_seed": randi(),
 	}
 	get_tree().change_scene_to_file(GlobalSet.TEST_MAP_01)

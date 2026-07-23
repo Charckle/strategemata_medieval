@@ -784,21 +784,19 @@ theme_override_constants/separation = 6
 [node name="heraldry_hint" type="Label" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns"]
 layout_mode = 2
 autowrap_mode = 3
-text = "Each half/quarter has its own base colour, ink (patterns & charges), and layout. This is only your shield — borders use Order colour above."
+text = "Your coat of arms. Borders and flags use Order colour above."
 
 [node name="heraldry_action_row" type="HBoxContainer" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
+[node name="heraldry_edit_btn" type="Button" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns/heraldry_action_row"]
+layout_mode = 2
+text = "Edit arms"
+
 [node name="heraldry_reroll_btn" type="Button" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns/heraldry_action_row"]
 layout_mode = 2
 text = "Generate random"
-
-[node name="heraldry_editors" type="GridContainer" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns"]
-layout_mode = 2
-theme_override_constants/h_separation = 10
-theme_override_constants/v_separation = 4
-columns = 2
 
 [node name="top_panel" type="Panel" parent="." unique_id=982718473]
 anchors_preset = 10
@@ -840,5 +838,17 @@ layout_mode = 2
 
 [node name="player_name_lbl" type="Label" parent="top_panel/MarginContainer/HBoxContainer" unique_id=1277984132]
 layout_mode = 2
+
+[node name="VSeparator3" type="VSeparator" parent="top_panel/MarginContainer/HBoxContainer"]
+visible = false
+layout_mode = 2
+
+[node name="province_focus_lbl" type="Label" parent="top_panel/MarginContainer/HBoxContainer"]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+text = ""
+clip_text = true
+text_overrun_behavior = 3
 
 [connection signal="pressed" from="Panel/end_turn_btn" to="." method="_on_end_turn_btn_pressed"]

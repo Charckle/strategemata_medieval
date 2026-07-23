@@ -3,10 +3,7 @@ extends Control
 func _ready() -> void:
 	hide_all_overlays()
 	_apply_display_settings()
-	if ContinueGame.check_continue_exists():
-		$center/panel/buttons/continue_btn.visible = true
-	else:
-		$center/panel/buttons/continue_btn.visible = false
+	$center/panel/buttons/continue_btn.visible = SaveGame.has_last_manual()
 	if GlobalSet.return_to_new_game:
 		GlobalSet.return_to_new_game = false
 		_on_new_game_btn_pressed()
@@ -21,6 +18,8 @@ func hide_all_overlays() -> void:
 	$overlays/settings_pan.visible = false
 	if has_node("overlays/new_game_pan"):
 		$overlays/new_game_pan.visible = false
+	if has_node("overlays/load_game_pan"):
+		$overlays/load_game_pan.visible = false
 
 func _on_settings_btn_pressed() -> void:
 	hide_all_overlays()
@@ -32,3 +31,17 @@ func _on_new_game_btn_pressed() -> void:
 	if pan.has_method("reset_to_defaults"):
 		pan.reset_to_defaults()
 	pan.visible = true
+
+func _on_load_game_btn_pressed() -> void:
+	hide_all_overlays()
+	var pan := $overlays/load_game_pan
+	if pan.has_method("open_panel"):
+		pan.open_panel()
+	else:
+		pan.visible = true
+
+func _on_continue_btn_pressed() -> void:
+	var id := SaveGame.get_last_manual_id()
+	if id.is_empty():
+		return
+	SaveGame.begin_load(id)

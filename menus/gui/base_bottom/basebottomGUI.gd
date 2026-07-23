@@ -1,6 +1,7 @@
 extends CanvasLayer
 
 const ArmyNames := preload("res://global_scripts/army_names.gd")
+const HeraldryEditorScene = preload("res://menus/gui/heraldry_editor/heraldry_editor.gd")
 
 @onready var map_menu := $map_menu
 @onready var economy_menu := $economy_menu
@@ -15,16 +16,11 @@ const ArmyNames := preload("res://global_scripts/army_names.gd")
 @onready var show_weather_chk := $settings_menu/margin/vbox/tabs/Video/show_weather_row/show_weather_chk
 @onready var heraldry_preview := $settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_preview
 @onready var heraldry_reroll_btn := $settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns/heraldry_action_row/heraldry_reroll_btn
-@onready var heraldry_editors := $settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns/heraldry_editors
+@onready var heraldry_edit_btn := $settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns/heraldry_action_row/heraldry_edit_btn
 @onready var order_color_swatch := $settings_menu/margin/vbox/tabs/Gameplay/order_color_row/order_color_swatch
 @onready var order_color_cycle_btn := $settings_menu/margin/vbox/tabs/Gameplay/order_color_row/order_color_btns/order_color_cycle_btn
 
-var _heraldry_opt_division: OptionButton = null
-var _heraldry_field_rows: Array = []  # [{base, ink, pattern, charge, charge_type}, ...]
-var _heraldry_syncing := false
-var _heraldry_tincture_keys: Array = []
-var _heraldry_fields_box: VBoxContainer = null
-var _heraldry_editor_built := false
+var _heraldry_editor: Control = null
 @onready var map_tabs := $map_menu/margin/vbox/tabs
 @onready var minimap := $map_menu/margin/vbox/tabs/Map/Minimap
 
@@ -68,6 +64,8 @@ var _heraldry_editor_built := false
 @onready var production_building_lbl := $war_menu/margin/vbox/tabs/Production/building_summary_lbl
 @onready var production_list := $war_menu/margin/vbox/tabs/Production/ScrollContainer/production_list
 @onready var ladder_list := $war_menu/margin/vbox/tabs/Ladder/ScrollContainer/ladder_list
+@onready var top_province_sep := $top_panel/MarginContainer/HBoxContainer/VSeparator3
+@onready var top_province_lbl := $top_panel/MarginContainer/HBoxContainer/province_focus_lbl
 
 var selected_province_id: String = ""
 var _refreshing_alliances := false
@@ -353,7 +351,7 @@ var _smith_recipe_btns: VBoxContainer = null
 var _smith_recipe_building: Node = null
 var _smith_recipe_base = null
 
-# Castle construction popup (build / upgrade / dismantle).
+# Castle construction popup (build / upgrade / dismantle; no downgrade or mid-project cancel).
 var _castle_popup: PanelContainer = null
 var _castle_popup_title: Label = null
 var _castle_popup_body: Label = null
@@ -420,11 +418,14 @@ func _ready() -> void:
 	show_weather_chk.toggled.connect(_on_show_weather_toggled)
 	if heraldry_reroll_btn != null:
 		heraldry_reroll_btn.pressed.connect(_on_heraldry_reroll_pressed)
+	if heraldry_edit_btn != null:
+		heraldry_edit_btn.pressed.connect(_on_heraldry_edit_pressed)
 	if order_color_cycle_btn != null:
 		order_color_cycle_btn.pressed.connect(_on_order_color_cycle_pressed)
 	if order_color_swatch != null:
 		order_color_swatch.gui_input.connect(_on_order_color_swatch_gui_input)
-	_ensure_heraldry_editors()
+	_ensure_heraldry_editor()
+	_ensure_save_ui()
 	_ensure_province_levy_widgets()
 	if caravan_tab_send_btn != null:
 		caravan_tab_send_btn.pressed.connect(_on_caravan_tab_send_pressed)
@@ -497,7 +498,7 @@ func _ensure_admin_tab() -> void:
 	_admin_report.custom_minimum_size = Vector2(0, 280)
 	root.add_child(_admin_report)
 
-	# Give settings room for the dump + heraldry editor.
+	# Give settings room for admin dump tabs.
 	settings_menu.custom_minimum_size = Vector2(780, 800)
 	settings_menu.size = Vector2(780, 800)
 
@@ -561,6 +562,7 @@ func _on_settings_btn_pressed() -> void:
 		_refresh_victory_debug_report()
 		_refresh_heraldry_preview()
 		_refresh_order_color_swatch()
+		_refresh_save_status()
 
 
 func _refresh_order_color_swatch() -> void:
@@ -601,7 +603,40 @@ func _refresh_heraldry_preview() -> void:
 	if players == null or my_id == null or not players.has(my_id):
 		return
 	heraldry_preview.texture = Heraldry.texture_for_player(players[my_id], 72)
-	_sync_heraldry_editors_from_player()
+
+
+func _ensure_heraldry_editor() -> void:
+	if _heraldry_editor != null and is_instance_valid(_heraldry_editor):
+		return
+	_heraldry_editor = HeraldryEditorScene.new()
+	_heraldry_editor.name = "heraldry_editor"
+	_heraldry_editor.accepted.connect(_on_heraldry_editor_accepted)
+	_heraldry_editor.cancelled.connect(_on_heraldry_editor_cancelled)
+	add_child(_heraldry_editor)
+
+
+func _on_heraldry_edit_pressed() -> void:
+	if not is_instance_valid(parent_n):
+		return
+	var players = parent_n.get("players")
+	var my_id = parent_n.get("my_pl_id")
+	if players == null or my_id == null or not players.has(my_id):
+		return
+	_ensure_heraldry_editor()
+	var h: Dictionary = players[my_id].heraldry if players[my_id].get("heraldry") != null else {}
+	var lord_name := str(players[my_id].name_)
+	_heraldry_editor.open(h if h is Dictionary else {}, "Edit arms — %s" % lord_name)
+
+
+func _on_heraldry_editor_accepted(heraldry: Dictionary) -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("set_my_heraldry"):
+		return
+	parent_n.set_my_heraldry(heraldry)
+	_refresh_heraldry_preview()
+
+
+func _on_heraldry_editor_cancelled() -> void:
+	pass
 
 
 func _on_heraldry_reroll_pressed() -> void:
@@ -610,188 +645,6 @@ func _on_heraldry_reroll_pressed() -> void:
 	if parent_n.has_method("reroll_my_heraldry"):
 		parent_n.reroll_my_heraldry()
 	_refresh_heraldry_preview()
-
-
-func _ensure_heraldry_editors() -> void:
-	if heraldry_editors == null or _heraldry_editor_built:
-		return
-	_heraldry_editor_built = true
-	_heraldry_tincture_keys = Heraldry.field_tincture_options()
-	_heraldry_opt_division = _make_heraldry_option("Division", Heraldry.division_labels())
-	_heraldry_opt_division.item_selected.connect(_on_heraldry_division_changed)
-
-	# Per-field editors sit below the main grid (not inside its 2 columns).
-	_heraldry_fields_box = VBoxContainer.new()
-	_heraldry_fields_box.name = "heraldry_fields"
-	_heraldry_fields_box.add_theme_constant_override("separation", 6)
-	_heraldry_fields_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var parent_box := heraldry_editors.get_parent()
-	if parent_box != null:
-		parent_box.add_child(_heraldry_fields_box)
-	else:
-		heraldry_editors.add_child(_heraldry_fields_box)
-	_rebuild_heraldry_field_editors(Heraldry.DIVISION.SOLID)
-
-
-func _make_heraldry_option(label_text: String, items: Variant) -> OptionButton:
-	var lbl := Label.new()
-	lbl.text = label_text
-	heraldry_editors.add_child(lbl)
-	var opt := OptionButton.new()
-	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for item in items:
-		opt.add_item(str(item))
-	heraldry_editors.add_child(opt)
-	return opt
-
-
-func _rebuild_heraldry_field_editors(division: int, keep_values: Array = []) -> void:
-	if _heraldry_fields_box == null:
-		return
-	for child in _heraldry_fields_box.get_children():
-		child.queue_free()
-	_heraldry_field_rows.clear()
-	var labels := Heraldry.field_labels(division)
-	var tincture_names: Array = _heraldry_tincture_keys.map(func(k): return Heraldry.tincture_display_name(str(k)))
-	var n := labels.size()
-	for i in n:
-		var wrap := VBoxContainer.new()
-		wrap.add_theme_constant_override("separation", 2)
-		var title := Label.new()
-		var title_txt := str(labels[i])
-		title.text = title_txt
-		title.add_theme_font_size_override("font_size", 13)
-		wrap.add_child(title)
-		var row := GridContainer.new()
-		row.columns = 2
-		row.add_theme_constant_override("h_separation", 8)
-		row.add_theme_constant_override("v_separation", 2)
-		var base_opt := _add_field_option(row, "Base", tincture_names)
-		var ink_opt := _add_field_option(row, "Ink", tincture_names)
-		var pattern_opt := _add_field_option(row, "Pattern", Heraldry.pattern_labels())
-		var charge_opt := _add_field_option(row, "Charges", Heraldry.charge_layout_labels())
-		var type_opt := _add_field_option(row, "Charge type", Heraldry.charge_type_labels())
-		wrap.add_child(row)
-		_heraldry_fields_box.add_child(wrap)
-		if i < keep_values.size() and keep_values[i] is Dictionary:
-			var f: Dictionary = keep_values[i]
-			_select_heraldry_key(base_opt, _heraldry_tincture_keys, str(f.get("base", "azure")))
-			_select_heraldry_key(ink_opt, _heraldry_tincture_keys, str(f.get("ink", "or")))
-			pattern_opt.select(clampi(int(f.get("pattern", 0)), 0, pattern_opt.item_count - 1))
-			charge_opt.select(clampi(int(f.get("charge", 0)), 0, charge_opt.item_count - 1))
-			type_opt.select(clampi(int(f.get("charge_type", 0)), 0, type_opt.item_count - 1))
-		_heraldry_field_rows.append({
-			"base": base_opt,
-			"ink": ink_opt,
-			"pattern": pattern_opt,
-			"charge": charge_opt,
-			"charge_type": type_opt,
-		})
-		base_opt.item_selected.connect(_on_heraldry_editor_changed)
-		ink_opt.item_selected.connect(_on_heraldry_editor_changed)
-		pattern_opt.item_selected.connect(_on_heraldry_editor_changed)
-		charge_opt.item_selected.connect(_on_heraldry_editor_changed)
-		type_opt.item_selected.connect(_on_heraldry_editor_changed)
-
-
-func _add_field_option(parent: GridContainer, label_text: String, items: Variant) -> OptionButton:
-	var lbl := Label.new()
-	lbl.text = label_text
-	parent.add_child(lbl)
-	var opt := OptionButton.new()
-	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for item in items:
-		opt.add_item(str(item))
-	parent.add_child(opt)
-	return opt
-
-
-func _on_heraldry_division_changed(_idx: int = 0) -> void:
-	if _heraldry_syncing:
-		return
-	var prev_fields := _fields_from_editors()
-	var division := _heraldry_opt_division.selected if _heraldry_opt_division != null else 0
-	_heraldry_syncing = true
-	_rebuild_heraldry_field_editors(division, prev_fields)
-	_heraldry_syncing = false
-	_on_heraldry_editor_changed()
-
-
-func _sync_heraldry_editors_from_player() -> void:
-	_ensure_heraldry_editors()
-	if _heraldry_opt_division == null or not is_instance_valid(parent_n):
-		return
-	var players = parent_n.get("players")
-	var my_id = parent_n.get("my_pl_id")
-	if players == null or my_id == null or not players.has(my_id):
-		return
-	var h: Dictionary = Heraldry.normalize(players[my_id].heraldry if players[my_id].get("heraldry") != null else {})
-	_heraldry_syncing = true
-	var division := clampi(int(h.get("division", 0)), 0, 2)
-	_heraldry_opt_division.select(division)
-	_rebuild_heraldry_field_editors(division, h.get("fields", []))
-	_heraldry_syncing = false
-
-
-func _select_heraldry_key(opt: OptionButton, keys: Array, key: String) -> void:
-	var idx := keys.find(key)
-	if idx < 0:
-		idx = 0
-	opt.select(clampi(idx, 0, opt.item_count - 1))
-
-
-func _fields_from_editors() -> Array:
-	var fields: Array = []
-	for row in _heraldry_field_rows:
-		var base := "azure"
-		var ink := "or"
-		if row.get("base") != null and row["base"].selected >= 0 \
-				and row["base"].selected < _heraldry_tincture_keys.size():
-			base = str(_heraldry_tincture_keys[row["base"].selected])
-		if row.get("ink") != null and row["ink"].selected >= 0 \
-				and row["ink"].selected < _heraldry_tincture_keys.size():
-			ink = str(_heraldry_tincture_keys[row["ink"].selected])
-		fields.append({
-			"base": base,
-			"ink": ink,
-			"pattern": int(row["pattern"].selected) if row.get("pattern") != null else 0,
-			"charge": int(row["charge"].selected) if row.get("charge") != null else 0,
-			"charge_type": int(row["charge_type"].selected) if row.get("charge_type") != null else 0,
-		})
-	if fields.is_empty():
-		fields.append(Heraldry.default_field())
-	return fields
-
-
-func _heraldry_from_editors() -> Dictionary:
-	var fields := _fields_from_editors()
-	return {
-		"primary": str(fields[0].get("base", "azure")),
-		"division": _heraldry_opt_division.selected if _heraldry_opt_division != null else 0,
-		"fields": fields,
-	}
-
-
-func _on_heraldry_editor_changed(_idx: int = 0) -> void:
-	if _heraldry_syncing:
-		return
-	if not is_instance_valid(parent_n) or not parent_n.has_method("set_my_heraldry"):
-		return
-	var applied: Dictionary = parent_n.set_my_heraldry(_heraldry_from_editors())
-	if heraldry_preview != null and not applied.is_empty():
-		heraldry_preview.texture = Heraldry.make_texture(applied, 72)
-	# Quietly fix ink selectors if rule-of-tincture corrected them.
-	if applied.has("fields") and applied["fields"] is Array:
-		_heraldry_syncing = true
-		var fields: Array = applied["fields"]
-		for i in mini(_heraldry_field_rows.size(), fields.size()):
-			var f: Dictionary = fields[i]
-			var row: Dictionary = _heraldry_field_rows[i]
-			if row.get("ink") != null:
-				_select_heraldry_key(row["ink"], _heraldry_tincture_keys, str(f.get("ink", "or")))
-			if row.get("base") != null:
-				_select_heraldry_key(row["base"], _heraldry_tincture_keys, str(f.get("base", "azure")))
-		_heraldry_syncing = false
 
 
 func _refresh_admin_province_list() -> void:
@@ -872,6 +725,291 @@ func _populate_gameplay_settings() -> void:
 	show_province_names_chk.button_pressed = enabled
 	if show_army_names_chk != null:
 		show_army_names_chk.button_pressed = GlobalSet.settings.get("show_army_names", 1) != 0
+
+
+var _save_status_lbl: Label = null
+var _save_as_dialog: AcceptDialog = null
+var _save_as_edit: LineEdit = null
+var _save_overwrite_id: String = ""
+var _load_dialog: AcceptDialog = null
+var _load_list_box: VBoxContainer = null
+var _load_empty_lbl: Label = null
+var _load_rename_dialog: AcceptDialog = null
+var _load_rename_edit: LineEdit = null
+var _load_rename_id: String = ""
+var _load_delete_dialog: ConfirmationDialog = null
+var _load_delete_id: String = ""
+
+
+func _ensure_save_ui() -> void:
+	var gameplay: VBoxContainer = settings_menu.get_node_or_null("margin/vbox/tabs/Gameplay")
+	if gameplay == null or gameplay.get_node_or_null("save_row") != null:
+		return
+	var sep := HSeparator.new()
+	sep.name = "save_sep"
+	gameplay.add_child(sep)
+	gameplay.move_child(sep, 0)
+	var title := Label.new()
+	title.name = "save_title"
+	title.text = "Save / Load"
+	title.add_theme_font_size_override("font_size", 16)
+	gameplay.add_child(title)
+	gameplay.move_child(title, 1)
+	var row := HBoxContainer.new()
+	row.name = "save_row"
+	row.add_theme_constant_override("separation", 8)
+	gameplay.add_child(row)
+	gameplay.move_child(row, 2)
+	var save_btn := Button.new()
+	save_btn.text = "Save"
+	save_btn.tooltip_text = "Overwrite current save (Save As if none yet)"
+	save_btn.pressed.connect(_on_save_pressed)
+	row.add_child(save_btn)
+	var save_as_btn := Button.new()
+	save_as_btn.text = "Save As…"
+	save_as_btn.pressed.connect(_on_save_as_pressed)
+	row.add_child(save_as_btn)
+	var load_btn := Button.new()
+	load_btn.text = "Load…"
+	load_btn.tooltip_text = "Load a saved game"
+	load_btn.pressed.connect(_on_load_pressed)
+	row.add_child(load_btn)
+	_save_status_lbl = Label.new()
+	_save_status_lbl.name = "save_status"
+	_save_status_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_save_status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	row.add_child(_save_status_lbl)
+	_refresh_save_status()
+
+
+func _refresh_save_status() -> void:
+	if _save_status_lbl == null:
+		return
+	if SaveGame.current_manual_id.is_empty():
+		_save_status_lbl.text = "No named save yet"
+		return
+	var list := SaveGame.list_saves()
+	for m in list:
+		if str(m.get("id", "")) == SaveGame.current_manual_id:
+			_save_status_lbl.text = "Current: %s" % str(m.get("display_name", SaveGame.current_manual_id))
+			return
+	_save_status_lbl.text = "Current: %s" % SaveGame.current_manual_id
+
+
+func _on_save_pressed() -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("save_game_current"):
+		return
+	if parent_n.save_game_current():
+		_save_status_lbl.text = "Saved."
+		_refresh_save_status()
+	else:
+		_on_save_as_pressed()
+
+
+func _on_save_as_pressed() -> void:
+	_save_overwrite_id = ""
+	_ensure_save_as_dialog()
+	_save_as_edit.text = ""
+	_save_as_dialog.title = "Save As"
+	_save_as_dialog.dialog_text = ""
+	_save_as_dialog.popup_centered(Vector2(360, 120))
+
+
+func _ensure_save_as_dialog() -> void:
+	if _save_as_dialog != null:
+		return
+	_save_as_dialog = AcceptDialog.new()
+	_save_as_dialog.title = "Save As"
+	_save_as_dialog.ok_button_text = "Save"
+	_save_as_dialog.dialog_hide_on_ok = false
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	var lbl := Label.new()
+	lbl.text = "Save name"
+	box.add_child(lbl)
+	_save_as_edit = LineEdit.new()
+	_save_as_edit.placeholder_text = "My campaign"
+	box.add_child(_save_as_edit)
+	_save_as_dialog.add_child(box)
+	add_child(_save_as_dialog)
+	_save_as_dialog.confirmed.connect(_on_save_as_confirmed)
+
+
+func _on_save_as_confirmed() -> void:
+	if not is_instance_valid(parent_n):
+		return
+	var name_ := _save_as_edit.text.strip_edges()
+	if name_.is_empty():
+		name_ = "Save"
+	if _save_overwrite_id.is_empty():
+		var existing := SaveGame.find_save_id_by_display_name(name_)
+		if existing != "":
+			_save_overwrite_id = existing
+			_save_as_dialog.title = "Overwrite \"%s\"?" % name_
+			_save_as_dialog.dialog_text = "A save with that name exists. Confirm again to overwrite."
+			return
+		var id := ""
+		if parent_n.has_method("save_game_as"):
+			id = parent_n.save_game_as(name_)
+		_save_as_dialog.hide()
+		if id != "":
+			_refresh_save_status()
+			if _save_status_lbl != null:
+				_save_status_lbl.text = "Saved as %s" % name_
+		return
+	# Confirmed overwrite
+	var state = parent_n.export_full_save() if parent_n.has_method("export_full_save") else {}
+	if SaveGame.save_as_overwrite(_save_overwrite_id, name_, state):
+		_refresh_save_status()
+		if _save_status_lbl != null:
+			_save_status_lbl.text = "Overwrote %s" % name_
+	_save_overwrite_id = ""
+	_save_as_dialog.hide()
+	_save_as_dialog.dialog_text = ""
+	_save_as_dialog.title = "Save As"
+
+
+func _on_load_pressed() -> void:
+	_ensure_load_dialog()
+	_refresh_load_list()
+	_load_dialog.popup_centered(Vector2(520, 420))
+
+
+func _ensure_load_dialog() -> void:
+	if _load_dialog != null:
+		return
+	_load_dialog = AcceptDialog.new()
+	_load_dialog.title = "Load Game"
+	_load_dialog.ok_button_text = "Close"
+	_load_dialog.dialog_hide_on_ok = true
+	var root := VBoxContainer.new()
+	root.custom_minimum_size = Vector2(480, 320)
+	root.add_theme_constant_override("separation", 8)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.custom_minimum_size = Vector2(0, 280)
+	root.add_child(scroll)
+	_load_list_box = VBoxContainer.new()
+	_load_list_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_load_list_box.add_theme_constant_override("separation", 8)
+	scroll.add_child(_load_list_box)
+	_load_empty_lbl = Label.new()
+	_load_empty_lbl.text = "No saved games."
+	_load_empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(_load_empty_lbl)
+	_load_dialog.add_child(root)
+	add_child(_load_dialog)
+
+	_load_rename_dialog = AcceptDialog.new()
+	_load_rename_dialog.title = "Rename save"
+	_load_rename_dialog.ok_button_text = "Rename"
+	var rbox := VBoxContainer.new()
+	_load_rename_edit = LineEdit.new()
+	rbox.add_child(_load_rename_edit)
+	_load_rename_dialog.add_child(rbox)
+	add_child(_load_rename_dialog)
+	_load_rename_dialog.confirmed.connect(_on_in_game_rename_confirmed)
+
+	_load_delete_dialog = ConfirmationDialog.new()
+	_load_delete_dialog.title = "Delete save"
+	_load_delete_dialog.dialog_text = "Delete this save permanently?"
+	add_child(_load_delete_dialog)
+	_load_delete_dialog.confirmed.connect(_on_in_game_delete_confirmed)
+
+
+func _refresh_load_list() -> void:
+	if _load_list_box == null:
+		return
+	while _load_list_box.get_child_count() > 0:
+		var ch := _load_list_box.get_child(0)
+		_load_list_box.remove_child(ch)
+		ch.free()
+	var saves := SaveGame.list_saves()
+	_load_empty_lbl.visible = saves.is_empty()
+	for meta in saves:
+		_load_list_box.add_child(_make_in_game_load_row(meta))
+
+
+func _make_in_game_load_row(meta: Dictionary) -> PanelContainer:
+	var id := str(meta.get("id", ""))
+	var panel := PanelContainer.new()
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 4)
+	panel.add_child(col)
+
+	var name_lbl := Label.new()
+	name_lbl.text = str(meta.get("display_name", id))
+	name_lbl.add_theme_font_size_override("font_size", 15)
+	col.add_child(name_lbl)
+
+	var detail := Label.new()
+	detail.text = "%s, Year %d  ·  Turn %d  ·  %s" % [
+		str(meta.get("season_name", "")),
+		int(meta.get("year", 1100)),
+		int(meta.get("turn", 0)),
+		str(meta.get("lord_name", "")),
+	]
+	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(detail)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	col.add_child(row)
+
+	var load_btn := Button.new()
+	load_btn.text = "Load"
+	load_btn.pressed.connect(func(): _on_in_game_load(id))
+	row.add_child(load_btn)
+
+	var is_auto := bool(meta.get("is_autosave", id == SaveGame.AUTOSAVE_ID))
+	if not is_auto:
+		var ren := Button.new()
+		ren.text = "Rename"
+		ren.pressed.connect(func(): _on_in_game_rename(id, str(meta.get("display_name", ""))))
+		row.add_child(ren)
+
+	var del := Button.new()
+	del.text = "Delete"
+	del.pressed.connect(func(): _on_in_game_delete(id))
+	row.add_child(del)
+	return panel
+
+
+func _on_in_game_load(save_id: String) -> void:
+	if _load_dialog != null:
+		_load_dialog.hide()
+	if settings_menu != null:
+		settings_menu.visible = false
+	SaveGame.begin_load(save_id)
+
+
+func _on_in_game_rename(save_id: String, current: String) -> void:
+	_load_rename_id = save_id
+	_load_rename_edit.text = current
+	_load_rename_dialog.popup_centered(Vector2(320, 100))
+
+
+func _on_in_game_rename_confirmed() -> void:
+	if _load_rename_id.is_empty():
+		return
+	SaveGame.rename_save(_load_rename_id, _load_rename_edit.text)
+	_load_rename_id = ""
+	_refresh_load_list()
+	_refresh_save_status()
+
+
+func _on_in_game_delete(save_id: String) -> void:
+	_load_delete_id = save_id
+	_load_delete_dialog.popup_centered()
+
+
+func _on_in_game_delete_confirmed() -> void:
+	if _load_delete_id.is_empty():
+		return
+	SaveGame.delete_save(_load_delete_id)
+	_load_delete_id = ""
+	_refresh_load_list()
+	_refresh_save_status()
 
 
 func _populate_video_settings() -> void:
@@ -964,11 +1102,93 @@ func open_economy_labor_for_province(province_id: String, labor_category: String
 
 func on_province_focused(province_id: String) -> void:
 	selected_province_id = province_id
+	_refresh_top_province_focus(province_id)
 	if not is_economy_menu_open():
 		return
 	economy_tabs.current_tab = 2
 	if is_instance_valid(parent_n):
 		_fill_province_tab(parent_n, province_id)
+
+
+## Top-bar snapshot of the focused province (your holding only).
+func _refresh_top_province_focus(province_id: String = "") -> void:
+	if top_province_lbl == null or top_province_sep == null:
+		return
+	var pid := province_id
+	# Prefer map focus (bold border); fall back to selection / argument.
+	if is_instance_valid(parent_n) and parent_n.get("focused_province_id") != null:
+		var focused := str(parent_n.focused_province_id)
+		if focused != "":
+			pid = focused
+	if pid == "":
+		pid = selected_province_id
+	if pid == "" or not is_instance_valid(parent_n) or not parent_n.has_method("get_province_data"):
+		_hide_top_province_focus()
+		return
+	var data: Dictionary = parent_n.get_province_data(pid)
+	if data.is_empty() or not bool(data.get("viewer_has_holding", false)):
+		_hide_top_province_focus()
+		return
+	var holding: Dictionary = data.get("holding", {})
+	var line := (
+		"%s · Grain %d · Wood %d · Iron %d · Stone %d · Horses %d · Happy %.0f · Pop %d"
+		% [
+			str(data.get("name", pid)),
+			int(holding.get("grain_stock", data.get("grain_stock", 0))),
+			int(holding.get("wood_stock", 0)),
+			int(holding.get("iron_stock", 0)),
+			int(holding.get("stone_stock", 0)),
+			int(holding.get("horses", 0)),
+			float(data.get("happiness", holding.get("happiness", 0))),
+			int(holding.get("population", data.get("owned_population", 0))),
+		]
+	)
+	var smith_bit := _top_province_blacksmith_text(pid, holding)
+	if smith_bit != "":
+		line += " · " + smith_bit
+	top_province_lbl.text = line
+	top_province_lbl.visible = true
+	top_province_sep.visible = true
+
+
+## Compact blacksmith recipe + expected next-season crafts for the top bar.
+func _top_province_blacksmith_text(province_id: String, holding: Dictionary) -> String:
+	if not bool(holding.get("has_blacksmith", false)):
+		return ""
+	var recipes: PackedStringArray = []
+	var prov = null
+	if parent_n.get("provinces") != null:
+		prov = parent_n.provinces.get_node_or_null(province_id)
+	if prov != null and prov.has_method("get_economy_buildings_for"):
+		var viewer_id := int(parent_n.my_pl_id)
+		for b in prov.get_economy_buildings_for(viewer_id, "blacksmith"):
+			if b == null or not is_instance_valid(b):
+				continue
+			if b.has_method("is_blacksmith") and not b.is_blacksmith():
+				continue
+			var wkey := str(b.get_craft_weapon()) if b.has_method("get_craft_weapon") else ""
+			if wkey == "" or wkey not in GlobalUnits.BLACKSMITH_CRAFTABLE:
+				recipes.append("Idle")
+			else:
+				recipes.append(GlobalUnits.weapon_name(wkey))
+	var recipe_txt := ", ".join(recipes) if not recipes.is_empty() else "Idle"
+	var next_bits: PackedStringArray = []
+	var preview: Dictionary = holding.get("economy_preview", {})
+	var weapons_prev: Dictionary = preview.get("weapons", {})
+	for wk in GlobalUnits.BLACKSMITH_CRAFTABLE:
+		var amt := int(weapons_prev.get(wk, 0))
+		if amt > 0:
+			next_bits.append("%+d %s" % [amt, GlobalUnits.weapon_name(str(wk))])
+	var next_txt := ", ".join(next_bits) if not next_bits.is_empty() else "0"
+	return "Smith %s · Next %s" % [recipe_txt, next_txt]
+
+
+func _hide_top_province_focus() -> void:
+	if top_province_lbl != null:
+		top_province_lbl.text = ""
+		top_province_lbl.visible = false
+	if top_province_sep != null:
+		top_province_sep.visible = false
 
 
 ## Screen-space hit test for open menus / popups (Area2D click-through guard).
@@ -1668,6 +1888,8 @@ func show_smith_recipe_popup(base_map: Node, building: Node, anchor: Control = n
 	_smith_recipe_building = building
 	_rebuild_smith_recipe_popup()
 	_smith_recipe_popup.visible = true
+	# Tree order controls input; z_index alone won't beat economy_menu.
+	_bring_to_front(_smith_recipe_popup)
 	var preferred := get_viewport().get_mouse_position() + Vector2(14, 0)
 	if anchor != null and is_instance_valid(anchor):
 		var r := anchor.get_global_rect()
@@ -1977,8 +2199,8 @@ func _rebuild_castle_popup() -> void:
 	var hdr := Label.new()
 	hdr.text = "Construction target:"
 	_castle_popup_btns.add_child(hdr)
-	# Dismantle / cancel toward empty.
-	_add_castle_target_button(GlobalUnits.CASTLE_TARGET_EMPTY, "Dismantle / clear plot", wood, stone)
+	# Dismantle only from a standing castle (blocked mid-project by preview_retarget).
+	_add_castle_target_button(GlobalUnits.CASTLE_TARGET_EMPTY, "Dismantle to empty plot", wood, stone)
 	for lvl in range(6):
 		var name_ := str(b.castle_type_display_name(lvl)) if b.has_method("castle_type_display_name") else "Level %d" % (lvl + 1)
 		_add_castle_target_button(lvl, name_, wood, stone)
@@ -5034,6 +5256,7 @@ func update_economy_menu(base_map: Node) -> void:
 		if selected_province_id != "":
 			_fill_province_tab(base_map, selected_province_id)
 	_fill_caravan_tab(base_map)
+	_refresh_top_province_focus()
 
 
 func _on_province_list_clicked(province_id: String) -> void:

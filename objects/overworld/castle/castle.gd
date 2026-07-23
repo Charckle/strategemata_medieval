@@ -281,6 +281,8 @@ func materials_for_standing() -> Dictionary:
 ## Work / pay preview for switching the project (or starting one) to `new_target`.
 ## Returns {} if invalid. Keys: work_needed, progress_keep, pay, refund_on_complete,
 ## complete_immediately, restore_mode, expel.
+## Rules: upgrade keeps garrison; no downgrade; no cancel mid-project; mid-project may
+## only switch to a higher castle; dismantle (standing only) expels the garrison.
 func preview_retarget(new_target: int) -> Dictionary:
 	if new_target < GlobalUnits.CASTLE_TARGET_EMPTY or new_target > int(CASTLE_TYPE.CONCENTRIC_CASTLE):
 		return {}
@@ -291,144 +293,80 @@ func preview_retarget(new_target: int) -> Dictionary:
 	if not project_active and not has_castle:
 		on_site = {"wood": 0, "stone": 0}
 
-	# Mid-project: retarget down to a finished level whose work is already met → instant complete.
-	if project_active and new_target >= 0:
-		var need_t := GlobalUnits.castle_work_required(new_target)
-		if project_progress >= need_t and new_target != project_target:
-			var want := GlobalUnits.castle_material_cost(new_target)
-			return {
-				"work_needed": 0,
-				"progress_keep": 0,
-				"pay": {"wood": 0, "stone": 0},
-				"refund_now": {
-					"wood": maxi(0, int(on_site.get("wood", 0)) - int(want.get("wood", 0))),
-					"stone": maxi(0, int(on_site.get("stone", 0)) - int(want.get("stone", 0))),
-				},
-				"refund_on_complete": {"wood": 0, "stone": 0},
-				"complete_immediately": true,
-				"restore_mode": false,
-				"expel": false,
-				"base_level": base_lvl,
-				"materials_after": want,
-			}
-
-	# Restore to previous completed level (cancel upgrade / abandon toward empty base).
-	if project_active and new_target == base_lvl and base_lvl >= 0:
-		var restore_work := int(ceil(float(project_progress) * 0.5))
-		var want_b := GlobalUnits.castle_material_cost(base_lvl)
-		return {
-			"work_needed": restore_work,
-			"progress_keep": 0,
-			"pay": {"wood": 0, "stone": 0},
-			"refund_now": {"wood": 0, "stone": 0},
-			"refund_on_complete": {
-				"wood": maxi(0, int(on_site.get("wood", 0)) - int(want_b.get("wood", 0))),
-				"stone": maxi(0, int(on_site.get("stone", 0)) - int(want_b.get("stone", 0))),
-			},
-			"complete_immediately": restore_work <= 0,
-			"restore_mode": true,
-			"expel": false,
-			"base_level": base_lvl,
-			"materials_after": on_site,
-		}
-
-	# Cancel mid-build toward empty (from empty base, or dismantle cancel path).
-	if project_active and new_target < 0:
-		var clear_work := int(ceil(float(project_progress) * 0.5))
-		return {
-			"work_needed": clear_work,
-			"progress_keep": 0,
-			"pay": {"wood": 0, "stone": 0},
-			"refund_now": {"wood": 0, "stone": 0},
-			"refund_on_complete": on_site.duplicate(),
-			"complete_immediately": clear_work <= 0,
-			"restore_mode": false,
-			"expel": false,
-			"base_level": base_lvl,
-			"materials_after": on_site,
-		}
-
-	# Fresh project from resting state, or retarget to a different build/delevel target.
-	var from_lvl := base_lvl
-	var pay := {"wood": 0, "stone": 0}
-	var refund_on_complete := {"wood": 0, "stone": 0}
-	var work_needed := 0
-	var progress_keep := 0
-	var expel := false
-	var materials_after := on_site.duplicate()
-
-	if new_target < 0:
-		# Dismantle standing castle to empty.
-		if from_lvl < 0:
+	# Mid-project: only retarget to a better (higher) castle. No cancel / downgrade / dismantle.
+	if project_active:
+		if new_target <= project_target:
 			return {}
-		work_needed = int(ceil(float(GlobalUnits.castle_work_required(from_lvl)) * 0.5))
-		refund_on_complete = GlobalUnits.castle_material_cost(from_lvl)
-		materials_after = GlobalUnits.castle_material_cost(from_lvl)
-		expel = not project_active and has_castle
-	elif from_lvl < 0 or new_target > from_lvl:
-		# Build or upgrade (full target work). Mid-project progress carries when going up.
-		work_needed = GlobalUnits.castle_work_required(new_target)
-		progress_keep = project_progress if project_active else 0
-		var want := GlobalUnits.castle_material_cost(new_target)
-		pay = {
-			"wood": maxi(0, int(want["wood"]) - int(on_site.get("wood", 0))),
-			"stone": maxi(0, int(want["stone"]) - int(on_site.get("stone", 0))),
+		var work_needed_m := GlobalUnits.castle_work_required(new_target)
+		var progress_keep_m := project_progress
+		var want_m := GlobalUnits.castle_material_cost(new_target)
+		var pay_m := {
+			"wood": maxi(0, int(want_m["wood"]) - int(on_site.get("wood", 0))),
+			"stone": maxi(0, int(want_m["stone"]) - int(on_site.get("stone", 0))),
 		}
-		materials_after = want
-		expel = not project_active and has_castle
-		if progress_keep >= work_needed and work_needed > 0:
+		if progress_keep_m >= work_needed_m and work_needed_m > 0:
 			return {
 				"work_needed": 0,
 				"progress_keep": 0,
-				"pay": pay,
+				"pay": pay_m,
 				"refund_now": {"wood": 0, "stone": 0},
 				"refund_on_complete": {"wood": 0, "stone": 0},
 				"complete_immediately": true,
 				"restore_mode": false,
-				"expel": expel,
-				"base_level": from_lvl if not project_active else project_base_level,
-				"materials_after": want,
+				"expel": false,
+				"base_level": project_base_level,
+				"materials_after": want_m,
 			}
-	else:
-		# Delevel standing (or mid-project) to lower finished level: half work difference.
-		if new_target == from_lvl and not project_active:
-			return {}
-		var w_from := GlobalUnits.castle_work_required(from_lvl)
-		var w_to := GlobalUnits.castle_work_required(new_target)
-		work_needed = int(ceil(float(maxi(0, w_from - w_to)) * 0.5))
-		refund_on_complete = GlobalUnits.castle_material_refund(from_lvl, new_target)
-		materials_after = on_site.duplicate() if project_active else GlobalUnits.castle_material_cost(from_lvl)
-		# If mid-upgrade materials already exceed target, keep on site until finish.
-		if not project_active:
-			materials_after = GlobalUnits.castle_material_cost(from_lvl)
-		expel = not project_active and has_castle
-		progress_keep = 0
-		if work_needed <= 0:
-			var want_d := GlobalUnits.castle_material_cost(new_target)
-			return {
-				"work_needed": 0,
-				"progress_keep": 0,
-				"pay": {"wood": 0, "stone": 0},
-				"refund_now": GlobalUnits.castle_material_refund(from_lvl, new_target),
-				"refund_on_complete": {"wood": 0, "stone": 0},
-				"complete_immediately": true,
-				"restore_mode": false,
-				"expel": expel,
-				"base_level": from_lvl,
-				"materials_after": want_d,
-			}
+		return {
+			"work_needed": work_needed_m,
+			"progress_keep": progress_keep_m,
+			"pay": pay_m,
+			"refund_now": {"wood": 0, "stone": 0},
+			"refund_on_complete": {"wood": 0, "stone": 0},
+			"complete_immediately": false,
+			"restore_mode": false,
+			"expel": false,
+			"base_level": project_base_level,
+			"materials_after": want_m,
+		}
 
+	# Resting: dismantle standing castle to empty (expels garrison — plot capacity becomes 0).
+	if new_target < 0:
+		if not has_castle or base_lvl < 0:
+			return {}
+		return {
+			"work_needed": int(ceil(float(GlobalUnits.castle_work_required(base_lvl)) * 0.5)),
+			"progress_keep": 0,
+			"pay": {"wood": 0, "stone": 0},
+			"refund_now": {"wood": 0, "stone": 0},
+			"refund_on_complete": GlobalUnits.castle_material_cost(base_lvl),
+			"complete_immediately": false,
+			"restore_mode": false,
+			"expel": true,
+			"base_level": base_lvl,
+			"materials_after": GlobalUnits.castle_material_cost(base_lvl),
+		}
+
+	# Resting: build from empty, or upgrade to a higher level. No downgrade. Garrison stays.
+	if base_lvl >= 0 and new_target <= base_lvl:
+		return {}
+	var work_needed := GlobalUnits.castle_work_required(new_target)
+	var want := GlobalUnits.castle_material_cost(new_target)
+	var pay := {
+		"wood": maxi(0, int(want["wood"]) - int(on_site.get("wood", 0))),
+		"stone": maxi(0, int(want["stone"]) - int(on_site.get("stone", 0))),
+	}
 	return {
 		"work_needed": work_needed,
-		"progress_keep": progress_keep,
+		"progress_keep": 0,
 		"pay": pay,
 		"refund_now": {"wood": 0, "stone": 0},
-		"refund_on_complete": refund_on_complete,
+		"refund_on_complete": {"wood": 0, "stone": 0},
 		"complete_immediately": false,
 		"restore_mode": false,
-		"expel": expel,
-		"base_level": from_lvl if not project_active else project_base_level,
-		"materials_after": materials_after,
+		"expel": false,
+		"base_level": base_lvl,
+		"materials_after": want,
 	}
 
 

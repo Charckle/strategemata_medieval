@@ -6,6 +6,8 @@ const START_YEAR := 1100
 
 var season = SEASONS.WINTER
 var turn = 0
+## Per-match seed: merchants, sellswords, setup shuffles. Same on all peers.
+var world_seed: int = 0
 
 var my_pl_id = 0
 
@@ -156,11 +158,14 @@ func dummy_player_data():
 func apply_game_setup() -> void:
 	players.clear()
 	if not GlobalSet.has_pending_game_setup():
+		_ensure_world_seed(0)
 		dummy_player_data()
 		_mark_unowned_beyond_player_ids()
 		return
 
-	var slots: Array = GlobalSet.pending_game_setup.get("slots", [])
+	var setup: Dictionary = GlobalSet.pending_game_setup
+	var slots: Array = setup.get("slots", [])
+	_ensure_world_seed(int(setup.get("world_seed", 0)))
 	GlobalSet.clear_pending_game_setup()
 	if slots.is_empty():
 		dummy_player_data()
@@ -194,11 +199,30 @@ func apply_game_setup() -> void:
 			human_indices.append(i)
 
 	# Randomize hotseat turn order among humans (local_slot).
-	human_indices.shuffle()
+	_shuffle_with_rng(human_indices, make_world_rng(0x484F5453))  # "HOTS"
 	for slot_i in human_indices.size():
 		players[human_indices[slot_i]].local_slot = slot_i
 
 	_assign_setup_players_to_provinces()
+
+
+func _ensure_world_seed(from_setup: int) -> void:
+	world_seed = from_setup if from_setup != 0 else randi()
+
+
+## Deterministic RNG derived from world_seed (shared across peers for a match).
+func make_world_rng(salt: int, extra: int = 0) -> RandomNumberGenerator:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(world_seed) ^ hash(salt) ^ hash(extra)
+	return rng
+
+
+func _shuffle_with_rng(arr: Array, rng: RandomNumberGenerator) -> void:
+	for i in range(arr.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp = arr[i]
+		arr[i] = arr[j]
+		arr[j] = tmp
 
 
 func _mark_unowned_beyond_player_ids() -> void:
@@ -213,7 +237,7 @@ func _assign_setup_players_to_provinces() -> void:
 	var prov_list: Array = provinces.get_children()
 	if prov_list.is_empty():
 		return
-	prov_list.shuffle()
+	_shuffle_with_rng(prov_list, make_world_rng(0x50524F56))  # "PROV"
 	var pids: Array = players.keys()
 	pids.sort()
 	var n := mini(pids.size(), prov_list.size())
@@ -229,6 +253,10 @@ func _assign_setup_players_to_provinces() -> void:
 
 
 func _ready() -> void:
+	if SaveGame.has_pending_load():
+		_boot_from_save(SaveGame.take_pending_load())
+		return
+	SaveGame.clear_session()
 	apply_game_setup()
 	spawn_local_councils()
 	Heraldry.ensure_all(players)
@@ -243,7 +271,44 @@ func _ready() -> void:
 	set_players_turn()
 	update_players_population()
 	record_year_sample_if_needed(true)
+	autosave_game()
 	call_deferred("_check_solo_or_opening_win")
+
+
+func _boot_from_save(state: Dictionary) -> void:
+	MapSaveIO.apply_state(self, state)
+	# Restore active hotseat lord from save (do not reshuffle turn order).
+	my_pl_id = int(state.get("my_pl_id", my_pl_id))
+	if pathfinding != null:
+		pathfinding.deselect_army()
+	if is_instance_valid(gui_node) and gui_node.has_method("close_all_popups"):
+		gui_node.close_all_popups()
+	update_visuals_and_stats()
+	center_camera_on_current_player_home()
+	if is_instance_valid(gui_node) and gui_node.has_method("refresh_msg_button"):
+		gui_node.refresh_msg_button()
+	if is_instance_valid(gui_node) and gui_node.has_method("_refresh_heraldry_preview"):
+		gui_node._refresh_heraldry_preview()
+	update_players_population()
+	call_deferred("_sync_initial_province_focus")
+
+
+func export_full_save() -> Dictionary:
+	return MapSaveIO.export_state(self)
+
+
+func autosave_game() -> void:
+	if game_outcome_done:
+		return
+	SaveGame.write_autosave(export_full_save())
+
+
+func save_game_current() -> bool:
+	return SaveGame.save_current(export_full_save())
+
+
+func save_game_as(display_name: String) -> String:
+	return SaveGame.save_as(display_name, export_full_save())
 
 
 func initialize_map() -> void:	
@@ -6020,8 +6085,7 @@ func spawn_merchants() -> void:
 	if prov_list.is_empty():
 		return
 	prov_list.sort_custom(func(a, b) -> bool: return String(a.name) < String(b.name))
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 0x4D455243  # "MERC"
+	var rng := make_world_rng(0x4D455243)  # "MERC"
 	var count := int(ceili(float(prov_list.size()) / float(MERCHANTS_PER_PROVINCES)))
 	var name_pool: Array = MERCHANT_NAMES.duplicate()
 	for i in count:
@@ -6076,8 +6140,7 @@ func tick_merchants() -> void:
 	if merchants == null:
 		return
 	clear_expired_merchant_remnants()
-	var rng := RandomNumberGenerator.new()
-	rng.seed = hash(turn) ^ 0x4D455243
+	var rng := make_world_rng(0x4D455243, turn)  # "MERC"
 	var ordered: Array = merchants.get_children()
 	ordered.sort_custom(func(a, b) -> bool: return String(a.name) < String(b.name))
 	for m in ordered:
@@ -6267,8 +6330,9 @@ func request_raid_merchant(force_id: String, merchant_id: String, player_id: int
 	var army_cell = pathfinding.get_army_cell(army)
 	if army_cell not in pathfinding.get_approach_cells(m):
 		return
-	var rng := RandomNumberGenerator.new()
-	rng.seed = hash(turn) ^ hash(merchant_id) ^ hash(player_id) ^ 0x52414944
+	var rng := make_world_rng(
+		0x52414944, hash(turn) ^ hash(merchant_id) ^ hash(player_id)
+	)  # "RAID"
 	var loot := compute_merchant_raid_loot(player_id, rng)
 	var rem_cell: Vector2i = m.cell
 	var rem_pos: Vector2 = m.global_position
@@ -6588,16 +6652,14 @@ func spawn_sellswords_initial() -> void:
 		var child = sellswords.get_child(0)
 		sellswords.remove_child(child)
 		child.free()
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 0x53454C4C  # "SELL"
+	var rng := make_world_rng(0x53454C4C)  # "SELL"
 	_roll_sellswords_spawns(rng)
 
 
 func tick_sellswords() -> void:
 	if sellswords == null:
 		return
-	var rng := RandomNumberGenerator.new()
-	rng.seed = hash(turn) ^ 0x53454C4C
+	var rng := make_world_rng(0x53454C4C, turn)  # "SELL"
 	# Expire first so a province can roll a new band the same season.
 	var ordered: Array = sellswords.get_children()
 	ordered.sort_custom(func(a, b) -> bool: return String(a.name) < String(b.name))
@@ -8021,10 +8083,11 @@ func calculate_new_turn_game_data():
 	LordAI.tick_all(self)
 	#calculate and then display the new data
 	add_resources()
-	tick_army_upkeep()
 	# Clear province-fed grain, feed local forces + civilians from granaries, then cargo top-up.
+	# Tax (de jure → wallet) lands in rations; upkeep must run after so pay uses this season's marks.
 	_clear_province_fed_flags()
 	tick_all_province_rations()
+	tick_army_upkeep()
 	tick_army_food()
 	for prov in provinces.get_children():
 		if prov.has_method("snapshot_season_start"):
@@ -8036,6 +8099,7 @@ func calculate_new_turn_game_data():
 	build_province_neighbors()
 	record_year_sample_if_needed(false)
 	persist_score_state()
+	autosave_game()
 
 
 ## Spawn a LOCAL_COUNCIL player for every map-authored unowned province (`player_owner == -1`).
@@ -10449,14 +10513,15 @@ func grant_castle_peak_archers(building: Node, owner_id: int) -> void:
 	refresh_building_flags(key)
 
 
-## Dump every garrison stack onto the nearest free map tiles (BFS from approach).
+## Dump every garrison stack onto the nearest free road tile in the castle's province
+## (fallback: beside road → any free walkable in province → BFS from approach).
 func _expel_all_castle_garrison(building: Node, fallback_controller: int) -> void:
 	if building == null:
 		return
 	var all_units: Array = get_all_building_garrison(building)
 	if GlobalUnits.total_men(all_units) <= 0:
 		return
-	var cell := get_nearest_free_cell_for_building(building)
+	var cell := get_nearest_road_free_cell_for_building(building)
 	if cell == Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
 		return
 	var building_key := _building_key(building)
@@ -10482,6 +10547,54 @@ func _expel_all_castle_garrison(building: Node, fallback_controller: int) -> voi
 	refresh_building_flags(building_key)
 	update_all_army_visuals()
 	refresh_all_vip_crowns()
+
+
+## Nearest free cell in the building's province: on road → beside road → any walkable.
+## Falls back to BFS from approach if the province has no free tile.
+func get_nearest_road_free_cell_for_building(b: Node) -> Vector2i:
+	var invalid := Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+	if b == null or pathfinding == null:
+		return invalid
+	var prov := find_province_for_building(b)
+	var free: Array[Vector2i] = get_free_walkable_cells_in_province(prov) if prov != null else []
+	if free.is_empty():
+		return get_nearest_free_cell_for_building(b)
+	var origin := invalid
+	var approach = pathfinding.get_approach_cells(b) if pathfinding.has_method("get_approach_cells") else []
+	if not approach.is_empty():
+		origin = approach[0]
+	var ortho := [
+		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)
+	]
+	var best_road := invalid
+	var best_road_d := 0x7FFFFFFF
+	var best_beside := invalid
+	var best_beside_d := 0x7FFFFFFF
+	var best_any := invalid
+	var best_any_d := 0x7FFFFFFF
+	for cell in free:
+		var d := 0
+		if origin != invalid:
+			d = absi(cell.x - origin.x) + absi(cell.y - origin.y)
+		if d < best_any_d:
+			best_any_d = d
+			best_any = cell
+		if pathfinding.is_road_cell(cell):
+			if d < best_road_d:
+				best_road_d = d
+				best_road = cell
+			continue
+		for dir in ortho:
+			if pathfinding.is_road_cell(cell + dir):
+				if d < best_beside_d:
+					best_beside_d = d
+					best_beside = cell
+				break
+	if best_road != invalid:
+		return best_road
+	if best_beside != invalid:
+		return best_beside
+	return best_any
 
 
 ## Nearest walkable unoccupied cell, searching outward from approach cells.

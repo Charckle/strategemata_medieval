@@ -58,16 +58,22 @@ func initialize() -> void:
 func _setup_preview_nodes() -> void:
 	path_line.default_color = PATH_REACHABLE_COLOR
 
-	rest_line = Line2D.new()
-	rest_line.name = "PathLineRest"
-	rest_line.width = path_line.width
-	rest_line.default_color = PATH_REST_COLOR
-	base_map.add_child(rest_line)
+	if rest_line == null or not is_instance_valid(rest_line):
+		rest_line = base_map.get_node_or_null("PathLineRest") as Line2D
+	if rest_line == null:
+		rest_line = Line2D.new()
+		rest_line.name = "PathLineRest"
+		rest_line.width = path_line.width
+		rest_line.default_color = PATH_REST_COLOR
+		base_map.add_child(rest_line)
 
-	reachable_overlay = Node2D.new()
-	reachable_overlay.name = "ReachableOverlay"
-	reachable_overlay.set_script(REACHABLE_OVERLAY_SCRIPT)
-	base_map.add_child(reachable_overlay)
+	if reachable_overlay == null or not is_instance_valid(reachable_overlay):
+		reachable_overlay = base_map.get_node_or_null("ReachableOverlay")
+	if reachable_overlay == null:
+		reachable_overlay = Node2D.new()
+		reachable_overlay.name = "ReachableOverlay"
+		reachable_overlay.set_script(REACHABLE_OVERLAY_SCRIPT)
+		base_map.add_child(reachable_overlay)
 	reachable_overlay.pathfinding = self
 
 

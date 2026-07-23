@@ -6,6 +6,8 @@ class_name LordAI
 ## Doctrine (`players[pid].game_data["ai_doctrine"]`):
 ##   "defense" (default) — Quad rations + stable tax, Concentric castle, garrisons.
 ##     Villages/economy fill only after Concentric. Always runs on every holding.
+##     Economy stage: Medium after Motte, Big after Enclosed (wood→iron→smith→stone→silver);
+##     spend freely but reserve castle-mat buys + army upkeep.
 ##   Knight conquest (automatic) — when every holding is fully fortified, raise/reuse a
 ##     knight field army (1.3× stronger of castle vs town on weakest adjacent enemy
 ##     province: council/human/AI, never allies). Multi-objective: nearest garrisoned
@@ -29,6 +31,11 @@ const DOCTRINE_OFFENSE := "offense"
 const DEFENSE_CASTLE_MAX := 5
 ## Concentric (5): unlock village + economy garrison fill / craft / weapon buys.
 const DEFENSE_EXPAND_GARRISON_MIN := 5
+## Motte (1): economy → Medium; Enclosed (3): economy → Big.
+const DEFENSE_ECON_MEDIUM_MIN_CASTLE := 1
+const DEFENSE_ECON_BIG_MIN_CASTLE := 3
+## Upgrade priority: wood, iron, blacksmith, stone, silver.
+const DEFENSE_ECON_UPGRADE_ORDER := [0, 1, 5, 4, 3]
 ## Max men levied into non-castle slots per season (castle fills without drip).
 const DEFENSE_DRIP_OTHER := 25
 ## Happiness below this → ease tax for recovery (with Quad prefer Harsh at cap).
@@ -110,10 +117,11 @@ static func tick_province_defense(base_map: Node, prov: Node, pid: int) -> void:
 	if base_map.has_method("apply_populate_idle_fields"):
 		base_map.apply_populate_idle_fields(province_id, 1, pid)
 
-	# 2) Economy pads.
+	# 2) Economy pads + stage upgrades (after Motte / Enclosed).
 	CouncilAI._try_build_open(base_map, prov, pid, 0) # WOODCUTTER
 	CouncilAI._try_build_open(base_map, prov, pid, 5) # BLACKSMITH
 	_try_build_deposit(base_map, prov, pid)
+	_try_upgrade_economy(base_map, prov, pid, castle, mat_short)
 
 	# 3) Labor — grain first, then castle project / wood+stone, smith last.
 	_assign_labor_defense(base_map, prov, pid, castle, need_castle_mats)
@@ -143,16 +151,14 @@ static func tick_province_defense(base_map: Node, prov: Node, pid: int) -> void:
 	_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
 
 	if starting_upgrade:
-		# Free town/village room, start project — do NOT levy into the castle this season
-		# (it would just get expelled again).
-		_defense_evacuate_castle_for_upgrade(base_map, prov, pid, castle)
+		# Garrison stays in the castle worksite during upgrade (no expel).
 		_try_advance_castle(base_map, prov, pid, castle, next_castle)
-		# Expel remnant (if any) → park again → disband whatever still can't fit.
+		_defense_fill_all_garrisons(base_map, prov, pid, false)
 		_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
 		_defense_disband_unparked_field(base_map, pid, prov, keep_fid)
 	else:
 		_defense_fill_all_garrisons(base_map, prov, pid, false)
-		# Mid-build: keep parking strays into town/villages.
+		# Mid-build: castle offline — park strays into town/villages.
 		if castle != null and castle.has_method("is_under_construction") \
 				and bool(castle.is_under_construction()):
 			_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
@@ -612,7 +618,7 @@ static func _knight_force_id(base_map: Node, pid: int) -> String:
 
 
 ## Concentric standing + active slots full (or grain-capped so we can't fill more),
-## and no stray non-knight field armies left from castle expels.
+## and no stray non-knight field armies left unparked.
 static func _province_defense_complete(base_map: Node, prov: Node, pid: int) -> bool:
 	if prov == null or not prov.has_method("has_dejure") or not prov.has_dejure(pid):
 		return false
@@ -2352,6 +2358,66 @@ static func _try_build_deposit(base_map: Node, prov: Node, pid: int) -> void:
 			return
 
 
+## Max economy STAGES enum value allowed by castle standing (−1 = none).
+static func _defense_econ_max_stage(castle: Node) -> int:
+	if castle == null or not castle.has_method("standing_level"):
+		return -1
+	var standing := int(castle.standing_level())
+	if standing < DEFENSE_ECON_MEDIUM_MIN_CASTLE:
+		return -1
+	# STAGES: SMALL=1, MEDIUM=2, BIG=3
+	if standing >= DEFENSE_ECON_BIG_MIN_CASTLE:
+		return 3 # BIG
+	return 2 # MEDIUM
+
+
+## Upgrade owned economy buildings toward castle-gated stage cap.
+## Priority wood → iron → blacksmith → stone → silver; spend freely above
+## castle-mat reserve + army upkeep (via _marks_spendable_defense).
+static func _try_upgrade_economy(
+	base_map: Node, prov: Node, pid: int, castle: Node, castle_short: Dictionary
+) -> void:
+	if base_map == null or prov == null or prov.get("economy") == null:
+		return
+	if not base_map.has_method("apply_upgrade_economy") or not base_map.has_method("_building_key"):
+		return
+	var max_stage := _defense_econ_max_stage(castle)
+	if max_stage < 0:
+		return
+	var reserve := _defense_castle_marks_reserve(base_map, prov, castle_short)
+	# Keep upgrading while we can afford the next pick in priority order.
+	for _i in range(16):
+		var spendable := _marks_spendable_defense(base_map, pid, reserve)
+		if spendable <= 0:
+			return
+		var picked: Node = null
+		var picked_cost := 0
+		for subtype in DEFENSE_ECON_UPGRADE_ORDER:
+			for b in prov.economy.get_children():
+				if b == null or int(b.get("player_owner")) != pid:
+					continue
+				if not b.has_method("is_built") or not b.is_built():
+					continue
+				if int(b.get("subtype")) != int(subtype):
+					continue
+				if not b.has_method("can_upgrade") or not b.can_upgrade():
+					continue
+				var next_st := int(b.next_stage()) if b.has_method("next_stage") else -1
+				if next_st < 0 or next_st > max_stage:
+					continue
+				var cost := int(b.upgrade_cost()) if b.has_method("upgrade_cost") else 0
+				if cost <= 0 or cost > spendable:
+					continue
+				picked = b
+				picked_cost = cost
+				break
+			if picked != null:
+				break
+		if picked == null:
+			return
+		base_map.apply_upgrade_economy(str(base_map._building_key(picked)), pid, picked_cost)
+
+
 static func _assign_labor(
 	base_map: Node, prov: Node, pid: int, castle: Node, arms_ready: bool, stockpile_castle: bool
 ) -> void:
@@ -3852,8 +3918,7 @@ static func _absorb_other_field_into_garrison(
 		_defense_ingest_field_force(base_map, pid, prov, other)
 
 
-## Slots used to park expelled / stray field troops.
-## Always include town + villages so overflow has somewhere to go during upgrades.
+## Slots used to park stray field troops (town/villages; castle when operational).
 static func _defense_park_slots(prov: Node) -> Array:
 	var out: Array = []
 	if prov == null:
@@ -3875,7 +3940,6 @@ static func _defense_park_slots(prov: Node) -> Array:
 
 
 ## Park a field force into holding garrisons with no adjacency / MP checks.
-## Castle upgrades expel onto arbitrary free tiles; normal garrison rules can't reach them.
 static func _defense_ingest_field_force(
 	base_map: Node, pid: int, prov: Node, fid: String
 ) -> void:
@@ -3923,49 +3987,6 @@ static func _defense_ingest_field_force(
 			base_map.pathfinding.rebuild_occupancy()
 		if base_map.has_method("update_all_army_visuals"):
 			base_map.update_all_army_visuals()
-
-
-## Before starting an upgrade, move castle troops into town/villages so expel is a no-op.
-static func _defense_evacuate_castle_for_upgrade(
-	base_map: Node, prov: Node, pid: int, castle: Node
-) -> void:
-	if castle == null or not castle.has_method("is_operational") or not castle.is_operational():
-		return
-	if not base_map.has_method("apply_transfer_units"):
-		return
-	var sinks: Array = []
-	var town = prov.get_town() if prov.has_method("get_town") else null
-	if town != null:
-		sinks.append({"b": town, "spot": GlobalUnits.SPOT.FLAT})
-	if prov.get("settlements") != null:
-		for s in prov.settlements.get_children():
-			if s == town:
-				continue
-			if int(s.get("type_")) == int(GlobalStuff.BUILDING_TYPE.VILLAGE):
-				sinks.append({"b": s, "spot": GlobalUnits.SPOT.FLAT})
-	for src_spot in [GlobalUnits.SPOT.INSIDE, GlobalUnits.SPOT.OUTSIDE]:
-		var src_gid := _ensure_spot_garrison(base_map, castle, src_spot)
-		if src_gid == "" or not base_map.forces.has(src_gid):
-			continue
-		for sink in sinks:
-			if not base_map.forces.has(src_gid):
-				break
-			var have := GlobalUnits.total_men(base_map.forces[src_gid].get("units", []))
-			if have <= 0:
-				break
-			var room := _garrison_room(base_map, sink["b"], int(sink["spot"]))
-			if room <= 0:
-				continue
-			var take_n := mini(room, have)
-			var out_units := _extract_any_stacks(
-				base_map.forces[src_gid].get("units", []), pid, take_n
-			)
-			if out_units.is_empty():
-				continue
-			var dest_gid := _ensure_spot_garrison(base_map, sink["b"], int(sink["spot"]))
-			if dest_gid == "":
-				continue
-			base_map.apply_transfer_units(src_gid, dest_gid, out_units, {})
 
 
 static func _ensure_war_force(
@@ -4358,7 +4379,7 @@ static func _garrison_force_while_waiting(
 	if anchor == null:
 		return
 	if not _force_adjacent_to_building(base_map, fid, anchor):
-		# Expelled stacks spawn with 0 MP — snap onto a free approach tile.
+		# 0-MP field stacks can't path — snap onto a free approach tile.
 		if not _snap_force_to_building_approach(base_map, fid, anchor):
 			_move_force_toward_building(base_map, fid, anchor)
 			if not _force_adjacent_to_building(base_map, fid, anchor):
@@ -4410,7 +4431,7 @@ static func _garrison_force_while_waiting(
 		base_map.apply_garrison_units(fid, bkey, int(t["spot"]), out_units)
 
 
-## Place a field force on a free approach cell of `building` (for 0-MP expels).
+## Place a field force on a free approach cell of `building` (for 0-MP parking).
 static func _snap_force_to_building_approach(base_map: Node, fid: String, building: Node) -> bool:
 	var pf = base_map.get("pathfinding")
 	if pf == null or building == null or not base_map.forces.has(fid):
