@@ -316,6 +316,13 @@ func _place_object(map_root: Node, ground: TileMapLayer, cell: Vector2i, brush: 
 					"slot_kind": 1, "deposit_type": 3, "stage": 0, "player_owner": owner_id
 				}
 			)
+		_dock.Brush.ECON_RANDOM:
+			inst = MapPainterOps.place_packed(
+				map_root, prov, "economy", MapPainterOps.ECONOMY_SCENE, "RandomDeposit",
+				ground, cell, false, {
+					"slot_kind": 1, "deposit_type": 4, "stage": 0, "player_owner": owner_id
+				}
+			)
 		_dock.Brush.ECON_WOODCUTTER:
 			inst = MapPainterOps.place_packed(
 				map_root, prov, "economy", MapPainterOps.ECONOMY_SCENE, "Woodcutter",
@@ -362,6 +369,7 @@ func _is_object_brush(brush: int) -> bool:
 	return brush in [
 		_dock.Brush.FIELD, _dock.Brush.VILLAGE, _dock.Brush.TOWN, _dock.Brush.CASTLE,
 		_dock.Brush.ECON_OPEN, _dock.Brush.ECON_STONE, _dock.Brush.ECON_IRON, _dock.Brush.ECON_SILVER,
+		_dock.Brush.ECON_RANDOM,
 		_dock.Brush.ECON_WOODCUTTER, _dock.Brush.ECON_STONEQUARRY, _dock.Brush.ECON_IRONMINE,
 		_dock.Brush.ECON_SILVERMINE, _dock.Brush.ECON_BLACKSMITH,
 	]

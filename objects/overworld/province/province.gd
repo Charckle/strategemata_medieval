@@ -44,8 +44,10 @@ var holdings: Dictionary = {}
 @onready var base_map
 
 const MAP_LABEL_LINE_HEIGHT := 18.0
+const MAP_SHIELD_SIZE := 18
 
 var _label_center := Vector2.ZERO
+var _owner_shield: Sprite2D = null
 
 func _ready() -> void:
 	create_de_resorce_dict()
@@ -220,6 +222,7 @@ func refresh_map_label() -> void:
 		_status_label.text = status_text
 		_status_label.modulate = _get_status_color_for_name(status_text)
 	_owner_label.text = _format_owner_line(players_dict)
+	_refresh_owner_shield(players_dict)
 	_layout_map_labels()
 
 
@@ -252,6 +255,27 @@ func _player_name(players_dict: Dictionary, player_id: int) -> String:
 	return "Unknown"
 
 
+func _ensure_owner_shield() -> void:
+	if _owner_shield != null and is_instance_valid(_owner_shield):
+		return
+	_owner_shield = Sprite2D.new()
+	_owner_shield.name = "owner_shield"
+	_owner_shield.centered = true
+	_owner_shield.z_index = 1
+	map_labels.add_child(_owner_shield)
+
+
+func _refresh_owner_shield(players_dict: Dictionary) -> void:
+	_ensure_owner_shield()
+	var pid := int(dejure) if dejure != null else NO_DEFACTO
+	if pid < 0 or not players_dict.has(pid):
+		_owner_shield.visible = false
+		_owner_shield.texture = null
+		return
+	_owner_shield.texture = Heraldry.texture_for_player(players_dict[pid], MAP_SHIELD_SIZE)
+	_owner_shield.visible = true
+
+
 func _get_status_color() -> Color:
 	return _get_status_color_for_name(get_status_name())
 
@@ -269,14 +293,31 @@ func _get_status_color_for_name(status_text: String) -> Color:
 
 
 func _layout_map_labels() -> void:
+	# Shield left of province name; status / owner lines below. Group centered on origin.
 	var lines: Array[Label] = [_name_label]
 	if _status_label.visible:
 		lines.append(_status_label)
 	lines.append(_owner_label)
 	var total_h := MAP_LABEL_LINE_HEIGHT * lines.size()
-	var y := -total_h / 2.0 + MAP_LABEL_LINE_HEIGHT / 2.0
-	for lbl in lines:
-		lbl.position = Vector2(0.0, y)
+	var y := -total_h / 2.0
+	var name_y := y
+	var name_w := maxf(_name_label.get_minimum_size().x, float(_name_label.text.length()) * 7.0)
+	var shield_w := float(MAP_SHIELD_SIZE) if (_owner_shield != null and _owner_shield.visible) else 0.0
+	var gap := 4.0 if shield_w > 0.0 else 0.0
+	var row_w := shield_w + gap + name_w
+	var row_left := -row_w * 0.5
+	if _owner_shield != null and _owner_shield.visible and _owner_shield.texture != null:
+		_owner_shield.position = Vector2(row_left + shield_w * 0.5, name_y + MAP_LABEL_LINE_HEIGHT * 0.5)
+	elif _owner_shield != null:
+		_owner_shield.position = Vector2.ZERO
+	_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_name_label.position = Vector2(row_left + shield_w + gap, name_y)
+	y += MAP_LABEL_LINE_HEIGHT
+	for i in range(1, lines.size()):
+		var lbl: Label = lines[i]
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		var lw := maxf(lbl.get_minimum_size().x, float(lbl.text.length()) * 6.5)
+		lbl.position = Vector2(-lw * 0.5, y)
 		y += MAP_LABEL_LINE_HEIGHT
 
 
@@ -343,10 +384,13 @@ func ensure_holding(player_id: int) -> Dictionary:
 		return {}
 	if not holdings.has(player_id):
 		var labor := {}
+		var labor_priority := {}
 		for cat in GlobalUnits.LABOR_CATEGORIES:
 			labor[cat] = 0
+			labor_priority[cat] = GlobalUnits.LABOR_PRIORITY_MANUAL
 		holdings[player_id] = {
 			"labor": labor,
+			"labor_priority": labor_priority,
 			"labor_assigned": 0, # legacy total; kept in sync
 			"grain_potential": 0.0,
 			"horses": 0,
@@ -368,6 +412,22 @@ func ensure_holding(player_id: int) -> Dictionary:
 			for cat in GlobalUnits.LABOR_CATEGORIES:
 				if not labor_exist.has(cat):
 					labor_exist[cat] = 0
+		if not h.has("labor_priority") or not (h["labor_priority"] is Dictionary):
+			var pri := {}
+			for cat in GlobalUnits.LABOR_CATEGORIES:
+				pri[cat] = GlobalUnits.LABOR_PRIORITY_MANUAL
+			h["labor_priority"] = pri
+		else:
+			var pri_exist: Dictionary = h["labor_priority"]
+			for cat in GlobalUnits.LABOR_CATEGORIES:
+				if not pri_exist.has(cat):
+					pri_exist[cat] = GlobalUnits.LABOR_PRIORITY_MANUAL
+				else:
+					pri_exist[cat] = clampi(
+						int(pri_exist[cat]),
+						GlobalUnits.LABOR_PRIORITY_MANUAL,
+						GlobalUnits.LABOR_PRIORITY_MAX
+					)
 		if not h.has("pending_marks"):
 			h["pending_marks"] = 0
 		if not h.has("ration"):
@@ -516,7 +576,10 @@ func labor_category_cap(player_id: int, category: String, season: int) -> int:
 
 
 ## Castle labor is uncapped by buildings; limited only by population via set_labor.
+## Only the de jure controller may assign workers to their castle project.
 func castle_construction_cap(player_id: int) -> int:
+	if not has_dejure(player_id):
+		return 0
 	var castle := _find_building_of_type(defense, GlobalStuff.BUILDING_TYPE.CASTLE)
 	if castle == null or not castle.has_method("is_under_construction"):
 		return 0
@@ -566,12 +629,37 @@ func get_economy_buildings_for(player_id: int, category: String = "") -> Array:
 	return out
 
 
+func get_labor_priority_map(player_id: int) -> Dictionary:
+	return ensure_holding(player_id)["labor_priority"]
+
+
+func get_labor_priority(player_id: int, category: String) -> int:
+	return clampi(
+		int(get_labor_priority_map(player_id).get(category, GlobalUnits.LABOR_PRIORITY_MANUAL)),
+		GlobalUnits.LABOR_PRIORITY_MANUAL,
+		GlobalUnits.LABOR_PRIORITY_MAX
+	)
+
+
+## Set auto-fill priority for one category (`0` = manual). Reallocates the holding.
+func set_labor_priority(player_id: int, category: String, priority: int, season: int) -> void:
+	if category not in GlobalUnits.LABOR_CATEGORIES:
+		return
+	var h := ensure_holding(player_id)
+	var pri: Dictionary = h["labor_priority"]
+	pri[category] = clampi(priority, GlobalUnits.LABOR_PRIORITY_MANUAL, GlobalUnits.LABOR_PRIORITY_MAX)
+	reallocate_labor_by_priority(player_id, season)
+
+
 ## Set one labor category; clamps to remaining population and category cap.
+## Slider / manual edits mark the category as manual (keeps this amount as target).
 func set_labor_category(player_id: int, category: String, amount: int, season: int) -> void:
 	if category not in GlobalUnits.LABOR_CATEGORIES:
 		return
 	var h := ensure_holding(player_id)
 	var labor: Dictionary = h["labor"]
+	var pri: Dictionary = h["labor_priority"]
+	pri[category] = GlobalUnits.LABOR_PRIORITY_MANUAL
 	var pop := owned_settlement_population(player_id)
 	var others := 0
 	for cat in GlobalUnits.LABOR_CATEGORIES:
@@ -597,39 +685,48 @@ func get_labor_assigned(player_id: int) -> int:
 	return total_labor_assigned(player_id)
 
 
-func clamp_all_labor(player_id: int, season: int) -> void:
+## Re-apply labor from priorities after population or category-cap changes.
+## Manual categories keep their current assignment (clamped); numbered priorities
+## fill to category cap in ascending order. Tie-break: LABOR_CATEGORIES order.
+func reallocate_labor_by_priority(player_id: int, season: int) -> void:
 	var h := ensure_holding(player_id)
 	var labor: Dictionary = h["labor"]
+	var pri: Dictionary = h["labor_priority"]
 	var pop := owned_settlement_population(player_id)
-	# Cap each category on its own building/farm need first.
-	var total := 0
+	var targets := {}
 	for cat in GlobalUnits.LABOR_CATEGORIES:
+		targets[cat] = int(labor.get(cat, 0))
+		labor[cat] = 0
+	var remaining := pop
+	# Phase 1: manual targets first (fixed category order if they compete).
+	for cat in GlobalUnits.LABOR_CATEGORIES:
+		if int(pri.get(cat, GlobalUnits.LABOR_PRIORITY_MANUAL)) != GlobalUnits.LABOR_PRIORITY_MANUAL:
+			continue
 		var cap := labor_category_cap(player_id, str(cat), season)
-		var v := clampi(int(labor.get(cat, 0)), 0, cap)
-		labor[cat] = v
-		total += v
-	# If assignments still exceed population, scale down proportionally
-	# (avoids wiping early categories like grain when a levy shrinks the pool).
-	if total > pop and total > 0:
-		var cats: Array = GlobalUnits.LABOR_CATEGORIES
-		var old := {}
-		for cat in cats:
-			old[cat] = int(labor[cat])
-		var kept := 0
-		for cat2 in cats:
-			var nv := int(floor(float(old[cat2]) * float(pop) / float(total)))
-			labor[cat2] = nv
-			kept += nv
-		# Hand leftover seats from flooring back to categories that had workers.
-		var leftover := pop - kept
-		for cat3 in cats:
-			if leftover <= 0:
-				break
-			if int(old[cat3]) <= 0:
+		var want := mini(mini(int(targets[cat]), cap), remaining)
+		labor[cat] = maxi(0, want)
+		remaining -= int(labor[cat])
+	# Phase 2: numeric priorities ascending; same priority → LABOR_CATEGORIES order.
+	var levels: Array = []
+	for cat2 in GlobalUnits.LABOR_CATEGORIES:
+		var p := int(pri.get(cat2, GlobalUnits.LABOR_PRIORITY_MANUAL))
+		if p > GlobalUnits.LABOR_PRIORITY_MANUAL and p not in levels:
+			levels.append(p)
+	levels.sort()
+	for level in levels:
+		for cat3 in GlobalUnits.LABOR_CATEGORIES:
+			if int(pri.get(cat3, GlobalUnits.LABOR_PRIORITY_MANUAL)) != int(level):
 				continue
-			labor[cat3] = int(labor[cat3]) + 1
-			leftover -= 1
+			var cap2 := labor_category_cap(player_id, str(cat3), season)
+			var fill := mini(cap2, remaining)
+			labor[cat3] = maxi(0, fill)
+			remaining -= int(labor[cat3])
 	h["labor_assigned"] = total_labor_assigned(player_id)
+
+
+## Compatibility name used across the map — priority-aware reallocation.
+func clamp_all_labor(player_id: int, season: int) -> void:
+	reallocate_labor_by_priority(player_id, season)
 
 
 ## Default province kit for the de jure holder (materials + weapon stock).
@@ -1019,18 +1116,22 @@ func get_holding_summary(player_id: int, season: int) -> Dictionary:
 		coverage = clampf(float(grain_workers) / float(grain_need), 0.0, 1.0)
 	var labor := {}
 	var caps := {}
+	var labor_priority := {}
 	for cat in GlobalUnits.LABOR_CATEGORIES:
 		labor[cat] = get_labor_category(player_id, cat)
 		caps[cat] = labor_category_cap(player_id, cat, season)
+		labor_priority[cat] = get_labor_priority(player_id, cat)
 	var preview := preview_economy_output(player_id)
 	var ration_info := preview_holding_rations(player_id)
 	var tax_prev := _preview_holding_tax(player_id)
+	var foals_prev := preview_foals_for_holding(player_id)
 	return {
 		"population": owned_settlement_population(player_id),
 		"labor_assigned": total_labor_assigned(player_id),
 		"labor_required": total_labor_required(player_id, season),
 		"labor": labor,
 		"labor_caps": caps,
+		"labor_priority": labor_priority,
 		"grain_fields": count_fields_by_crop(player_id, 1),
 		"planted_grain": count_planted_grain_fields(player_id),
 		"horse_fields": count_fields_by_crop(player_id, 2),
@@ -1056,6 +1157,7 @@ func get_holding_summary(player_id: int, season: int) -> Dictionary:
 		"has_silver": economy_worker_cap(player_id, "silver") > 0,
 		"has_blacksmith": economy_worker_cap(player_id, "blacksmith") > 0,
 		"has_castle_work": castle_construction_cap(player_id) > 0,
+		"castle_work_remaining": _castle_work_remaining(),
 		"has_grain_work": count_planted_grain_fields(player_id) > 0 or count_fields_by_crop(player_id, 1) > 0,
 		"has_horse_work": count_occupied_horse_fields(player_id) > 0,
 		"ration": int(ration_info.get("requested", GlobalUnits.RATION_DEFAULT)),
@@ -1073,6 +1175,8 @@ func get_holding_summary(player_id: int, season: int) -> Dictionary:
 		"tax_marks_next_coffer": int(tax_prev.get("coffer", 0)),
 		"tax_castle_bonus_next": int(tax_prev.get("castle_bonus", 0)),
 		"tax_auto_wallet": bool(tax_prev.get("auto_wallet", false)),
+		"foals_next_min": int(foals_prev.get("min", 0)),
+		"foals_next_max": int(foals_prev.get("max", 0)),
 	}
 
 
@@ -1146,8 +1250,9 @@ func transfer_remaining_holding_stock(from_pid: int, to_pid: int) -> void:
 		holdings[to_pid]["grain_potential"] = float(holdings[to_pid].get("grain_potential", 0.0)) + pot
 
 
-## Forecast grain split: seed reserve → local armies → civilians at requested ration.
-## `army_need` comes from base_map when available (0 otherwise).
+## Forecast grain split: seed reserve → local forces → civilians at requested ration.
+## `army_need` comes from base_map when available (0 otherwise; cargo-first forces
+## only count province shortfall).
 func preview_holding_rations(player_id: int, army_need: int = -1) -> Dictionary:
 	ensure_holding(player_id)
 	var requested := get_holding_ration(player_id)
@@ -1257,6 +1362,11 @@ func tick_holding_rations(player_id: int, rng: RandomNumberGenerator = null) -> 
 		_add_player_marks(player_id, wallet_pay)
 
 	update_population_in_resources()
+	# Pop grew or shrank — refill by labor priorities.
+	var season := 0
+	if base_map != null and base_map.get("season") != null:
+		season = int(base_map.season)
+	reallocate_labor_by_priority(player_id, season)
 
 	var dropped := old_pop - new_pop
 	if dropped <= 0:
@@ -1317,21 +1427,34 @@ func get_castle_plot() -> Node:
 	return _find_building_of_type(defense, GlobalStuff.BUILDING_TYPE.CASTLE)
 
 
+func _castle_work_remaining() -> int:
+	var castle := get_castle_plot()
+	if castle == null or not castle.has_method("is_under_construction"):
+		return 0
+	if not castle.is_under_construction():
+		return 0
+	return maxi(0, int(castle.project_work_needed) - int(castle.project_progress))
+
+
 func _tick_castle_construction() -> void:
 	var castle := get_castle_plot()
 	if castle == null or not castle.has_method("is_under_construction"):
 		return
 	if not castle.is_under_construction():
 		return
-	var work := 0
-	for pid in get_holding_controllers():
-		work += get_labor_category(pid, "castle")
+	# Only de jure labor advances the worksite.
+	var pid := int(dejure) if dejure != null else -1
+	if pid < 0:
+		return
+	var work := get_labor_category(pid, "castle")
 	if work <= 0:
 		return
 	if not castle.add_construction_work(work):
 		return
 	var refund: Dictionary = castle.complete_project()
 	_apply_material_dict(refund, true)
+	if base_map != null and base_map.has_method("grant_castle_peak_archers"):
+		base_map.grant_castle_peak_archers(castle, pid)
 	if castle.has_method("set_flags"):
 		castle.set_flags()
 	if base_map != null and base_map.has_method("update_menus"):
@@ -1642,6 +1765,34 @@ func _apply_neglect_visuals(player_id: int, coverage: float) -> void:
 		planted[i].neglected = i >= active_n
 
 
+## Expected foal range for current (or overridden) horse labor. No RNG.
+func preview_foals_for_holding(player_id: int, horse_workers: int = -1) -> Dictionary:
+	if horse_workers < 0:
+		horse_workers = get_labor_category(player_id, "horses")
+	var occupied: Array = []
+	for entry in distribute_horses_to_pastures(player_id):
+		if int(entry.get("horses", 0)) > 0:
+			occupied.append(entry)
+	if occupied.is_empty():
+		return {"min": 0, "max": 0, "occupied": 0}
+	var people_per := float(horse_workers) / float(occupied.size())
+	var foal_min := 0
+	var foal_max := 0
+	var cap := float(GlobalUnits.HORSES_PER_FIELD)
+	var need := float(GlobalUnits.PEOPLE_PER_HORSE_FIELD)
+	for entry in occupied:
+		var fill := clampf(float(entry["horses"]) / cap, 0.0, 1.0)
+		var labor := clampf(people_per / need, 0.0, 1.0)
+		var eff := fill * labor
+		if eff >= GlobalUnits.FOAL_EFF_HIGH:
+			foal_min += GlobalUnits.FOAL_HIGH_MIN
+			foal_max += GlobalUnits.FOAL_HIGH_MAX
+		elif eff >= GlobalUnits.FOAL_EFF_MID:
+			foal_min += GlobalUnits.FOAL_MID_MIN
+			foal_max += GlobalUnits.FOAL_MID_MAX
+	return {"min": foal_min, "max": foal_max, "occupied": occupied.size()}
+
+
 func _roll_foals_for_holding(player_id: int, horse_workers: int, rng: RandomNumberGenerator) -> int:
 	var occupied: Array = []
 	for entry in distribute_horses_to_pastures(player_id):
@@ -1662,6 +1813,62 @@ func _roll_foals_for_holding(player_id: int, horse_workers: int, rng: RandomNumb
 		elif eff >= GlobalUnits.FOAL_EFF_MID:
 			foals += rng.randi_range(GlobalUnits.FOAL_MID_MIN, GlobalUnits.FOAL_MID_MAX)
 	return foals
+
+
+## Crafts for one smith after holding blacksmith labor is poured in list order.
+func preview_blacksmith_building_output(player_id: int, building: Node) -> Dictionary:
+	var empty := {
+		"weapon": "",
+		"crafts": 0,
+		"workers": 0,
+		"wood_cost": 0,
+		"iron_cost": 0,
+	}
+	if building == null or not is_instance_valid(building):
+		return empty
+	if not building.has_method("is_blacksmith") or not building.is_blacksmith():
+		return empty
+	var wood_have := (
+		get_player_material(player_id, "wood")
+		+ get_labor_category(player_id, "wood") * GlobalUnits.ECONOMY_WOOD_PER_WORKER
+	)
+	var iron_have := (
+		get_player_material(player_id, "iron")
+		+ get_labor_category(player_id, "iron") * GlobalUnits.ECONOMY_IRON_PER_WORKER
+	)
+	var workers_raw := get_labor_category(player_id, "blacksmith")
+	var workers := mini(workers_raw, economy_worker_cap(player_id, "blacksmith"))
+	var workers_left := workers
+	var wood_left := wood_have
+	var iron_left := iron_have
+	for b in get_economy_buildings_for(player_id, "blacksmith"):
+		if workers_left <= 0:
+			break
+		var assigned := mini(workers_left, int(b.worker_cap()))
+		workers_left -= assigned
+		var wkey := str(b.get_craft_weapon()) if b.has_method("get_craft_weapon") else ""
+		var n := 0
+		var use_wood := 0
+		var use_iron := 0
+		if wkey != "" and wkey in GlobalUnits.BLACKSMITH_CRAFTABLE:
+			var pp := GlobalUnits.blacksmith_people_per(wkey)
+			var recipe: Dictionary = GlobalUnits.blacksmith_recipe(wkey)
+			var by_labor := int(assigned / pp)
+			var by_mat := _max_crafts_for_recipe(wood_left, iron_left, recipe)
+			n = mini(by_labor, by_mat)
+			use_wood = int(recipe.get("wood", 0)) * n
+			use_iron = int(recipe.get("iron", 0)) * n
+			wood_left -= use_wood
+			iron_left -= use_iron
+		if b == building:
+			return {
+				"weapon": wkey,
+				"crafts": n,
+				"workers": assigned,
+				"wood_cost": use_wood,
+				"iron_cost": use_iron,
+			}
+	return empty
 
 
 func _apply_horse_display_counts() -> void:
@@ -2172,6 +2379,7 @@ func get_display_data(players_dict: Dictionary, viewer_id: int = NO_DEFACTO) -> 
 		"name": p_name,
 		"status": status_,
 		"status_name": status_name,
+		"owner_id": int(player_owner) if player_owner != null else -1,
 		"owner_name": owner_name,
 		"defacto_name": defacto_name,
 		"dejure_name": dejure_name,

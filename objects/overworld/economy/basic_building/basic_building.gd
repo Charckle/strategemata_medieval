@@ -2,7 +2,8 @@ extends Node2D
 
 ## OPEN pads: woodcutter / blacksmith. DEPOSIT pads: only the matching mine/quarry.
 enum SLOT_KIND { OPEN, DEPOSIT }
-enum DEPOSIT_TYPE { NONE, STONE, IRON, SILVER }
+## RANDOM resolves at match start (host rolls, syncs): 40% stone / 40% iron / 20% silver.
+enum DEPOSIT_TYPE { NONE, STONE, IRON, SILVER, RANDOM }
 enum SUBTYPES { WOODCUTTER, IRONMINE, GOLDMINE, SILVERMINE, STONEQUARRY, BLACKSMITH }
 enum STAGES { EMPTY, SMALL, MEDIUM, BIG, RAZED }
 
@@ -99,6 +100,31 @@ func labor_category() -> String:
 		4: return "stone" # STONEQUARRY
 		5: return "blacksmith"
 		_: return ""
+
+
+func is_unresolved_random_deposit() -> bool:
+	return slot_kind == SLOT_KIND.DEPOSIT and deposit_type == DEPOSIT_TYPE.RANDOM
+
+
+## Weighted roll: 40 stone / 40 iron / 20 silver. Returns a concrete DEPOSIT_TYPE int.
+static func roll_random_deposit_type(rng: RandomNumberGenerator = null) -> int:
+	var roll := rng.randi_range(1, 100) if rng != null else randi_range(1, 100)
+	if roll <= 40:
+		return int(DEPOSIT_TYPE.STONE)
+	if roll <= 80:
+		return int(DEPOSIT_TYPE.IRON)
+	return int(DEPOSIT_TYPE.SILVER)
+
+
+func resolve_random_deposit(rolled: int) -> void:
+	if not is_unresolved_random_deposit():
+		return
+	match rolled:
+		int(DEPOSIT_TYPE.STONE), int(DEPOSIT_TYPE.IRON), int(DEPOSIT_TYPE.SILVER):
+			deposit_type = rolled as DEPOSIT_TYPE
+			update_for_stage()
+		_:
+			return
 
 
 func allowed_build_subtypes() -> Array:
@@ -251,7 +277,8 @@ func _unbuilt_deposit_texture() -> Texture2D:
 	match deposit_type:
 		DEPOSIT_TYPE.STONE:
 			return preload("uid://bur7n2w0ha3lc")
-		DEPOSIT_TYPE.IRON:
+		DEPOSIT_TYPE.IRON, DEPOSIT_TYPE.RANDOM:
+			# RANDOM uses iron art as a generic unknown-deposit placeholder.
 			return preload("uid://dcu7coff4tvb")
 		DEPOSIT_TYPE.SILVER:
 			return preload("uid://cf1w5fxqumsj1")
@@ -283,6 +310,7 @@ func _empty_pad_name() -> String:
 		DEPOSIT_TYPE.STONE: return "Stone deposit"
 		DEPOSIT_TYPE.IRON: return "Iron deposit"
 		DEPOSIT_TYPE.SILVER: return "Silver deposit"
+		DEPOSIT_TYPE.RANDOM: return "Unknown deposit"
 		_: return "Empty deposit"
 
 
@@ -303,4 +331,5 @@ func get_slot_description() -> String:
 		DEPOSIT_TYPE.STONE: return "Stone deposit (quarry only)"
 		DEPOSIT_TYPE.IRON: return "Iron deposit (mine only)"
 		DEPOSIT_TYPE.SILVER: return "Silver deposit (mine only)"
+		DEPOSIT_TYPE.RANDOM: return "Unknown deposit (resolves at match start)"
 	return "Deposit"

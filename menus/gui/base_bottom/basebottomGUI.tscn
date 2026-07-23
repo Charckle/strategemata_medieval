@@ -406,10 +406,10 @@ theme_override_constants/separation = 6
 
 [node name="war_menu" type="PanelContainer" parent="." unique_id=1949477651]
 visible = false
-offset_left = 380.0
-offset_top = 120.0
-offset_right = 980.0
-offset_bottom = 620.0
+offset_left = 220.0
+offset_top = 70.0
+offset_right = 1120.0
+offset_bottom = 720.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 script = ExtResource("2_draggable")
 menu_title = "War"
@@ -472,11 +472,36 @@ layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 4
 
+[node name="Production" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=332577400]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 8
+metadata/_tab_index = 1
+
+[node name="stock_summary_lbl" type="Label" parent="war_menu/margin/vbox/tabs/Production" unique_id=332577401]
+layout_mode = 2
+autowrap_mode = 3
+text = "Total stock: —"
+
+[node name="building_summary_lbl" type="Label" parent="war_menu/margin/vbox/tabs/Production" unique_id=332577402]
+layout_mode = 2
+autowrap_mode = 3
+text = "Next season: —"
+
+[node name="ScrollContainer" type="ScrollContainer" parent="war_menu/margin/vbox/tabs/Production" unique_id=332577403]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="production_list" type="VBoxContainer" parent="war_menu/margin/vbox/tabs/Production/ScrollContainer" unique_id=332577404]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
 [node name="Alliances" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=1449656036]
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 4
-metadata/_tab_index = 1
+metadata/_tab_index = 2
 
 [node name="ScrollContainer" type="ScrollContainer" parent="war_menu/margin/vbox/tabs/Alliances" unique_id=1449656037]
 layout_mode = 2
@@ -491,7 +516,7 @@ theme_override_constants/separation = 6
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 4
-metadata/_tab_index = 2
+metadata/_tab_index = 3
 
 [node name="ScrollContainer" type="ScrollContainer" parent="war_menu/margin/vbox/tabs/Diplomacy" unique_id=128505890]
 layout_mode = 2
@@ -505,17 +530,32 @@ theme_override_constants/separation = 6
 [node name="Wars" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=128505888]
 visible = false
 layout_mode = 2
-metadata/_tab_index = 3
+theme_override_constants/separation = 6
+metadata/_tab_index = 4
 
-[node name="Label" type="Label" parent="war_menu/margin/vbox/tabs/Wars" unique_id=2127039925]
+[node name="hint_lbl" type="Label" parent="war_menu/margin/vbox/tabs/Wars" unique_id=2127039925]
 layout_mode = 2
-text = "Active wars content"
+autowrap_mode = 3
+text = "AI lords — current goal, army strength vs target, and blockers."
+
+[node name="refresh_btn" type="Button" parent="war_menu/margin/vbox/tabs/Wars" unique_id=2127039926]
+layout_mode = 2
+text = "Refresh"
+
+[node name="ScrollContainer" type="ScrollContainer" parent="war_menu/margin/vbox/tabs/Wars" unique_id=2127039927]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ai_debug_list" type="VBoxContainer" parent="war_menu/margin/vbox/tabs/Wars/ScrollContainer" unique_id=2127039928]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
 
 [node name="Ladder" type="VBoxContainer" parent="war_menu/margin/vbox/tabs" unique_id=128505892]
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 4
-metadata/_tab_index = 4
+metadata/_tab_index = 5
 
 [node name="hint_lbl" type="Label" parent="war_menu/margin/vbox/tabs/Ladder" unique_id=128505893]
 layout_mode = 2
@@ -687,6 +727,48 @@ layout_mode = 2
 button_pressed = true
 text = "Enabled"
 
+[node name="heraldry_sep" type="HSeparator" parent="settings_menu/margin/vbox/tabs/Gameplay"]
+layout_mode = 2
+
+[node name="heraldry_title" type="Label" parent="settings_menu/margin/vbox/tabs/Gameplay"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Your arms"
+
+[node name="heraldry_row" type="HBoxContainer" parent="settings_menu/margin/vbox/tabs/Gameplay"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="heraldry_preview" type="TextureRect" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row"]
+custom_minimum_size = Vector2(72, 72)
+layout_mode = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="heraldry_btns" type="VBoxContainer" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="heraldry_hint" type="Label" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns"]
+layout_mode = 2
+autowrap_mode = 3
+text = "Each half/quarter has its own base colour, ink (patterns & charges), and layout. First field base also sets your border and flag colour."
+
+[node name="heraldry_action_row" type="HBoxContainer" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="heraldry_reroll_btn" type="Button" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns/heraldry_action_row"]
+layout_mode = 2
+text = "Generate random"
+
+[node name="heraldry_editors" type="GridContainer" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns"]
+layout_mode = 2
+theme_override_constants/h_separation = 10
+theme_override_constants/v_separation = 4
+columns = 2
+
 [node name="top_panel" type="Panel" parent="." unique_id=982718473]
 anchors_preset = 10
 anchor_right = 1.0
@@ -709,7 +791,7 @@ layout_mode = 2
 
 [node name="season_lbl" type="Label" parent="top_panel/MarginContainer/HBoxContainer" unique_id=1740689587]
 layout_mode = 2
-text = "WINTERUS"
+text = "Winter 1100"
 
 [node name="VSeparator" type="VSeparator" parent="top_panel/MarginContainer/HBoxContainer" unique_id=1701081183]
 layout_mode = 2

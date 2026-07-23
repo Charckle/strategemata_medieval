@@ -214,7 +214,29 @@ static func _battle_body(event: Dictionary, reader_id: int, player_name_cb: Call
 		lines.append("Attackers: %s" % atk_names)
 	if def_names != "":
 		lines.append("Defenders: %s" % def_names)
+
+	_append_roster_section(lines, event)
 	return lines
+
+
+static func _append_roster_section(lines: PackedStringArray, event: Dictionary) -> void:
+	if not event.has("attacker_units_before") and not event.has("defender_units_before"):
+		return
+	lines.append("")
+	lines.append("Attacker before (%d men):" % GlobalUnits.total_men(event.get("attacker_units_before", [])))
+	_append_roster_lines(lines, event.get("attacker_units_before", []))
+	lines.append("Attacker after (%d men):" % GlobalUnits.total_men(event.get("attacker_units_after", [])))
+	_append_roster_lines(lines, event.get("attacker_units_after", []))
+	lines.append("Defender before (%d men):" % GlobalUnits.total_men(event.get("defender_units_before", [])))
+	_append_roster_lines(lines, event.get("defender_units_before", []))
+	lines.append("Defender after (%d men):" % GlobalUnits.total_men(event.get("defender_units_after", [])))
+	_append_roster_lines(lines, event.get("defender_units_after", []))
+
+
+static func _append_roster_lines(lines: PackedStringArray, units: Array) -> void:
+	var desc := GlobalUnits.describe_units(units)
+	for line in desc.split("\n"):
+		lines.append("  %s" % line)
 
 
 static func _hostage_fate_line(event: Dictionary, hostages: int, attacker_view: bool) -> String:

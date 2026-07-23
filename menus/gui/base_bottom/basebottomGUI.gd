@@ -13,6 +13,16 @@ const ArmyNames := preload("res://global_scripts/army_names.gd")
 @onready var show_province_names_chk := $settings_menu/margin/vbox/tabs/Gameplay/show_province_names_row/show_province_names_chk
 @onready var show_army_names_chk := $settings_menu/margin/vbox/tabs/Gameplay/show_army_names_row/show_army_names_chk
 @onready var show_weather_chk := $settings_menu/margin/vbox/tabs/Video/show_weather_row/show_weather_chk
+@onready var heraldry_preview := $settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_preview
+@onready var heraldry_reroll_btn := $settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns/heraldry_action_row/heraldry_reroll_btn
+@onready var heraldry_editors := $settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns/heraldry_editors
+
+var _heraldry_opt_division: OptionButton = null
+var _heraldry_field_rows: Array = []  # [{base, ink, pattern, charge, charge_type}, ...]
+var _heraldry_syncing := false
+var _heraldry_tincture_keys: Array = []
+var _heraldry_fields_box: VBoxContainer = null
+var _heraldry_editor_built := false
 @onready var map_tabs := $map_menu/margin/vbox/tabs
 @onready var minimap := $map_menu/margin/vbox/tabs/Map/Minimap
 
@@ -49,7 +59,12 @@ const ArmyNames := preload("res://global_scripts/army_names.gd")
 @onready var diplomacy_list := $war_menu/margin/vbox/tabs/Diplomacy/ScrollContainer/diplomacy_list
 @onready var military_upkeep_lbl := $war_menu/margin/vbox/tabs/Military/upkeep_summary_lbl
 @onready var military_strikes_lbl := $war_menu/margin/vbox/tabs/Military/strikes_lbl
+@onready var ai_debug_list: VBoxContainer = $war_menu/margin/vbox/tabs/Wars/ScrollContainer/ai_debug_list
+@onready var ai_debug_refresh_btn: Button = $war_menu/margin/vbox/tabs/Wars/refresh_btn
 @onready var military_list := $war_menu/margin/vbox/tabs/Military/ScrollContainer/military_list
+@onready var production_stock_lbl := $war_menu/margin/vbox/tabs/Production/stock_summary_lbl
+@onready var production_building_lbl := $war_menu/margin/vbox/tabs/Production/building_summary_lbl
+@onready var production_list := $war_menu/margin/vbox/tabs/Production/ScrollContainer/production_list
 @onready var ladder_list := $war_menu/margin/vbox/tabs/Ladder/ScrollContainer/ladder_list
 
 var selected_province_id: String = ""
@@ -95,6 +110,16 @@ var _rc_total_lbl: Label = null
 var _rc_base = null
 var _rc_province_id: String = ""
 var _rc_spinboxes: Dictionary = {}  # UNIT_TYPE -> SpinBox
+
+# Arm peasants panel (army / garrison).
+var _ap_blocker: ColorRect = null
+var _ap_panel: PanelContainer = null
+var _ap_body: VBoxContainer = null
+var _ap_info_lbl: Label = null
+var _ap_total_lbl: Label = null
+var _ap_base = null
+var _ap_force_id: String = ""
+var _ap_spinboxes: Dictionary = {}  # UNIT_TYPE -> SpinBox
 
 # Send caravan panel (Economy → Caravan).
 var _cv_send_panel: PanelContainer = null
@@ -180,7 +205,13 @@ var _info_popup_label: Label = null
 
 # Army action menu (move / split / disband / ...), built at runtime.
 var _am_panel: PanelContainer = null
-var _am_body: VBoxContainer = null
+var _am_tabs: TabContainer = null
+var _am_roster_body: VBoxContainer = null
+var _am_orders_body: VBoxContainer = null
+var _am_supply_body: VBoxContainer = null
+var _am_people_body: VBoxContainer = null
+var _am_people_tab: Control = null
+var _am_tab_idx: int = 0
 var _am_base = null
 var _am_army: Node2D = null
 
@@ -245,12 +276,14 @@ var _mil_pending_transfer: Dictionary = {}
 # Building info popup (built at runtime): header with title + X, plus a body.
 var _building_popup: PanelContainer = null
 var _building_popup_title: Label = null
-var _building_popup_body: Label = null
+var _building_popup_shield: TextureRect = null
+var _building_popup_body: RichTextLabel = null
 var _building_popup_close: Button = null
 var _building_popup_deploy: Button = null
 var _building_popup_economy: Button = null
 var _building_popup_node: Node = null
 var _building_popup_pinned := false
+var _prov_owner_shield: TextureRect = null
 
 # Field crop popup.
 var _field_popup: PanelContainer = null
@@ -272,9 +305,11 @@ var _prov_farm_labor_lbl: RichTextLabel = null
 var _prov_agri_lbl: RichTextLabel = null
 var _prov_prod_lbl: RichTextLabel = null
 var _prov_smith_lbl: RichTextLabel = null
+var _prov_smith_rows: VBoxContainer = null
 var _prov_labor_box: VBoxContainer = null
 var _prov_farm_labor_box: VBoxContainer = null
 var _prov_labor_sliders: Dictionary = {} # category -> HSlider
+var _prov_labor_priority_opts: Dictionary = {} # category -> OptionButton
 var _prov_labor_panels: Dictionary = {} # category -> PanelContainer
 var _prov_labor_updating := false
 var _prov_idle_field_count: int = 0
@@ -297,10 +332,17 @@ var _populate_idle_body: Label = null
 # Economy building popup (build / demolish).
 var _econ_popup: PanelContainer = null
 var _econ_popup_title: Label = null
-var _econ_popup_body: Label = null
+var _econ_popup_body: RichTextLabel = null
 var _econ_popup_btns: VBoxContainer = null
 var _econ_popup_building: Node = null
 var _econ_popup_base = null
+
+# Province overview: blacksmith craft recipe picker.
+var _smith_recipe_popup: PanelContainer = null
+var _smith_recipe_title: Label = null
+var _smith_recipe_btns: VBoxContainer = null
+var _smith_recipe_building: Node = null
+var _smith_recipe_base = null
 
 # Castle construction popup (build / upgrade / dismantle).
 var _castle_popup: PanelContainer = null
@@ -366,12 +408,22 @@ func _ready() -> void:
 	if show_army_names_chk != null:
 		show_army_names_chk.toggled.connect(_on_show_army_names_toggled)
 	show_weather_chk.toggled.connect(_on_show_weather_toggled)
+	if heraldry_reroll_btn != null:
+		heraldry_reroll_btn.pressed.connect(_on_heraldry_reroll_pressed)
+	_ensure_heraldry_editors()
 	_ensure_province_levy_widgets()
 	if caravan_tab_send_btn != null:
 		caravan_tab_send_btn.pressed.connect(_on_caravan_tab_send_pressed)
 	if economy_tabs != null and caravan_tab_root != null:
 		var cv_idx := caravan_tab_root.get_index()
 		economy_tabs.set_tab_title(cv_idx, "Caravan")
+	if ai_debug_refresh_btn != null:
+		ai_debug_refresh_btn.pressed.connect(refresh_ai_debug_tab)
+	var war_tabs: TabContainer = war_menu.get_node_or_null("margin/vbox/tabs") if war_menu != null else null
+	if war_tabs != null:
+		var wars_node = war_tabs.get_node_or_null("Wars")
+		if wars_node != null:
+			war_tabs.set_tab_title(wars_node.get_index(), "AI")
 	refresh_msg_button()
 
 
@@ -414,6 +466,15 @@ func _ensure_admin_tab() -> void:
 	refresh_btn.pressed.connect(_refresh_admin_report)
 	row.add_child(refresh_btn)
 
+	var spawn_row := HBoxContainer.new()
+	spawn_row.add_theme_constant_override("separation", 8)
+	root.add_child(spawn_row)
+
+	var spawn_btn := Button.new()
+	spawn_btn.text = "Spawn 10k swordsmen + 100k grain"
+	spawn_btn.pressed.connect(_on_admin_spawn_debug_army)
+	spawn_row.add_child(spawn_btn)
+
 	_admin_report = TextEdit.new()
 	_admin_report.editable = false
 	_admin_report.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
@@ -421,18 +482,225 @@ func _ensure_admin_tab() -> void:
 	_admin_report.custom_minimum_size = Vector2(0, 280)
 	root.add_child(_admin_report)
 
-	# Give settings room for the dump.
-	settings_menu.custom_minimum_size = Vector2(720, 560)
-	settings_menu.size = Vector2(720, 560)
+	# Give settings room for the dump + heraldry editor.
+	settings_menu.custom_minimum_size = Vector2(780, 800)
+	settings_menu.size = Vector2(780, 800)
 
 
 func _on_settings_btn_pressed() -> void:
-	settings_menu.custom_minimum_size = Vector2(720, 560)
-	settings_menu.size = Vector2(720, 560)
+	settings_menu.custom_minimum_size = Vector2(780, 800)
+	settings_menu.size = Vector2(780, 800)
 	_toggle_menu(settings_menu)
 	if settings_menu.visible:
 		_refresh_admin_province_list()
 		_refresh_admin_report()
+		_refresh_heraldry_preview()
+
+
+func _refresh_heraldry_preview() -> void:
+	if heraldry_preview == null:
+		return
+	heraldry_preview.texture = null
+	if not is_instance_valid(parent_n):
+		return
+	var players = parent_n.get("players")
+	var my_id = parent_n.get("my_pl_id")
+	if players == null or my_id == null or not players.has(my_id):
+		return
+	heraldry_preview.texture = Heraldry.texture_for_player(players[my_id], 72)
+	_sync_heraldry_editors_from_player()
+
+
+func _on_heraldry_reroll_pressed() -> void:
+	if not is_instance_valid(parent_n):
+		return
+	if parent_n.has_method("reroll_my_heraldry"):
+		parent_n.reroll_my_heraldry()
+	_refresh_heraldry_preview()
+
+
+func _ensure_heraldry_editors() -> void:
+	if heraldry_editors == null or _heraldry_editor_built:
+		return
+	_heraldry_editor_built = true
+	_heraldry_tincture_keys = Heraldry.field_tincture_options()
+	_heraldry_opt_division = _make_heraldry_option("Division", Heraldry.division_labels())
+	_heraldry_opt_division.item_selected.connect(_on_heraldry_division_changed)
+
+	# Per-field editors sit below the main grid (not inside its 2 columns).
+	_heraldry_fields_box = VBoxContainer.new()
+	_heraldry_fields_box.name = "heraldry_fields"
+	_heraldry_fields_box.add_theme_constant_override("separation", 6)
+	_heraldry_fields_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var parent_box := heraldry_editors.get_parent()
+	if parent_box != null:
+		parent_box.add_child(_heraldry_fields_box)
+	else:
+		heraldry_editors.add_child(_heraldry_fields_box)
+	_rebuild_heraldry_field_editors(Heraldry.DIVISION.SOLID)
+
+
+func _make_heraldry_option(label_text: String, items: Variant) -> OptionButton:
+	var lbl := Label.new()
+	lbl.text = label_text
+	heraldry_editors.add_child(lbl)
+	var opt := OptionButton.new()
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for item in items:
+		opt.add_item(str(item))
+	heraldry_editors.add_child(opt)
+	return opt
+
+
+func _rebuild_heraldry_field_editors(division: int, keep_values: Array = []) -> void:
+	if _heraldry_fields_box == null:
+		return
+	for child in _heraldry_fields_box.get_children():
+		child.queue_free()
+	_heraldry_field_rows.clear()
+	var labels := Heraldry.field_labels(division)
+	var tincture_names: Array = _heraldry_tincture_keys.map(func(k): return Heraldry.tincture_display_name(str(k)))
+	var n := labels.size()
+	for i in n:
+		var wrap := VBoxContainer.new()
+		wrap.add_theme_constant_override("separation", 2)
+		var title := Label.new()
+		var title_txt := str(labels[i])
+		if i == 0:
+			title_txt += "  (base also sets border / flag colour)"
+		title.text = title_txt
+		title.add_theme_font_size_override("font_size", 13)
+		wrap.add_child(title)
+		var row := GridContainer.new()
+		row.columns = 2
+		row.add_theme_constant_override("h_separation", 8)
+		row.add_theme_constant_override("v_separation", 2)
+		var base_opt := _add_field_option(row, "Base", tincture_names)
+		var ink_opt := _add_field_option(row, "Ink", tincture_names)
+		var pattern_opt := _add_field_option(row, "Pattern", Heraldry.pattern_labels())
+		var charge_opt := _add_field_option(row, "Charges", Heraldry.charge_layout_labels())
+		var type_opt := _add_field_option(row, "Charge type", Heraldry.charge_type_labels())
+		wrap.add_child(row)
+		_heraldry_fields_box.add_child(wrap)
+		if i < keep_values.size() and keep_values[i] is Dictionary:
+			var f: Dictionary = keep_values[i]
+			_select_heraldry_key(base_opt, _heraldry_tincture_keys, str(f.get("base", "azure")))
+			_select_heraldry_key(ink_opt, _heraldry_tincture_keys, str(f.get("ink", "or")))
+			pattern_opt.select(clampi(int(f.get("pattern", 0)), 0, pattern_opt.item_count - 1))
+			charge_opt.select(clampi(int(f.get("charge", 0)), 0, charge_opt.item_count - 1))
+			type_opt.select(clampi(int(f.get("charge_type", 0)), 0, type_opt.item_count - 1))
+		_heraldry_field_rows.append({
+			"base": base_opt,
+			"ink": ink_opt,
+			"pattern": pattern_opt,
+			"charge": charge_opt,
+			"charge_type": type_opt,
+		})
+		base_opt.item_selected.connect(_on_heraldry_editor_changed)
+		ink_opt.item_selected.connect(_on_heraldry_editor_changed)
+		pattern_opt.item_selected.connect(_on_heraldry_editor_changed)
+		charge_opt.item_selected.connect(_on_heraldry_editor_changed)
+		type_opt.item_selected.connect(_on_heraldry_editor_changed)
+
+
+func _add_field_option(parent: GridContainer, label_text: String, items: Variant) -> OptionButton:
+	var lbl := Label.new()
+	lbl.text = label_text
+	parent.add_child(lbl)
+	var opt := OptionButton.new()
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for item in items:
+		opt.add_item(str(item))
+	parent.add_child(opt)
+	return opt
+
+
+func _on_heraldry_division_changed(_idx: int = 0) -> void:
+	if _heraldry_syncing:
+		return
+	var prev_fields := _fields_from_editors()
+	var division := _heraldry_opt_division.selected if _heraldry_opt_division != null else 0
+	_heraldry_syncing = true
+	_rebuild_heraldry_field_editors(division, prev_fields)
+	_heraldry_syncing = false
+	_on_heraldry_editor_changed()
+
+
+func _sync_heraldry_editors_from_player() -> void:
+	_ensure_heraldry_editors()
+	if _heraldry_opt_division == null or not is_instance_valid(parent_n):
+		return
+	var players = parent_n.get("players")
+	var my_id = parent_n.get("my_pl_id")
+	if players == null or my_id == null or not players.has(my_id):
+		return
+	var h: Dictionary = Heraldry.normalize(players[my_id].heraldry if players[my_id].get("heraldry") != null else {})
+	_heraldry_syncing = true
+	var division := clampi(int(h.get("division", 0)), 0, 2)
+	_heraldry_opt_division.select(division)
+	_rebuild_heraldry_field_editors(division, h.get("fields", []))
+	_heraldry_syncing = false
+
+
+func _select_heraldry_key(opt: OptionButton, keys: Array, key: String) -> void:
+	var idx := keys.find(key)
+	if idx < 0:
+		idx = 0
+	opt.select(clampi(idx, 0, opt.item_count - 1))
+
+
+func _fields_from_editors() -> Array:
+	var fields: Array = []
+	for row in _heraldry_field_rows:
+		var base := "azure"
+		var ink := "or"
+		if row.get("base") != null and row["base"].selected >= 0 \
+				and row["base"].selected < _heraldry_tincture_keys.size():
+			base = str(_heraldry_tincture_keys[row["base"].selected])
+		if row.get("ink") != null and row["ink"].selected >= 0 \
+				and row["ink"].selected < _heraldry_tincture_keys.size():
+			ink = str(_heraldry_tincture_keys[row["ink"].selected])
+		fields.append({
+			"base": base,
+			"ink": ink,
+			"pattern": int(row["pattern"].selected) if row.get("pattern") != null else 0,
+			"charge": int(row["charge"].selected) if row.get("charge") != null else 0,
+			"charge_type": int(row["charge_type"].selected) if row.get("charge_type") != null else 0,
+		})
+	if fields.is_empty():
+		fields.append(Heraldry.default_field())
+	return fields
+
+
+func _heraldry_from_editors() -> Dictionary:
+	var fields := _fields_from_editors()
+	return {
+		"primary": str(fields[0].get("base", "azure")),
+		"division": _heraldry_opt_division.selected if _heraldry_opt_division != null else 0,
+		"fields": fields,
+	}
+
+
+func _on_heraldry_editor_changed(_idx: int = 0) -> void:
+	if _heraldry_syncing:
+		return
+	if not is_instance_valid(parent_n) or not parent_n.has_method("set_my_heraldry"):
+		return
+	var applied: Dictionary = parent_n.set_my_heraldry(_heraldry_from_editors())
+	if heraldry_preview != null and not applied.is_empty():
+		heraldry_preview.texture = Heraldry.make_texture(applied, 72)
+	# Quietly fix ink selectors if rule-of-tincture corrected them.
+	if applied.has("fields") and applied["fields"] is Array:
+		_heraldry_syncing = true
+		var fields: Array = applied["fields"]
+		for i in mini(_heraldry_field_rows.size(), fields.size()):
+			var f: Dictionary = fields[i]
+			var row: Dictionary = _heraldry_field_rows[i]
+			if row.get("ink") != null:
+				_select_heraldry_key(row["ink"], _heraldry_tincture_keys, str(f.get("ink", "or")))
+			if row.get("base") != null:
+				_select_heraldry_key(row["base"], _heraldry_tincture_keys, str(f.get("base", "azure")))
+		_heraldry_syncing = false
 
 
 func _refresh_admin_province_list() -> void:
@@ -492,6 +760,21 @@ func _refresh_admin_report() -> void:
 		return
 	var pid := str(_admin_prov_ids[_admin_prov_opt.selected])
 	_admin_report.text = parent_n.get_admin_province_report(pid)
+
+
+func _on_admin_spawn_debug_army() -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("admin_spawn_debug_army"):
+		show_info_popup("Admin spawn not available.")
+		return
+	if _admin_prov_opt == null or _admin_prov_opt.selected < 0 or _admin_prov_opt.selected >= _admin_prov_ids.size():
+		show_info_popup("Select a province first.")
+		return
+	var pid := str(_admin_prov_ids[_admin_prov_opt.selected])
+	var err := str(parent_n.admin_spawn_debug_army(pid))
+	if err != "":
+		show_info_popup(err)
+		return
+	_refresh_admin_report()
 
 func _populate_gameplay_settings() -> void:
 	var enabled = GlobalSet.settings.get("show_province_names", 1) != 0
@@ -599,8 +882,8 @@ func on_province_focused(province_id: String) -> void:
 
 ## Screen-space hit test for open menus / popups (Area2D click-through guard).
 func blocks_map_at_mouse() -> bool:
-	# Modal levy form: block the whole map while open.
-	if is_recruit_menu_open():
+	# Modal levy / arm forms: block the whole map while open.
+	if is_recruit_menu_open() or is_arm_peasants_menu_open():
 		return true
 	var pos := get_viewport().get_mouse_position()
 	for child in get_children():
@@ -616,7 +899,7 @@ func blocks_map_at_mouse() -> bool:
 
 ## True when a menu/popup overlay is open (not the always-on top/bottom chrome).
 func blocks_camera_pan() -> bool:
-	if is_recruit_menu_open():
+	if is_recruit_menu_open() or is_arm_peasants_menu_open():
 		return true
 	for child in get_children():
 		if not (child is Control):
@@ -633,9 +916,11 @@ func _on_war_btn_pressed() -> void:
 	_toggle_menu(war_menu)
 	if war_menu.visible:
 		refresh_military_tab()
+		refresh_production_tab()
 		refresh_alliances_list()
 		refresh_vip_trade_ui()
 		refresh_ladder_tab()
+		refresh_ai_debug_tab()
 
 
 func _on_msg_btn_pressed() -> void:
@@ -744,17 +1029,28 @@ func _ensure_building_popup() -> void:
 	margin.add_theme_constant_override("margin_bottom", 6)
 	var vbox := VBoxContainer.new()
 	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	_building_popup_shield = TextureRect.new()
+	_building_popup_shield.custom_minimum_size = Vector2(28, 28)
+	_building_popup_shield.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_building_popup_shield.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_building_popup_shield.visible = false
 	_building_popup_title = Label.new()
 	_building_popup_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_building_popup_title.add_theme_font_size_override("font_size", 16)
 	_building_popup_close = Button.new()
 	_building_popup_close.text = "X"
 	_building_popup_close.pressed.connect(_on_building_popup_close_pressed)
+	header.add_child(_building_popup_shield)
 	header.add_child(_building_popup_title)
 	header.add_child(_building_popup_close)
-	_building_popup_body = Label.new()
+	_building_popup_body = RichTextLabel.new()
+	_building_popup_body.bbcode_enabled = true
+	_building_popup_body.fit_content = true
+	_building_popup_body.scroll_active = false
 	_building_popup_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_building_popup_body.custom_minimum_size = Vector2(300, 0)
+	_building_popup_body.mouse_filter = Control.MOUSE_FILTER_STOP
 	_building_popup_economy = Button.new()
 	_building_popup_economy.text = "Open province economy"
 	_building_popup_economy.visible = false
@@ -778,6 +1074,7 @@ func show_building_popup(building: Node, title: String, body: String, pinned: bo
 	_building_popup_pinned = pinned
 	_building_popup_title.text = title
 	_building_popup_body.text = body
+	_set_building_popup_shield(building)
 	# Only pinned popups get an X; transient ones close on unhover.
 	_building_popup_close.visible = pinned
 	# Economy shortcut only on click (pinned) — hover popups vanish on mouse leave.
@@ -792,6 +1089,25 @@ func show_building_popup(building: Node, title: String, body: String, pinned: bo
 		_building_popup_deploy.visible = false
 	_building_popup.visible = true
 	_place_anchored_popup(_building_popup, get_viewport().get_mouse_position() + Vector2(14, 0), 320.0)
+
+
+func _set_building_popup_shield(building: Node) -> void:
+	if _building_popup_shield == null:
+		return
+	_building_popup_shield.visible = false
+	_building_popup_shield.texture = null
+	if building == null or not is_instance_valid(parent_n):
+		return
+	var owner_pid := -1
+	if parent_n.has_method("get_building_owner_pid"):
+		owner_pid = int(parent_n.get_building_owner_pid(building))
+	elif building.get("player_owner") != null:
+		owner_pid = int(building.player_owner)
+	var players = parent_n.get("players")
+	if players == null or not players.has(owner_pid):
+		return
+	_building_popup_shield.texture = Heraldry.texture_for_player(players[owner_pid], 28)
+	_building_popup_shield.visible = true
 
 
 func _province_id_for_building(building: Node) -> String:
@@ -1057,9 +1373,13 @@ func _ensure_economy_building_popup() -> void:
 	close_btn.pressed.connect(hide_economy_building_popup)
 	header.add_child(_econ_popup_title)
 	header.add_child(close_btn)
-	_econ_popup_body = Label.new()
+	_econ_popup_body = RichTextLabel.new()
+	_econ_popup_body.bbcode_enabled = true
+	_econ_popup_body.fit_content = true
+	_econ_popup_body.scroll_active = false
 	_econ_popup_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_econ_popup_body.custom_minimum_size = Vector2(300, 0)
+	_econ_popup_body.mouse_filter = Control.MOUSE_FILTER_STOP
 	_econ_popup_btns = VBoxContainer.new()
 	_econ_popup_btns.add_theme_constant_override("separation", 6)
 	vbox.add_child(header)
@@ -1075,6 +1395,7 @@ func show_economy_building_popup(base_map: Node, building: Node) -> void:
 	_ensure_economy_building_popup()
 	hide_building_popup()
 	hide_field_popup()
+	hide_smith_recipe_popup()
 	_econ_popup_base = base_map
 	_econ_popup_building = building
 	_rebuild_economy_building_popup()
@@ -1096,6 +1417,12 @@ func refresh_economy_building_popup_if(base_map: Node, building: Node) -> void:
 		return
 	_econ_popup_base = base_map
 	_rebuild_economy_building_popup()
+
+
+func refresh_open_economy_building_popup(base_map: Node) -> void:
+	if _econ_popup_building == null:
+		return
+	refresh_economy_building_popup_if(base_map, _econ_popup_building)
 
 
 func _rebuild_economy_building_popup() -> void:
@@ -1209,6 +1536,162 @@ func _on_econ_recipe_pressed(weapon_key: String) -> void:
 		return
 	if _econ_popup_base.has_method("do_set_blacksmith_recipe"):
 		_econ_popup_base.do_set_blacksmith_recipe(_econ_popup_building, weapon_key)
+
+
+func _ensure_smith_recipe_popup() -> void:
+	if _smith_recipe_popup != null:
+		return
+	_smith_recipe_popup = PanelContainer.new()
+	_smith_recipe_popup.top_level = true
+	_smith_recipe_popup.z_index = 140
+	_smith_recipe_popup.mouse_filter = Control.MOUSE_FILTER_STOP
+	_smith_recipe_popup.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	var header := HBoxContainer.new()
+	_smith_recipe_title = Label.new()
+	_smith_recipe_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_smith_recipe_title.add_theme_font_size_override("font_size", 16)
+	_smith_recipe_title.text = "Craft recipe"
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.pressed.connect(hide_smith_recipe_popup)
+	header.add_child(_smith_recipe_title)
+	header.add_child(close_btn)
+	_smith_recipe_btns = VBoxContainer.new()
+	_smith_recipe_btns.add_theme_constant_override("separation", 6)
+	vbox.add_child(header)
+	vbox.add_child(HSeparator.new())
+	vbox.add_child(_smith_recipe_btns)
+	margin.add_child(vbox)
+	_smith_recipe_popup.add_child(margin)
+	add_child(_smith_recipe_popup)
+
+
+func show_smith_recipe_popup(base_map: Node, building: Node, anchor: Control = null) -> void:
+	_ensure_smith_recipe_popup()
+	_smith_recipe_base = base_map
+	_smith_recipe_building = building
+	_rebuild_smith_recipe_popup()
+	_smith_recipe_popup.visible = true
+	var preferred := get_viewport().get_mouse_position() + Vector2(14, 0)
+	if anchor != null and is_instance_valid(anchor):
+		var r := anchor.get_global_rect()
+		preferred = r.position + Vector2(r.size.x + 8.0, 0.0)
+	_place_anchored_popup(_smith_recipe_popup, preferred, 320.0)
+
+
+func hide_smith_recipe_popup() -> void:
+	if _smith_recipe_popup != null:
+		_smith_recipe_popup.visible = false
+	_smith_recipe_building = null
+	_smith_recipe_base = null
+
+
+func refresh_smith_recipe_popup_if(base_map: Node, building: Node) -> void:
+	if _smith_recipe_popup == null or not _smith_recipe_popup.visible:
+		return
+	if _smith_recipe_building != building:
+		return
+	_smith_recipe_base = base_map
+	_rebuild_smith_recipe_popup()
+
+
+func _rebuild_smith_recipe_popup() -> void:
+	if _smith_recipe_base == null or _smith_recipe_building == null or _smith_recipe_btns == null:
+		return
+	var b := _smith_recipe_building
+	var stage_name := str(b.get_stage_name()) if b.has_method("get_stage_name") else "Blacksmith"
+	_smith_recipe_title.text = "Blacksmith (%s)" % stage_name
+	for c in _smith_recipe_btns.get_children():
+		_smith_recipe_btns.remove_child(c)
+		c.queue_free()
+	var current := str(b.get_craft_weapon()) if b.has_method("get_craft_weapon") else ""
+	var idle_btn := Button.new()
+	idle_btn.text = "Idle"
+	idle_btn.disabled = current == ""
+	idle_btn.pressed.connect(_on_prov_smith_recipe_pressed.bind(""))
+	_smith_recipe_btns.add_child(idle_btn)
+	for wkey in GlobalUnits.BLACKSMITH_CRAFTABLE:
+		var rbtn := Button.new()
+		rbtn.text = GlobalUnits.blacksmith_recipe_label(str(wkey))
+		rbtn.disabled = current == str(wkey)
+		rbtn.pressed.connect(_on_prov_smith_recipe_pressed.bind(str(wkey)))
+		_smith_recipe_btns.add_child(rbtn)
+
+
+func _on_prov_smith_recipe_pressed(weapon_key: String) -> void:
+	if _smith_recipe_base == null or _smith_recipe_building == null:
+		return
+	if _smith_recipe_base.has_method("do_set_blacksmith_recipe"):
+		_smith_recipe_base.do_set_blacksmith_recipe(_smith_recipe_building, weapon_key)
+
+
+func _prov_smith_recipe_short(building: Node) -> String:
+	var current := str(building.get_craft_weapon()) if building.has_method("get_craft_weapon") else ""
+	if current == "":
+		return "Idle"
+	return GlobalUnits.weapon_name(current)
+
+
+func _clear_prov_smith_rows() -> void:
+	if _prov_smith_rows == null:
+		return
+	for c in _prov_smith_rows.get_children():
+		_prov_smith_rows.remove_child(c)
+		c.queue_free()
+
+
+func _rebuild_prov_smith_change_rows(base_map: Node, province_id: String, has_dejure: bool) -> void:
+	_clear_prov_smith_rows()
+	if _prov_smith_rows == null or not has_dejure:
+		hide_smith_recipe_popup()
+		return
+	if not is_instance_valid(base_map) or province_id == "":
+		hide_smith_recipe_popup()
+		return
+	var prov = null
+	if base_map.get("provinces") != null:
+		prov = base_map.provinces.get_node_or_null(province_id)
+	if prov == null or not prov.has_method("get_economy_buildings_for"):
+		hide_smith_recipe_popup()
+		return
+	var pid := int(base_map.my_pl_id)
+	var smiths: Array = prov.get_economy_buildings_for(pid, "blacksmith")
+	var popup_still_valid := false
+	for b in smiths:
+		if b == null or not is_instance_valid(b):
+			continue
+		if not b.has_method("is_blacksmith") or not b.is_blacksmith():
+			continue
+		if _smith_recipe_building == b:
+			popup_still_valid = true
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		row.mouse_filter = Control.MOUSE_FILTER_STOP
+		var change_btn := Button.new()
+		change_btn.text = "Change"
+		change_btn.mouse_filter = Control.MOUSE_FILTER_STOP
+		change_btn.pressed.connect(_on_prov_smith_change_pressed.bind(b, change_btn))
+		var stage_name := str(b.get_stage_name()) if b.has_method("get_stage_name") else "Small"
+		var lbl := Label.new()
+		lbl.text = "Blacksmith (%s) · %s" % [stage_name, _prov_smith_recipe_short(b)]
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+		row.add_child(change_btn)
+		row.add_child(lbl)
+		_prov_smith_rows.add_child(row)
+	if _smith_recipe_popup != null and _smith_recipe_popup.visible and not popup_still_valid:
+		hide_smith_recipe_popup()
+
+
+func _on_prov_smith_change_pressed(building: Node, anchor: Control) -> void:
+	if not is_instance_valid(parent_n) or building == null:
+		return
+	show_smith_recipe_popup(parent_n, building, anchor)
 
 
 func _ensure_econ_demolish_prompt() -> void:
@@ -1505,6 +1988,7 @@ func close_all_popups() -> void:
 	_close_building_actions_menu()
 	_close_event_report()
 	_close_recruit_menu()
+	_close_arm_peasants_menu()
 	close_caravan_menus()
 	_close_merchant_shop()
 	_close_merchant_raid_menu()
@@ -1516,6 +2000,24 @@ func close_all_popups() -> void:
 
 
 # --- Army action menu -------------------------------------------------------
+
+func _am_make_scroll_tab(tab_name: String) -> VBoxContainer:
+	var tab := VBoxContainer.new()
+	tab.name = tab_name
+	tab.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tab.add_theme_constant_override("separation", 4)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var body := VBoxContainer.new()
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 6)
+	scroll.add_child(body)
+	tab.add_child(scroll)
+	tab.set_meta("body", body)
+	return tab
+
 
 func _ensure_army_menu() -> void:
 	if _am_panel != null:
@@ -1540,16 +2042,25 @@ func _ensure_army_menu() -> void:
 	close_btn.pressed.connect(_close_army_menu)
 	header.add_child(title)
 	header.add_child(close_btn)
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_am_body = VBoxContainer.new()
-	_am_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_am_body.add_theme_constant_override("separation", 6)
-	scroll.add_child(_am_body)
+	_am_tabs = TabContainer.new()
+	_am_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_am_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_am_tabs.tab_changed.connect(_on_am_tab_changed)
+	var roster_tab := _am_make_scroll_tab("Roster")
+	_am_roster_body = roster_tab.get_meta("body")
+	_am_tabs.add_child(roster_tab)
+	var orders_tab := _am_make_scroll_tab("Orders")
+	_am_orders_body = orders_tab.get_meta("body")
+	_am_tabs.add_child(orders_tab)
+	var supply_tab := _am_make_scroll_tab("Supply")
+	_am_supply_body = supply_tab.get_meta("body")
+	_am_tabs.add_child(supply_tab)
+	_am_people_tab = _am_make_scroll_tab("People")
+	_am_people_body = _am_people_tab.get_meta("body")
+	_am_tabs.add_child(_am_people_tab)
 	vbox.add_child(header)
 	vbox.add_child(HSeparator.new())
-	vbox.add_child(scroll)
+	vbox.add_child(_am_tabs)
 	margin.add_child(vbox)
 	_am_panel.add_child(margin)
 	add_child(_am_panel)
@@ -1570,31 +2081,57 @@ func _close_army_menu() -> void:
 	_close_rename_army_dialog()
 
 
-func _clear_army_menu_body() -> void:
+func _on_am_tab_changed(tab: int) -> void:
+	_am_tab_idx = tab
+
+
+func _am_clear_body(body: VBoxContainer) -> void:
+	if body == null:
+		return
 	# remove_child so layout updates immediately; queue_free alone leaves
 	# orphans in the tree until end of frame and blows up panel height.
-	for child in _am_body.get_children():
-		_am_body.remove_child(child)
+	for child in body.get_children():
+		body.remove_child(child)
 		child.queue_free()
+
+
+func _clear_army_menu_body() -> void:
+	_am_clear_body(_am_roster_body)
+	_am_clear_body(_am_orders_body)
+	_am_clear_body(_am_supply_body)
+	_am_clear_body(_am_people_body)
+
+
+func _am_restore_tab() -> void:
+	if _am_tabs == null:
+		return
+	var target := _am_tab_idx
+	var count := _am_tabs.get_tab_count()
+	if count <= 0:
+		return
+	target = clampi(target, 0, count - 1)
+	while target > 0 and _am_tabs.is_tab_hidden(target):
+		target -= 1
+	if _am_tabs.is_tab_hidden(target):
+		target = 0
+		while target < count and _am_tabs.is_tab_hidden(target):
+			target += 1
+		if target >= count:
+			target = 0
+	_am_tabs.current_tab = target
+	_am_tab_idx = target
 
 
 func _fit_army_menu_panel() -> void:
 	var vp := get_viewport().get_visible_rect().size
-	var max_w := minf(420.0, vp.x * 0.92)
-	var max_h := vp.y * 0.7
-	var scroll := _am_body.get_parent() as ScrollContainer
-	# Give the body a real width first so long labels don't explode vertically.
-	if scroll != null:
-		scroll.custom_minimum_size = Vector2(max_w - 48.0, 0)
-	_am_body.reset_size()
-	var body_h := _am_body.get_combined_minimum_size().y
-	var header_budget := 64.0
-	if scroll != null:
-		scroll.custom_minimum_size = Vector2(max_w - 48.0, minf(body_h, max_h - header_budget))
+	var max_w := minf(560.0, vp.x * 0.92)
+	var max_h := vp.y * 0.8
+	if _am_tabs != null:
+		_am_tabs.custom_minimum_size = Vector2(max_w - 48.0, minf(360.0, max_h - 80.0))
 	_am_panel.reset_size()
 	var sz := _am_panel.get_combined_minimum_size()
 	sz.x = max_w
-	sz.y = minf(sz.y, max_h)
+	sz.y = minf(maxf(sz.y, 420.0), max_h)
 	_am_panel.size = sz
 	_am_panel.position = (vp - _am_panel.size) * 0.5
 	_am_panel.position.x = clampf(_am_panel.position.x, 0.0, maxf(0.0, vp.x - _am_panel.size.x))
@@ -1619,16 +2156,17 @@ func _rebuild_army_menu() -> void:
 	if title_lbl != null:
 		title_lbl.text = "%s  (%d men)" % [nick, GlobalUnits.total_men(units)]
 
-	# Controller can rename
+	var label_w := 480.0
+
+	# --- Roster ---
 	var ctrl = _am_army.get_controller()
 	if ctrl == _am_base.my_pl_id:
 		var rename_btn := Button.new()
 		rename_btn.text = "Rename"
 		rename_btn.pressed.connect(_on_am_rename_pressed)
-		_am_body.add_child(rename_btn)
-		_am_body.add_child(HSeparator.new())
+		_am_roster_body.add_child(rename_btn)
+		_am_roster_body.add_child(HSeparator.new())
 
-	# Roster summary
 	for pid in GlobalUnits.owners_in(units):
 		var owner_name := str(_am_base.players[pid].name_) if _am_base.players.has(pid) else "?"
 		var owner_units: Array = []
@@ -1641,7 +2179,7 @@ func _rebuild_army_menu() -> void:
 			GlobalUnits.total_men(owner_units),
 			GlobalUnits.fighting_strength(owner_units)
 		]
-		_am_body.add_child(row_lbl)
+		_am_roster_body.add_child(row_lbl)
 		for s in owner_units:
 			var stack_lbl := Label.new()
 			stack_lbl.text = "  %d × %s (%s)" % [int(s["count"]), GlobalUnits.unit_name(s["type"]), GlobalUnits.source_name(s["source"])]
@@ -1653,10 +2191,9 @@ func _rebuild_army_menu() -> void:
 					stack_lbl.text += " %ds" % rec
 			if bool(s.get("join_pending", false)):
 				stack_lbl.text += " (join pending)"
-			_am_body.add_child(stack_lbl)
+			_am_roster_body.add_child(stack_lbl)
 
-	_am_body.add_child(HSeparator.new())
-
+	# --- Orders ---
 	var move_points = _am_army.movement_left
 	var max_mp = _am_army.effective_max_mp() if _am_army.has_method("effective_max_mp") else move_points
 	var pts_lbl := Label.new()
@@ -1666,52 +2203,57 @@ func _rebuild_army_menu() -> void:
 	var wound_pen := GlobalUnits.wound_mp_penalty(units)
 	if wound_pen > 0.0:
 		pts_lbl.text += "  (wounded −%.0f%%)" % (wound_pen * 100.0)
-	_am_body.add_child(pts_lbl)
+	_am_orders_body.add_child(pts_lbl)
+	_am_orders_body.add_child(HSeparator.new())
 
-	_am_body.add_child(HSeparator.new())
-
-	# Move button
 	var move_btn := Button.new()
 	move_btn.text = "Move  (MP: %d)" % move_points
 	move_btn.disabled = move_points <= 0
 	move_btn.pressed.connect(_on_am_move_pressed)
-	_am_body.add_child(move_btn)
+	_am_orders_body.add_child(move_btn)
 
-	# Split requires ≥1 MP and enough men so both halves can have ≥ MIN_SPLIT_MEN.
 	var split_btn := Button.new()
 	split_btn.text = "Split army (min %d + %d men)" % [GlobalUnits.MIN_SPLIT_MEN, GlobalUnits.MIN_SPLIT_MEN]
 	split_btn.disabled = GlobalUnits.total_men(units) < GlobalUnits.MIN_SPLIT_MEN * 2 or move_points <= 0
 	split_btn.pressed.connect(_on_am_split_pressed)
-	_am_body.add_child(split_btn)
+	_am_orders_body.add_child(split_btn)
 
-	# Disband — always available as long as there are men.
 	var disband_btn := Button.new()
 	disband_btn.text = "Disband army"
 	disband_btn.pressed.connect(_on_am_disband_pressed)
-	_am_body.add_child(disband_btn)
+	_am_orders_body.add_child(disband_btn)
 
-	# Army loot / cargo stock (weapons + materials)
+	var peasants := 0
+	if _am_base.has_method("count_force_armable_peasants"):
+		peasants = int(_am_base.count_force_armable_peasants(fid, _am_base.my_pl_id))
+	var arm_btn := Button.new()
+	arm_btn.text = "Arm peasants (%d)" % peasants
+	arm_btn.disabled = peasants <= 0 or ctrl != _am_base.my_pl_id
+	arm_btn.pressed.connect(_on_am_arm_peasants_pressed)
+	_am_orders_body.add_child(arm_btn)
+
+	# --- Supply ---
 	var cargo: Dictionary = _am_base.get_force_cargo(_am_army.force_id) if _am_base.has_method("get_force_cargo") else {}
-	_am_body.add_child(HSeparator.new())
 	if _am_base.has_method("force_food_status_text"):
 		var food_lbl := Label.new()
 		food_lbl.text = _am_base.force_food_status_text(str(_am_army.force_id))
 		food_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		food_lbl.custom_minimum_size = Vector2(280, 0)
-		_am_body.add_child(food_lbl)
+		food_lbl.custom_minimum_size = Vector2(label_w, 0)
+		_am_supply_body.add_child(food_lbl)
+	_am_add_feed_toggle(str(_am_army.force_id))
 	if _am_base.has_method("force_siege_status_text"):
 		var siege_txt := str(_am_base.force_siege_status_text(str(_am_army.force_id)))
 		if siege_txt != "":
 			var siege_lbl := Label.new()
 			siege_lbl.text = siege_txt
 			siege_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			siege_lbl.custom_minimum_size = Vector2(280, 0)
-			_am_body.add_child(siege_lbl)
+			siege_lbl.custom_minimum_size = Vector2(label_w, 0)
+			_am_supply_body.add_child(siege_lbl)
 	var loot_hdr := Label.new()
 	loot_hdr.text = "Loot: %s" % GlobalUnits.caravan_cargo_summary(cargo)
 	loot_hdr.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	loot_hdr.custom_minimum_size = Vector2(280, 0)
-	_am_body.add_child(loot_hdr)
+	loot_hdr.custom_minimum_size = Vector2(label_w, 0)
+	_am_supply_body.add_child(loot_hdr)
 	var loot_row := HBoxContainer.new()
 	var deposit_btn := Button.new()
 	deposit_btn.text = "Deposit"
@@ -1732,23 +2274,24 @@ func _rebuild_army_menu() -> void:
 	withdraw_btn.disabled = not can_withdraw
 	withdraw_btn.pressed.connect(_on_am_withdraw_loot)
 	loot_row.add_child(withdraw_btn)
-	_am_body.add_child(loot_row)
+	_am_supply_body.add_child(loot_row)
 	var send_loot_btn := Button.new()
 	send_loot_btn.text = "Send loot home"
 	send_loot_btn.disabled = not GlobalUnits.caravan_cargo_has_any(cargo)
 	if _am_base.has_method("list_dejure_province_ids"):
 		send_loot_btn.disabled = send_loot_btn.disabled or _am_base.list_dejure_province_ids(_am_base.my_pl_id).is_empty()
 	send_loot_btn.pressed.connect(_on_am_send_loot)
-	_am_body.add_child(send_loot_btn)
+	_am_supply_body.add_child(send_loot_btn)
 
-	# VIP slot
+	# --- People (VIPs + prisoners); hide tab when empty ---
+	var has_people := false
 	if _am_base.has_method("get_vips_on_force"):
 		var vip_ids: Array = _am_base.get_vips_on_force(_am_army.force_id)
 		if not vip_ids.is_empty():
-			_am_body.add_child(HSeparator.new())
+			has_people = true
 			var vip_hdr := Label.new()
 			vip_hdr.text = "VIP"
-			_am_body.add_child(vip_hdr)
+			_am_people_body.add_child(vip_hdr)
 			for vid in vip_ids:
 				var v: Dictionary = _am_base.get_vip(str(vid))
 				if v.is_empty():
@@ -1767,19 +2310,20 @@ func _rebuild_army_menu() -> void:
 					sword_btn.text = "Sword"
 					sword_btn.pressed.connect(_on_am_put_vip_to_sword.bind(str(vid)))
 					row.add_child(sword_btn)
-				_am_body.add_child(row)
+				_am_people_body.add_child(row)
 
-	# Captured / hostage actions
 	var special: Array = []
 	for s in units:
 		var st := GlobalUnits.stack_status(s)
 		if st == GlobalUnits.STATUS.CAPTURED or st == GlobalUnits.STATUS.HOSTAGE:
 			special.append(s)
 	if not special.is_empty():
-		_am_body.add_child(HSeparator.new())
+		has_people = true
+		if _am_people_body.get_child_count() > 0:
+			_am_people_body.add_child(HSeparator.new())
 		var spec_lbl := Label.new()
 		spec_lbl.text = "Prisoners"
-		_am_body.add_child(spec_lbl)
+		_am_people_body.add_child(spec_lbl)
 		for s in special:
 			var st := GlobalUnits.stack_status(s)
 			var row := HBoxContainer.new()
@@ -1797,8 +2341,13 @@ func _rebuild_army_menu() -> void:
 			sword_btn.text = "Sword"
 			sword_btn.pressed.connect(_on_am_put_to_sword.bind(s.duplicate(true)))
 			row.add_child(sword_btn)
-			_am_body.add_child(row)
+			_am_people_body.add_child(row)
 
+	if _am_tabs != null and _am_people_tab != null:
+		var people_idx := _am_people_tab.get_index()
+		_am_tabs.set_tab_hidden(people_idx, not has_people)
+
+	_am_restore_tab()
 	_am_panel.visible = true
 	_fit_army_menu_panel()
 
@@ -1812,6 +2361,30 @@ func _on_am_put_vip_to_sword(vip_id: String) -> void:
 func refresh_army_menu_if_force(force_id: String) -> void:
 	if _am_panel != null and _am_panel.visible and _am_army != null and _am_army.force_id == force_id:
 		_rebuild_army_menu()
+
+
+func _am_add_feed_toggle(force_id: String) -> void:
+	if _am_base == null or force_id == "" or _am_supply_body == null:
+		return
+	if not _am_base.has_method("force_feed_from_province"):
+		return
+	var can_set = (
+		_am_base.has_method("can_set_force_feed_from_province")
+		and _am_base.can_set_force_feed_from_province(force_id, _am_base.my_pl_id)
+	)
+	var chk := CheckBox.new()
+	chk.text = "Feed from province stock"
+	chk.button_pressed = bool(_am_base.force_feed_from_province(force_id))
+	chk.disabled = not can_set
+	if can_set:
+		chk.toggled.connect(_on_am_feed_from_province_toggled.bind(force_id))
+	_am_supply_body.add_child(chk)
+
+
+func _on_am_feed_from_province_toggled(pressed: bool, force_id: String) -> void:
+	if _am_base == null or not _am_base.has_method("do_set_force_feed_from_province"):
+		return
+	_am_base.do_set_force_feed_from_province(force_id, pressed)
 
 
 func _on_am_rename_pressed() -> void:
@@ -1956,6 +2529,15 @@ func _on_am_disband_pressed() -> void:
 	var army := _am_army
 	_close_army_menu()
 	_open_disband_confirm(base, army)
+
+
+func _on_am_arm_peasants_pressed() -> void:
+	if _am_base == null or _am_army == null:
+		return
+	var base = _am_base
+	var fid := str(_am_army.force_id)
+	_close_army_menu()
+	open_arm_peasants_menu(base, fid)
 
 
 func _on_am_deposit_loot() -> void:
@@ -2646,6 +3228,30 @@ func is_force_menu_open() -> bool:
 	return _fm_panel != null and _fm_panel.visible
 
 
+func _fm_add_feed_toggle(force_id: String) -> void:
+	if _fm_base == null or force_id == "":
+		return
+	if not _fm_base.has_method("force_feed_from_province"):
+		return
+	var can_set = (
+		_fm_base.has_method("can_set_force_feed_from_province")
+		and _fm_base.can_set_force_feed_from_province(force_id, _fm_base.my_pl_id)
+	)
+	var chk := CheckBox.new()
+	chk.text = "Feed from province stock"
+	chk.button_pressed = bool(_fm_base.force_feed_from_province(force_id))
+	chk.disabled = not can_set
+	if can_set:
+		chk.toggled.connect(_on_fm_feed_from_province_toggled.bind(force_id))
+	_fm_body.add_child(chk)
+
+
+func _on_fm_feed_from_province_toggled(pressed: bool, force_id: String) -> void:
+	if _fm_base == null or not _fm_base.has_method("do_set_force_feed_from_province"):
+		return
+	_fm_base.do_set_force_feed_from_province(force_id, pressed)
+
+
 func _close_force_menu() -> void:
 	if _fm_panel != null:
 		_fm_panel.visible = false
@@ -2752,6 +3358,7 @@ func _rebuild_force_menu() -> void:
 		food_left.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		food_left.custom_minimum_size = Vector2(480, 0)
 		_fm_body.add_child(food_left)
+		_fm_add_feed_toggle(_fm_left_id)
 		var right_fid := _fm_right_force_id()
 		if right_fid != "" and _fm_base.forces.has(right_fid):
 			var food_right := Label.new()
@@ -2759,6 +3366,7 @@ func _rebuild_force_menu() -> void:
 			food_right.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			food_right.custom_minimum_size = Vector2(480, 0)
 			_fm_body.add_child(food_right)
+			_fm_add_feed_toggle(right_fid)
 		_fm_body.add_child(HSeparator.new())
 
 	# Owner field army can collect stored tax from this settlement (1 MP).
@@ -2784,6 +3392,31 @@ func _rebuild_force_menu() -> void:
 				collect_btn.pressed.connect(_on_fm_collect_tax)
 			_fm_body.add_child(collect_btn)
 			_fm_body.add_child(HSeparator.new())
+
+	# Arm peasants on army and/or garrison when either has armable peasants.
+	if not _fm_split_mode and _fm_base.has_method("count_force_armable_peasants"):
+		var arm_row := HBoxContainer.new()
+		var left_peasants := int(_fm_base.count_force_armable_peasants(_fm_left_id, _fm_base.my_pl_id))
+		var left_arm := Button.new()
+		left_arm.text = "Arm army peasants (%d)" % left_peasants
+		left_arm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		left_arm.disabled = left_peasants <= 0
+		left_arm.pressed.connect(_on_fm_arm_peasants.bind(_fm_left_id))
+		arm_row.add_child(left_arm)
+		var right_fid := _fm_right_force_id()
+		if right_fid != "" and _fm_base.forces.has(right_fid):
+			var right_peasants := int(_fm_base.count_force_armable_peasants(right_fid, _fm_base.my_pl_id))
+			var right_arm := Button.new()
+			if _fm_right_is_garrison:
+				right_arm.text = "Arm garrison peasants (%d)" % right_peasants
+			else:
+				right_arm.text = "Arm other peasants (%d)" % right_peasants
+			right_arm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			right_arm.disabled = right_peasants <= 0
+			right_arm.pressed.connect(_on_fm_arm_peasants.bind(right_fid))
+			arm_row.add_child(right_arm)
+		_fm_body.add_child(arm_row)
+		_fm_body.add_child(HSeparator.new())
 
 	# Settlement owner: militia resistance toggle.
 	if _fm_right_is_garrison and _fm_building != null \
@@ -3086,6 +3719,14 @@ func _on_fm_collect_tax() -> void:
 	if _fm_base.has_method("do_collect_settlement_tax"):
 		_fm_base.do_collect_settlement_tax(_fm_left_id, _fm_building)
 	_rebuild_force_menu()
+
+
+func _on_fm_arm_peasants(force_id: String) -> void:
+	if _fm_base == null or force_id == "":
+		return
+	var base = _fm_base
+	_close_force_menu()
+	open_arm_peasants_menu(base, force_id)
 
 
 func _on_fm_toggle_militia() -> void:
@@ -3526,8 +4167,10 @@ func _on_fm_merge_all() -> void:
 	_close_force_menu()
 
 
-func update_season(season_id):
-	$top_panel/MarginContainer/HBoxContainer/season_lbl.text = GlobalStuff.get_season_name(season_id)
+func update_season(season_id, year: int = 1100):
+	$top_panel/MarginContainer/HBoxContainer/season_lbl.text = "%s %d" % [
+		GlobalStuff.get_season_name(season_id), year
+	]
 
 func update_money(m_value):
 	$top_panel/MarginContainer/HBoxContainer/mark_val_lbl.text = str(m_value)
@@ -3539,7 +4182,49 @@ func update_pname(player_name):
 func refresh_military_tab_if_open() -> void:
 	if war_menu != null and war_menu.visible:
 		refresh_military_tab()
+		refresh_production_tab()
 		refresh_ladder_tab()
+		refresh_ai_debug_tab()
+
+
+func refresh_ai_debug_tab() -> void:
+	if ai_debug_list == null:
+		return
+	for child in ai_debug_list.get_children():
+		ai_debug_list.remove_child(child)
+		child.queue_free()
+	var base_map = parent_n
+	if not is_instance_valid(base_map):
+		var miss := Label.new()
+		miss.text = "No map"
+		ai_debug_list.add_child(miss)
+		return
+	var reports: Array = LordAI.debug_all_lords(base_map)
+	if reports.is_empty():
+		var empty_lbl := Label.new()
+		empty_lbl.text = "No AI lords on this map."
+		empty_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		ai_debug_list.add_child(empty_lbl)
+		return
+	for report in reports:
+		var box := VBoxContainer.new()
+		box.add_theme_constant_override("separation", 2)
+		var title := Label.new()
+		title.text = "%s — %s" % [str(report.get("name", "?")), str(report.get("phase", "?"))]
+		title.add_theme_font_size_override("font_size", 16)
+		box.add_child(title)
+		for line in report.get("lines", []):
+			var lbl := Label.new()
+			lbl.text = str(line)
+			lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			box.add_child(lbl)
+		ai_debug_list.add_child(box)
+		ai_debug_list.add_child(HSeparator.new())
+
+
+func refresh_production_tab_if_open() -> void:
+	if war_menu != null and war_menu.visible:
+		refresh_production_tab()
 
 
 func refresh_ladder_tab() -> void:
@@ -3599,21 +4284,30 @@ func refresh_ladder_tab() -> void:
 	)
 
 	var my_id: int = int(base_map.my_pl_id) if base_map.get("my_pl_id") != null else -1
+	var players = base_map.get("players")
 	for e in ordered:
 		var ranks: Dictionary = e.get("ranks", {})
+		var pid := int(e.get("pid", -1))
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 12)
+		row.add_theme_constant_override("separation", 8)
 		var rank_lbl := Label.new()
 		rank_lbl.text = "#%d" % int(ranks.get(sort_metric, 0))
 		rank_lbl.custom_minimum_size = Vector2(48, 0)
+		var shield := TextureRect.new()
+		shield.custom_minimum_size = Vector2(28, 28)
+		shield.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		shield.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		if players != null and players.has(pid):
+			shield.texture = Heraldry.texture_for_player(players[pid], 28)
 		var name_lbl := Label.new()
 		name_lbl.text = str(e.get("name", "?"))
 		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var is_me := int(e.get("pid", -1)) == my_id
+		var is_me := pid == my_id
 		if is_me:
 			rank_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.55))
 			name_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.55))
 		row.add_child(rank_lbl)
+		row.add_child(shield)
 		row.add_child(name_lbl)
 		ladder_list.add_child(row)
 
@@ -3623,6 +4317,162 @@ func _on_ladder_sort_pressed(metric: String) -> void:
 		return
 	_ladder_sort_metric = metric
 	refresh_ladder_tab()
+
+
+func refresh_production_tab() -> void:
+	if production_list == null:
+		return
+	var base_map = parent_n
+	if not is_instance_valid(base_map) or not base_map.has_method("get_player_production_overview"):
+		return
+	var my_id: int = int(base_map.my_pl_id)
+	var overview: Dictionary = base_map.get_player_production_overview(my_id)
+	var total: Dictionary = overview.get("total_stock", GlobalUnits.empty_weapon_stock())
+	var building: Dictionary = overview.get("building", GlobalUnits.empty_weapon_stock())
+	if production_stock_lbl != null:
+		production_stock_lbl.text = "Total stock: %s" % GlobalUnits.weapon_stock_summary(total)
+	if production_building_lbl != null:
+		if GlobalUnits.weapon_stock_has_any(building):
+			production_building_lbl.text = "Next season: %s" % GlobalUnits.weapon_stock_summary(building)
+		else:
+			production_building_lbl.text = "Next season: (nothing crafting)"
+
+	for child in production_list.get_children():
+		production_list.remove_child(child)
+		child.queue_free()
+
+	var holdings: Array = overview.get("holdings", [])
+	var armies: Array = overview.get("armies", [])
+	var caravans: Array = overview.get("caravans", [])
+	if holdings.is_empty() and armies.is_empty() and caravans.is_empty():
+		var empty_lbl := Label.new()
+		empty_lbl.text = "No arms stock or blacksmiths"
+		production_list.add_child(empty_lbl)
+		return
+
+	if not holdings.is_empty():
+		var h_hdr := Label.new()
+		h_hdr.text = "Holdings"
+		production_list.add_child(h_hdr)
+		for entry in holdings:
+			production_list.add_child(_make_production_holding_row(entry))
+
+	if not armies.is_empty():
+		production_list.add_child(HSeparator.new())
+		var a_hdr := Label.new()
+		a_hdr.text = "Armies"
+		production_list.add_child(a_hdr)
+		for entry in armies:
+			production_list.add_child(_make_production_force_row(entry))
+
+	if not caravans.is_empty():
+		production_list.add_child(HSeparator.new())
+		var c_hdr := Label.new()
+		c_hdr.text = "Caravans"
+		production_list.add_child(c_hdr)
+		for entry in caravans:
+			production_list.add_child(_make_production_caravan_row(entry))
+
+
+func _make_production_holding_row(entry: Dictionary) -> VBoxContainer:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	var name_btn := Button.new()
+	name_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	name_btn.text = str(entry.get("name", "?"))
+	var pid := str(entry.get("province_id", ""))
+	name_btn.pressed.connect(_on_production_province_pressed.bind(pid))
+	col.add_child(name_btn)
+
+	var stock_lbl := Label.new()
+	stock_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	stock_lbl.text = "  Arms: %s" % GlobalUnits.weapon_stock_summary(entry.get("stock", {}))
+	col.add_child(stock_lbl)
+
+	var craft: Dictionary = entry.get("craft", {})
+	var craft_lbl := Label.new()
+	craft_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if GlobalUnits.weapon_stock_has_any(craft):
+		craft_lbl.text = "  Building: %s" % GlobalUnits.weapon_stock_summary(craft)
+	elif bool(entry.get("has_blacksmith", false)):
+		craft_lbl.text = "  Building: (idle / no output)"
+	else:
+		craft_lbl.text = "  Building: (no blacksmith)"
+	col.add_child(craft_lbl)
+
+	if bool(entry.get("can_change", false)):
+		for smith in entry.get("smiths", []):
+			var b: Node = smith.get("building")
+			if b == null or not is_instance_valid(b):
+				continue
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 6)
+			var change_btn := Button.new()
+			change_btn.text = "Change"
+			change_btn.pressed.connect(_on_prov_smith_change_pressed.bind(b, change_btn))
+			var recipe := str(smith.get("craft_weapon", ""))
+			var recipe_txt := "Idle" if recipe == "" else GlobalUnits.weapon_name(recipe)
+			var lbl := Label.new()
+			lbl.text = "Blacksmith (%s) · %s" % [str(smith.get("stage_name", "Blacksmith")), recipe_txt]
+			lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(change_btn)
+			row.add_child(lbl)
+			col.add_child(row)
+	return col
+
+
+func _make_production_force_row(entry: Dictionary) -> VBoxContainer:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	var name_btn := Button.new()
+	name_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	name_btn.text = str(entry.get("name", "?"))
+	var fid := str(entry.get("force_id", ""))
+	name_btn.pressed.connect(_on_military_force_pressed.bind(fid))
+	col.add_child(name_btn)
+	var stock_lbl := Label.new()
+	stock_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	stock_lbl.text = "  Arms: %s" % GlobalUnits.weapon_stock_summary(entry.get("stock", {}))
+	col.add_child(stock_lbl)
+	return col
+
+
+func _make_production_caravan_row(entry: Dictionary) -> VBoxContainer:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	var name_btn := Button.new()
+	name_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	name_btn.text = str(entry.get("name", "?"))
+	var node = entry.get("node")
+	name_btn.pressed.connect(_on_production_caravan_pressed.bind(node))
+	col.add_child(name_btn)
+	var stock_lbl := Label.new()
+	stock_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	stock_lbl.text = "  Arms: %s" % GlobalUnits.weapon_stock_summary(entry.get("stock", {}))
+	col.add_child(stock_lbl)
+	return col
+
+
+func _on_production_province_pressed(province_id: String) -> void:
+	if province_id == "" or not is_instance_valid(parent_n):
+		return
+	if parent_n.has_method("set_province_focus"):
+		parent_n.set_province_focus(province_id, true)
+	var prov = null
+	if parent_n.get("provinces") != null:
+		prov = parent_n.provinces.get_node_or_null(province_id)
+	if prov != null and parent_n.has_method("jump_camera_to"):
+		parent_n.jump_camera_to(prov.global_position)
+
+
+func _on_production_caravan_pressed(caravan: Node) -> void:
+	if not is_instance_valid(parent_n) or caravan == null or not is_instance_valid(caravan):
+		return
+	if parent_n.has_method("jump_camera_to"):
+		parent_n.jump_camera_to(caravan.global_position)
 
 
 func refresh_military_tab() -> void:
@@ -3702,15 +4552,23 @@ func refresh_military_tab() -> void:
 		col.add_child(row)
 		var food_lbl := Label.new()
 		food_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		if bool(entry.get("in_dejure", false)):
-			food_lbl.text = "  Food: de jure supply · %d grain held" % int(entry.get("grain", 0))
+		var tag := ""
+		if bool(entry.get("starving", false)):
+			tag = " · STARVING"
+		elif bool(entry.get("food_warning", false)):
+			tag = " · warning"
+		if bool(entry.get("uses_granary", false)):
+			var order := (
+				"province first" if bool(entry.get("feed_from_province", true)) else "cargo first"
+			)
+			food_lbl.text = "  Food: %s · need %d/season · cargo %d%s" % [
+				order,
+				int(entry.get("grain_need", 0)),
+				int(entry.get("grain", 0)),
+				tag,
+			]
 		else:
 			var seasons := int(entry.get("food_seasons", -1))
-			var tag := ""
-			if bool(entry.get("starving", false)):
-				tag = " · STARVING"
-			elif bool(entry.get("food_warning", false)):
-				tag = " · warning"
 			food_lbl.text = "  Food: %d grain · need %d/season · %s season(s)%s" % [
 				int(entry.get("grain", 0)),
 				int(entry.get("grain_need", 0)),
@@ -4180,6 +5038,10 @@ func _ensure_province_levy_widgets() -> void:
 	left.add_child(_prov_prod_lbl)
 	_prov_smith_lbl = _make_prov_rich_label("Blacksmith: —")
 	left.add_child(_prov_smith_lbl)
+	_prov_smith_rows = VBoxContainer.new()
+	_prov_smith_rows.add_theme_constant_override("separation", 4)
+	_prov_smith_rows.mouse_filter = Control.MOUSE_FILTER_STOP
+	left.add_child(_prov_smith_rows)
 	left.add_child(HSeparator.new())
 	_prov_happiness_lbl = Label.new()
 	_prov_happiness_lbl.text = "Happiness: —"
@@ -4457,6 +5319,19 @@ func _on_prov_labor_category_changed(category: String, value: float) -> void:
 		parent_n.do_set_holding_labor_category(selected_province_id, category, int(value))
 
 
+func _on_prov_labor_priority_changed(category: String, index: int) -> void:
+	if _prov_labor_updating:
+		return
+	if selected_province_id == "" or not is_instance_valid(parent_n):
+		return
+	if not _prov_labor_priority_opts.has(category):
+		return
+	var opt: OptionButton = _prov_labor_priority_opts[category]
+	var priority := int(opt.get_item_id(index))
+	if parent_n.has_method("do_set_holding_labor_priority"):
+		parent_n.do_set_holding_labor_priority(selected_province_id, category, priority)
+
+
 func _connect_ration_button(btn: Button, level: int) -> void:
 	btn.pressed.connect(func(): _on_prov_ration_pressed(level))
 
@@ -4572,6 +5447,60 @@ func _labor_category_label(cat: String) -> String:
 	return cat.capitalize()
 
 
+## Gross next-season output hint for a labor slider (holding-wide category total).
+## Returns BBCode; numbers are green+bold when producing.
+func _labor_output_suffix(cat: String, cur: int, holding: Dictionary) -> String:
+	match cat:
+		"wood":
+			var n := cur * GlobalUnits.ECONOMY_WOOD_PER_WORKER
+			return " · %s wood" % _bb_emphasis("%+d" % n, n)
+		"stone":
+			var n := cur * GlobalUnits.ECONOMY_STONE_PER_WORKER
+			return " · %s stone" % _bb_emphasis("%+d" % n, n)
+		"iron":
+			var n := cur * GlobalUnits.ECONOMY_IRON_PER_WORKER
+			return " · %s iron" % _bb_emphasis("%+d" % n, n)
+		"silver":
+			var n := cur * GlobalUnits.ECONOMY_SILVER_MARKS_PER_WORKER
+			return " · %s marks" % _bb_emphasis("%+d" % n, n)
+		"horses":
+			var fmin := int(holding.get("foals_next_min", 0))
+			var fmax := int(holding.get("foals_next_max", 0))
+			if fmax <= 0:
+				return " · no foals"
+			if fmin == fmax:
+				return " · ~%s foals" % _bb_emphasis(str(fmin), fmin)
+			return " · ~%s–%s foals" % [
+				_bb_emphasis(str(fmin), fmin),
+				_bb_emphasis(str(fmax), fmax),
+			]
+		"blacksmith":
+			var preview: Dictionary = holding.get("economy_preview", {})
+			var weapons_prev: Dictionary = preview.get("weapons", {})
+			var bits: PackedStringArray = []
+			for wk in GlobalUnits.BLACKSMITH_CRAFTABLE:
+				var amt := int(weapons_prev.get(wk, 0))
+				if amt > 0:
+					bits.append(
+						"%s %s" % [
+							_bb_emphasis("%+d" % amt, amt),
+							_bb_escape(GlobalUnits.weapon_name(str(wk))),
+						]
+					)
+			if bits.is_empty():
+				return " · no crafts"
+			return " · %s" % ", ".join(bits)
+		"castle":
+			var remaining := int(holding.get("castle_work_remaining", 0))
+			var seasons := 99
+			if remaining <= 0:
+				seasons = 0
+			elif cur > 0:
+				seasons = mini(99, int(ceil(float(remaining) / float(cur))))
+			return " · ~%s seasons" % _bb_emphasis(str(seasons), seasons > 0)
+	return ""
+
+
 func _clear_labor_box(box: VBoxContainer) -> void:
 	if box == null:
 		return
@@ -4584,12 +5513,14 @@ func _rebuild_labor_sliders(holding: Dictionary) -> void:
 	_clear_labor_box(_prov_labor_box)
 	_clear_labor_box(_prov_farm_labor_box)
 	_prov_labor_sliders.clear()
+	_prov_labor_priority_opts.clear()
 	_prov_labor_panels.clear()
 	if holding.is_empty():
 		return
 	var pop := int(holding.get("population", 0))
 	var labor: Dictionary = holding.get("labor", {})
 	var caps: Dictionary = holding.get("labor_caps", {})
+	var priorities: Dictionary = holding.get("labor_priority", {})
 	var farm_cats: Array = []
 	var econ_cats: Array = []
 	if bool(holding.get("has_grain_work", false)) or int(holding.get("planted_grain", 0)) > 0 \
@@ -4611,9 +5542,9 @@ func _rebuild_labor_sliders(holding: Dictionary) -> void:
 		econ_cats.append("castle")
 	_prov_labor_updating = true
 	for cat in farm_cats:
-		_add_labor_slider_row(str(cat), labor, caps, pop, holding, _prov_farm_labor_box)
+		_add_labor_slider_row(str(cat), labor, caps, pop, holding, _prov_farm_labor_box, priorities)
 	for cat in econ_cats:
-		_add_labor_slider_row(str(cat), labor, caps, pop, holding, _prov_labor_box)
+		_add_labor_slider_row(str(cat), labor, caps, pop, holding, _prov_labor_box, priorities)
 	_prov_labor_updating = false
 	_apply_labor_focus()
 
@@ -4668,12 +5599,19 @@ func _add_labor_slider_row(
 	caps: Dictionary,
 	pop: int,
 	holding: Dictionary = {},
-	parent_box: VBoxContainer = null
+	parent_box: VBoxContainer = null,
+	priorities: Dictionary = {}
 ) -> void:
 	if parent_box == null:
 		return
 	var cur := int(labor.get(cat, 0))
 	var cap := int(caps.get(cat, 0))
+	var priority := clampi(
+		int(priorities.get(cat, GlobalUnits.LABOR_PRIORITY_MANUAL)),
+		GlobalUnits.LABOR_PRIORITY_MANUAL,
+		GlobalUnits.LABOR_PRIORITY_MAX
+	)
+	var is_manual := priority == GlobalUnits.LABOR_PRIORITY_MANUAL
 	var others := 0
 	for other_cat in GlobalUnits.LABOR_CATEGORIES:
 		if str(other_cat) == cat:
@@ -4695,30 +5633,24 @@ func _add_labor_slider_row(
 	var lbl := _make_prov_rich_label("")
 	# Show assigned / need (farm) or building-cap (economy); slider max may be lower if people are scarce.
 	var suffix := ""
-	if max_v <= 0 and cap > 0:
+	if not is_manual:
+		suffix = " (auto P%d)" % priority
+	elif max_v <= 0 and cap > 0:
 		suffix = " (no free people)"
 	elif max_v < cap and cur >= max_v:
 		suffix = " (people cap %d)" % max_v
 	if cat == "blacksmith":
 		var preview: Dictionary = holding.get("economy_preview", {})
 		var smith: Dictionary = preview.get("blacksmith", {})
-		var crafts := int(smith.get("crafts", 0))
-		var free_slots := int(smith.get("free_slots", 0))
 		var bn := str(smith.get("bottleneck", ""))
 		match bn:
-			"full":
-				suffix += " · full (%d crafts)" % crafts
 			"materials":
-				suffix += " · materials limit (%d crafts)" % crafts
-			"can_expand":
-				suffix += " · %d free · %d crafts" % [free_slots, crafts]
+				suffix += " · materials limit"
 			"idle_recipe":
 				suffix += " · set recipe"
 			"no_workers":
 				suffix += " · no workers"
-			_:
-				if cap > 0:
-					suffix += " · %d crafts" % crafts
+	var output_bb := _labor_output_suffix(cat, cur, holding)
 	var ratio_bb: String
 	if cat == "grain":
 		ratio_bb = _bb_ratio(cur, int(holding.get("grain_labor_need", cap)))
@@ -4726,11 +5658,30 @@ func _add_labor_slider_row(
 		ratio_bb = _bb_ratio(cur, int(holding.get("horse_labor_need", cap)))
 	else:
 		ratio_bb = "%d/%d" % [cur, cap]
-	lbl.text = "%s %s%s" % [_bb_escape(_labor_category_label(cat)), ratio_bb, _bb_escape(suffix)]
+	lbl.text = "%s %s%s%s" % [
+		_bb_escape(_labor_category_label(cat)),
+		ratio_bb,
+		_bb_escape(suffix),
+		output_bb,
+	]
 	var slider_row := HBoxContainer.new()
 	slider_row.add_theme_constant_override("separation", 8)
 	slider_row.mouse_filter = Control.MOUSE_FILTER_STOP
 	slider_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var pri_opt := OptionButton.new()
+	pri_opt.focus_mode = Control.FOCUS_NONE
+	pri_opt.mouse_filter = Control.MOUSE_FILTER_STOP
+	pri_opt.custom_minimum_size.x = 88
+	pri_opt.add_item("Manual", GlobalUnits.LABOR_PRIORITY_MANUAL)
+	for p in range(1, GlobalUnits.LABOR_PRIORITY_MAX + 1):
+		pri_opt.add_item("P%d" % p, p)
+	var sel_idx := pri_opt.get_item_index(priority)
+	if sel_idx < 0:
+		sel_idx = 0
+	pri_opt.select(sel_idx)
+	_connect_labor_priority_opt(pri_opt, cat)
+	slider_row.add_child(pri_opt)
+	_prov_labor_priority_opts[cat] = pri_opt
 	var slider := HSlider.new()
 	slider.min_value = 0
 	slider.max_value = slider_max
@@ -4739,7 +5690,7 @@ func _add_labor_slider_row(
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	slider.custom_minimum_size.y = 18
-	# Editable to lower workers even at 0 headroom; locked only when already 0 and no free people.
+	# Editable even on auto priority — dragging/MAX switches the category to manual.
 	slider.editable = slider_max > 0
 	_connect_labor_slider(slider, cat)
 	slider_row.add_child(slider)
@@ -4763,6 +5714,10 @@ func _connect_labor_slider(slider: HSlider, cat: String) -> void:
 	slider.value_changed.connect(func(v: float): _on_prov_labor_category_changed(cat, v))
 
 
+func _connect_labor_priority_opt(opt: OptionButton, cat: String) -> void:
+	opt.item_selected.connect(func(idx: int): _on_prov_labor_priority_changed(cat, idx))
+
+
 func _connect_labor_max_button(btn: Button, slider: HSlider, max_v: int) -> void:
 	btn.pressed.connect(func():
 		if max_v <= 0:
@@ -4781,6 +5736,48 @@ func _set_province_sub_tab_hidden(tab_index: int, hidden: bool) -> void:
 		province_sub_tabs.current_tab = 0
 
 
+func _ensure_prov_owner_shield() -> void:
+	if _prov_owner_shield != null and is_instance_valid(_prov_owner_shield):
+		return
+	if province_tab_name == null:
+		return
+	_prov_owner_shield = TextureRect.new()
+	_prov_owner_shield.name = "owner_shield"
+	_prov_owner_shield.custom_minimum_size = Vector2(28, 28)
+	_prov_owner_shield.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_prov_owner_shield.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_prov_owner_shield.visible = false
+	var parent_box := province_tab_name.get_parent()
+	if parent_box == null:
+		return
+	# Put shield + name on one row at the top of the province tab.
+	var row := HBoxContainer.new()
+	row.name = "province_title_row"
+	row.add_theme_constant_override("separation", 8)
+	var idx := province_tab_name.get_index()
+	parent_box.remove_child(province_tab_name)
+	row.add_child(_prov_owner_shield)
+	row.add_child(province_tab_name)
+	province_tab_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent_box.add_child(row)
+	parent_box.move_child(row, idx)
+
+
+func _set_prov_owner_shield(base_map: Node, owner_pid: int) -> void:
+	_ensure_prov_owner_shield()
+	if _prov_owner_shield == null:
+		return
+	_prov_owner_shield.visible = false
+	_prov_owner_shield.texture = null
+	if base_map == null or owner_pid < 0:
+		return
+	var players = base_map.get("players")
+	if players == null or not players.has(owner_pid):
+		return
+	_prov_owner_shield.texture = Heraldry.texture_for_player(players[owner_pid], 28)
+	_prov_owner_shield.visible = true
+
+
 func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	_ensure_province_levy_widgets()
 	var data = base_map.get_province_data(province_id)
@@ -4796,6 +5793,7 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 		province_tab_towns.text = "Towns: — / —"
 		province_tab_castles.text = "Castles: — / —"
 		province_tab_economy.text = "Economy: — / —"
+		_set_prov_owner_shield(base_map, -1)
 		_prov_idle_field_count = 0
 		if _prov_manage_root != null:
 			_prov_manage_root.visible = false
@@ -4805,12 +5803,15 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 		_set_province_sub_tab_hidden(_prov_army_tab_index, true)
 		_set_province_sub_tab_hidden(_prov_shipyard_tab_index, true)
 		hide_populate_idle_popup()
+		hide_smith_recipe_popup()
+		_clear_prov_smith_rows()
 		return
 	province_tab_name.text = data.get("name", "—")
 	province_tab_status.text = "Status: %s" % data.get("status_name", "—")
 	province_tab_owner.text = "Owner: %s" % data.get("owner_name", "—")
 	province_tab_defacto.text = "De facto: %s" % data.get("defacto_name", "—")
 	province_tab_dejure.text = "De jure: %s" % data.get("dejure_name", "—")
+	_set_prov_owner_shield(base_map, int(data.get("owner_id", -1)))
 	province_tab_population.text = "Population: %s (next: %s)" % [data.get("population_has", 0), data.get("population_will", 0)]
 	if data.get("viewer_has_holding", false):
 		if bool(data.get("tax_auto_wallet", false)):
@@ -4857,6 +5858,8 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	if not can_manage:
 		_prov_idle_field_count = 0
 		hide_populate_idle_popup()
+		hide_smith_recipe_popup()
+		_clear_prov_smith_rows()
 		return
 
 	var holding: Dictionary = data.get("holding", {})
@@ -4892,7 +5895,7 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 				_prov_populate_idle_btn.visible = true
 				_prov_populate_idle_btn.disabled = _prov_idle_field_count <= 0
 			_prov_stock_lbl.text = (
-				"Stock: grain %d · wood %d · stone %d · iron %d · horses %d · grain pot %.0f"
+				"Stock: grain %d · wood %d · stone %d · iron %d · horses %d · Expected harvest %.0f"
 				% [
 					int(holding.get("grain_stock", 0)),
 					int(holding.get("wood_stock", 0)),
@@ -4904,7 +5907,7 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			)
 			if _prov_farm_stock_lbl != null:
 				_prov_farm_stock_lbl.text = (
-					"Stock: grain %d · horses %d · grain pot %.0f"
+					"Stock: grain %d · horses %d · Expected harvest %.0f"
 					% [
 						int(holding.get("grain_stock", 0)),
 						int(holding.get("horses", 0)),
@@ -4991,6 +5994,8 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			_update_prov_ration_buttons({}, false)
 			_update_prov_tax_buttons({}, false)
 			hide_populate_idle_popup()
+
+	_rebuild_prov_smith_change_rows(base_map, province_id, has_dejure)
 
 	_prov_happiness_lbl.text = "Happiness: %.0f (avg of your settlements)" % float(data.get("happiness", 100))
 
@@ -6070,6 +7075,265 @@ func _on_recruit_confirm() -> void:
 		_refresh_recruit_total()
 		if _rc_info_lbl != null:
 			_rc_info_lbl.text = "RAISE FAILED — check the popup near the cursor for the reason."
+
+
+# --- Arm peasants (train levy peasants into kit types) ----------------------
+
+func is_arm_peasants_menu_open() -> bool:
+	return _ap_panel != null and _ap_panel.visible
+
+
+func _ensure_arm_peasants_panel() -> void:
+	if _ap_panel != null:
+		return
+	_ap_blocker = ColorRect.new()
+	_ap_blocker.name = "ArmPeasantsBlocker"
+	_ap_blocker.top_level = true
+	_ap_blocker.z_index = 139
+	_ap_blocker.color = Color(0, 0, 0, 0.4)
+	_ap_blocker.mouse_filter = Control.MOUSE_FILTER_STOP
+	_ap_blocker.focus_mode = Control.FOCUS_ALL
+	_ap_blocker.visible = false
+	_ap_blocker.gui_input.connect(_on_arm_peasants_blocker_gui_input)
+	add_child(_ap_blocker)
+	_ap_panel = PanelContainer.new()
+	_ap_panel.name = "ArmPeasantsPanel"
+	_ap_panel.top_level = true
+	_ap_panel.z_index = 140
+	_ap_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_ap_panel.focus_mode = Control.FOCUS_ALL
+	_ap_panel.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 12)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 6)
+	var header := HBoxContainer.new()
+	var title := Label.new()
+	title.text = "Arm peasants"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 16)
+	header.add_child(title)
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.pressed.connect(_close_arm_peasants_menu)
+	header.add_child(close_btn)
+	vbox.add_child(header)
+	_ap_info_lbl = Label.new()
+	_ap_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_ap_info_lbl.custom_minimum_size = Vector2(360, 0)
+	vbox.add_child(_ap_info_lbl)
+	vbox.add_child(HSeparator.new())
+	_ap_body = VBoxContainer.new()
+	_ap_body.add_theme_constant_override("separation", 4)
+	vbox.add_child(_ap_body)
+	_ap_total_lbl = Label.new()
+	_ap_total_lbl.text = "Selected: 0  ·  cost 0 marks"
+	vbox.add_child(_ap_total_lbl)
+	var btn_row := HBoxContainer.new()
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel_btn.pressed.connect(_close_arm_peasants_menu)
+	btn_row.add_child(cancel_btn)
+	var confirm_btn := Button.new()
+	confirm_btn.text = "Arm"
+	confirm_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	confirm_btn.pressed.connect(_on_arm_peasants_confirm)
+	btn_row.add_child(confirm_btn)
+	vbox.add_child(btn_row)
+	margin.add_child(vbox)
+	_ap_panel.add_child(margin)
+	add_child(_ap_panel)
+
+
+func _on_arm_peasants_blocker_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed:
+		if _ap_panel != null:
+			_ap_panel.grab_focus()
+		get_viewport().set_input_as_handled()
+
+
+func open_arm_peasants_menu(base_map: Node, force_id: String) -> void:
+	_ensure_arm_peasants_panel()
+	_ap_base = base_map
+	_ap_force_id = force_id
+	if base_map == null or force_id == "" or not base_map.forces.has(force_id):
+		show_info_popup("Force not found")
+		_close_arm_peasants_menu()
+		return
+	var peasants := 0
+	if base_map.has_method("count_force_armable_peasants"):
+		peasants = int(base_map.count_force_armable_peasants(force_id, base_map.my_pl_id))
+	if peasants <= 0:
+		show_info_popup("No peasants to arm in this force")
+		_close_arm_peasants_menu()
+		return
+	var weapons: Dictionary = {}
+	if base_map.has_method("arm_weapon_pool_for"):
+		weapons = base_map.arm_weapon_pool_for(force_id, base_map.my_pl_id)
+	var marks := int(base_map.players[base_map.my_pl_id].game_data.get("marks", 0))
+	var pool_txt := GlobalUnits.weapon_stock_summary(weapons)
+	_ap_info_lbl.text = (
+		"Arm up to %d peasants.\nKit: army cargo first, then province/holding.\nAvailable: %s\nMarks: %d  (train %d / knight %d)"
+		% [
+			peasants,
+			pool_txt,
+			marks,
+			GlobalUnits.ARM_TRAIN_MARKS,
+			GlobalUnits.ARM_TRAIN_MARKS_KNIGHT,
+		]
+	)
+
+	for child in _ap_body.get_children():
+		child.queue_free()
+	_ap_spinboxes.clear()
+
+	for ut in GlobalUnits.ARMABLE_UNIT_TYPES:
+		var row := HBoxContainer.new()
+		var lbl := Label.new()
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var cost: Dictionary = GlobalUnits.weapon_cost_for_type(ut)
+		var bits: PackedStringArray = []
+		for k in cost:
+			bits.append("%d %s" % [int(cost[k]), GlobalUnits.weapon_name(k)])
+		var cost_txt := ", ".join(bits) if not bits.is_empty() else "—"
+		var train := GlobalUnits.arm_training_marks_for_type(ut)
+		var type_max := peasants
+		for k in cost:
+			var per := int(cost[k])
+			if per <= 0:
+				continue
+			type_max = mini(type_max, int(weapons.get(k, 0)) / per)
+		if train > 0:
+			type_max = mini(type_max, marks / train)
+		lbl.text = "%s (%s · %d mk)  max %d" % [
+			GlobalUnits.unit_name(ut), cost_txt, train, type_max
+		]
+		row.add_child(lbl)
+		var spin := SpinBox.new()
+		spin.min_value = 0
+		spin.max_value = maxi(0, type_max)
+		spin.step = 1
+		spin.value = 0
+		spin.custom_minimum_size = Vector2(90, 0)
+		spin.value_changed.connect(_on_arm_peasants_spin_changed)
+		row.add_child(spin)
+		var max_btn := Button.new()
+		max_btn.text = "MAX"
+		max_btn.pressed.connect(_on_arm_peasants_max_pressed.bind(ut))
+		row.add_child(max_btn)
+		_ap_body.add_child(row)
+		_ap_spinboxes[ut] = spin
+
+	_refresh_arm_peasants_total()
+	var vp := get_viewport().get_visible_rect().size
+	_ap_blocker.size = vp
+	_ap_blocker.position = Vector2.ZERO
+	_ap_blocker.visible = true
+	_ap_blocker.move_to_front()
+	_ap_panel.visible = true
+	_ap_panel.reset_size()
+	_ap_panel.size = Vector2(minf(460, vp.x * 0.9), _ap_panel.get_combined_minimum_size().y)
+	_ap_panel.position = (vp - _ap_panel.size) * 0.5
+	_ap_panel.move_to_front()
+	_ap_panel.grab_focus()
+	for ut in _ap_spinboxes:
+		var spin: SpinBox = _ap_spinboxes[ut]
+		if spin.max_value > 0.0:
+			spin.get_line_edit().grab_focus()
+			break
+
+
+func _close_arm_peasants_menu() -> void:
+	if _ap_blocker != null:
+		_ap_blocker.visible = false
+	if _ap_panel != null:
+		_ap_panel.visible = false
+	_ap_base = null
+	_ap_force_id = ""
+	_ap_spinboxes.clear()
+
+
+func _commit_arm_peasants_spinboxes() -> void:
+	for ut in _ap_spinboxes:
+		var spin: SpinBox = _ap_spinboxes[ut]
+		if spin == null or not is_instance_valid(spin):
+			continue
+		spin.apply()
+
+
+func _arm_peasants_composition_from_spins() -> Array:
+	_commit_arm_peasants_spinboxes()
+	var composition: Array = []
+	for ut in _ap_spinboxes:
+		var spin: SpinBox = _ap_spinboxes[ut]
+		if spin == null or not is_instance_valid(spin):
+			continue
+		var cnt := int(spin.value)
+		if cnt > 0:
+			composition.append({"type": int(ut), "count": cnt})
+	return composition
+
+
+func _refresh_arm_peasants_total(_v: float = 0.0) -> void:
+	if _ap_total_lbl == null:
+		return
+	var composition: Array = _arm_peasants_composition_from_spins()
+	var total := GlobalUnits.composition_total_men(composition)
+	var cost := GlobalUnits.arm_training_marks_for_composition(composition)
+	_ap_total_lbl.text = "Selected: %d  ·  cost %d marks" % [total, cost]
+
+
+func _on_arm_peasants_spin_changed(_v: float) -> void:
+	_refresh_arm_peasants_total()
+
+
+func _on_arm_peasants_max_pressed(ut: int) -> void:
+	if not _ap_spinboxes.has(ut) or _ap_base == null or _ap_force_id == "":
+		return
+	_commit_arm_peasants_spinboxes()
+	var peasants := int(_ap_base.count_force_armable_peasants(_ap_force_id, _ap_base.my_pl_id))
+	var weapons: Dictionary = _ap_base.arm_weapon_pool_for(_ap_force_id, _ap_base.my_pl_id)
+	var marks := int(_ap_base.players[_ap_base.my_pl_id].game_data.get("marks", 0))
+	var used_by_others := 0
+	var marks_used_by_others := 0
+	for other_ut in _ap_spinboxes:
+		if other_ut == ut:
+			continue
+		var n := int(_ap_spinboxes[other_ut].value)
+		used_by_others += n
+		marks_used_by_others += GlobalUnits.arm_training_marks_for_type(other_ut) * n
+	var type_max := maxi(0, peasants - used_by_others)
+	var cost: Dictionary = GlobalUnits.weapon_cost_for_type(ut)
+	for k in cost:
+		var per := int(cost[k])
+		if per <= 0:
+			continue
+		type_max = mini(type_max, int(weapons.get(k, 0)) / per)
+	var train := GlobalUnits.arm_training_marks_for_type(ut)
+	if train > 0:
+		type_max = mini(type_max, maxi(0, marks - marks_used_by_others) / train)
+	_ap_spinboxes[ut].value = type_max
+	_refresh_arm_peasants_total()
+
+
+func _on_arm_peasants_confirm() -> void:
+	var base = _ap_base
+	var force_id := _ap_force_id
+	if base == null or force_id == "":
+		_close_arm_peasants_menu()
+		return
+	var composition: Array = _arm_peasants_composition_from_spins()
+	var total := GlobalUnits.composition_total_men(composition)
+	if total <= 0:
+		show_info_popup("Select men to arm")
+		_refresh_arm_peasants_total()
+		return
+	if base.do_arm_peasants(force_id, composition):
+		_close_arm_peasants_menu()
+	else:
+		_refresh_arm_peasants_total()
 
 
 # --- Caravans (Economy tab + map menus) -------------------------------------
@@ -7527,15 +8791,24 @@ func open_aboard_army_menu(base_map: Node, force_id: String) -> void:
 	_am_army = proxy
 	_rebuild_army_menu()
 	# Hide move/split for aboard; keep disband / inspect.
-	for child in _am_body.get_children():
-		if child is Button:
-			var t := str(child.text)
-			if t.begins_with("Move") or t.begins_with("Split"):
-				child.visible = false
-			elif t.begins_with("Disband"):
-				child.disabled = base_map.get_force_controller(force_id) != base_map.my_pl_id
-			elif t.begins_with("Deposit") or t.begins_with("Withdraw") or t.begins_with("Send"):
-				child.disabled = true
+	for body in [_am_orders_body, _am_supply_body]:
+		if body == null:
+			continue
+		for child in body.get_children():
+			if child is Button:
+				var t := str(child.text)
+				if t.begins_with("Move") or t.begins_with("Split"):
+					child.visible = false
+				elif t.begins_with("Disband"):
+					child.disabled = base_map.get_force_controller(force_id) != base_map.my_pl_id
+				elif t.begins_with("Deposit") or t.begins_with("Withdraw") or t.begins_with("Send"):
+					child.disabled = true
+			elif child is HBoxContainer:
+				for nested in child.get_children():
+					if nested is Button:
+						var nt := str(nested.text)
+						if nt.begins_with("Deposit") or nt.begins_with("Withdraw") or nt.begins_with("Send"):
+							nested.disabled = true
 
 
 func open_fleet_stack_picker(base_map: Node, stack: Array) -> void:

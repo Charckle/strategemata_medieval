@@ -40,7 +40,7 @@ static func tick_province(base_map: Node, prov: Node, pid: int) -> void:
 	_try_build_open(base_map, prov, pid, 0) # WOODCUTTER
 	_try_build_open(base_map, prov, pid, 5) # BLACKSMITH
 
-	# 4) Labor: max on grain fields first, leftovers to wood then blacksmith.
+	# 4) Labor amounts (manual priority): max grain, then wood, then blacksmith.
 	_assign_labor(base_map, prov, pid)
 
 	# 5) Point smith at the weapon we need most, then reinforce town garrison.
@@ -59,15 +59,15 @@ static func _province_for_council(base_map: Node, pid: int) -> Node:
 	return null
 
 
-static func _try_build_open(base_map: Node, prov: Node, pid: int, subtype: int) -> void:
+static func _try_build_open(base_map: Node, prov: Node, pid: int, subtype: int) -> bool:
 	if prov.get("economy") == null:
-		return
+		return false
 	# Already have this subtype?
 	for b in prov.economy.get_children():
 		if int(b.get("player_owner")) != pid:
 			continue
 		if b.has_method("is_built") and b.is_built() and int(b.get("subtype")) == subtype:
-			return
+			return false
 	var plot: Node = null
 	for b in prov.economy.get_children():
 		if int(b.get("player_owner")) != pid:
@@ -77,13 +77,15 @@ static func _try_build_open(base_map: Node, prov: Node, pid: int, subtype: int) 
 		plot = b
 		break
 	if plot == null:
-		return
+		return false
 	var cost := int(plot.build_cost_for(subtype)) if plot.has_method("build_cost_for") else 0
 	var marks := int(base_map.players[pid].game_data.get("marks", 0))
 	if marks < cost:
-		return
+		return false
 	if base_map.has_method("apply_build_economy"):
 		base_map.apply_build_economy(base_map._building_key(plot), subtype, pid, cost)
+		return true
+	return false
 
 
 static func _assign_labor(base_map: Node, prov: Node, pid: int) -> void:

@@ -27,6 +27,7 @@ ContinueGame="*res://global_scripts/continue_game.gd"
 GlobalStuff="*uid://bgmnfgvljrhlp"
 GlobalUnits="*res://global_scripts/global_units.gd"
 GlobalVips="*res://global_scripts/global_vips.gd"
+Heraldry="*res://global_scripts/heraldry.gd"
 
 [display]
 

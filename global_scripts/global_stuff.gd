@@ -13,6 +13,10 @@ func is_local_council(type_) -> bool:
 	return int(type_) == int(PLAYER_TYPE.LOCAL_COUNCIL)
 
 
+func is_ai_lord(type_) -> bool:
+	return int(type_) == int(PLAYER_TYPE.AI)
+
+
 ## AI lords and local councils — no human hotseat turn.
 func is_auto_turn_player(type_) -> bool:
 	var t := int(type_)
@@ -39,8 +43,10 @@ class PlayerData:
 	var ended_turn
 	
 	var game_data = {"dummy": true}
-	# RGB 0-255; used for flags, UI; default gray until set (e.g. from lobby)
+	# RGB 0-255; used for flags, borders; kept in sync with heraldry.primary
 	var color : Dictionary = {"red": 128, "green": 128, "blue": 128}
+	# Coat of arms recipe (see Heraldry autoload). Empty → rolled at map start.
+	var heraldry : Dictionary = {}
 	
 	func _init(
 			p_player_id:int,

@@ -37,13 +37,30 @@ var project_work_needed: int = 0
 var materials_on_site: Dictionary = {"wood": 0, "stone": 0}
 ## Last completed level at project start (−1 if was empty). Used for restore / refunds.
 var project_base_level: int = GlobalUnits.CASTLE_TARGET_EMPTY
+## Highest standing level ever completed on this plot (−1 if never). Peak archer reward.
+var peak_completed_level: int = GlobalUnits.CASTLE_TARGET_EMPTY
+var _peak_ready: bool = false
+var _pending_peak_archers: bool = false
+
+const PEAK_ARCHER_COUNT := 50
+const SIEGE_HAMMER_SCRIPT := preload("res://objects/overworld/othr/siege_hammer/siege_hammer.gd")
+## Center of the castle tile diamond (matches ground sprite).
+const CONSTRUCTION_HAMMER_POS := Vector2(64, 32)
 
 @onready var castle_spr: Sprite2D = $castle_spr
 @onready var ground: Sprite2D = $ground
 
 
 func _ready() -> void:
+	_ensure_peak_watermark()
 	refresh_visuals()
+
+
+func _ensure_peak_watermark() -> void:
+	if _peak_ready:
+		return
+	_peak_ready = true
+	peak_completed_level = standing_level()
 
 
 func get_inside_capacity() -> int:
@@ -116,8 +133,27 @@ func get_stage_name() -> String:
 
 
 func setup_building() -> void:
+	_ensure_peak_watermark()
 	set_flags()
 	refresh_visuals()
+
+
+## Seasons to finish at `labor_per_season` workers. Caps at 99; labor 0 → 99.
+func seasons_to_complete(labor_per_season: int) -> int:
+	if not project_active:
+		return 0
+	var remaining := maxi(0, project_work_needed - project_progress)
+	if remaining <= 0:
+		return 0
+	if labor_per_season <= 0:
+		return 99
+	return mini(99, int(ceil(float(remaining) / float(labor_per_season))))
+
+
+func take_peak_archer_reward() -> bool:
+	var v := _pending_peak_archers
+	_pending_peak_archers = false
+	return v
 
 
 func set_flags() -> void:
@@ -156,9 +192,11 @@ const CASTLE_TEXTURES := {
 
 func refresh_visuals() -> void:
 	if castle_spr == null:
+		_sync_construction_hammer()
 		return
 	if not has_castle and not project_active:
 		castle_spr.visible = false
+		_sync_construction_hammer()
 		return
 	castle_spr.visible = true
 	var show_level := standing_level()
@@ -168,11 +206,28 @@ func refresh_visuals() -> void:
 		show_level = project_base_level
 	if show_level < 0:
 		castle_spr.visible = false
+		_sync_construction_hammer()
 		return
 	var tex: Texture2D = CASTLE_TEXTURES.get(show_level, CASTLE_TEXTURES[CASTLE_TYPE.WOODEN_FORT])
 	if tex != null:
 		castle_spr.texture = tex
 	castle_spr.modulate = Color(0.75, 0.75, 0.7, 1.0) if project_active else Color.WHITE
+	_sync_construction_hammer()
+
+
+func _sync_construction_hammer() -> void:
+	var existing = get_node_or_null("SiegeHammer")
+	if project_active:
+		if existing != null:
+			return
+		var hammer := Node2D.new()
+		hammer.name = "SiegeHammer"
+		hammer.set_script(SIEGE_HAMMER_SCRIPT)
+		add_child(hammer)
+		hammer.position = CONSTRUCTION_HAMMER_POS
+	elif existing != null:
+		remove_child(existing)
+		existing.queue_free()
 
 
 func get_garrison_units() -> Array:
@@ -430,6 +485,8 @@ func complete_project() -> Dictionary:
 
 
 func _finish_as_level(level: int, preview: Dictionary) -> void:
+	_ensure_peak_watermark()
+	_pending_peak_archers = false
 	var refund_now: Dictionary = preview.get("refund_now", {"wood": 0, "stone": 0})
 	project_active = false
 	project_progress = 0
@@ -445,6 +502,9 @@ func _finish_as_level(level: int, preview: Dictionary) -> void:
 		materials_on_site = (preview.get(
 			"materials_after", GlobalUnits.castle_material_cost(level)
 		) as Dictionary).duplicate()
+		if level > peak_completed_level:
+			peak_completed_level = level
+			_pending_peak_archers = true
 	_pending_refund = {
 		"wood": int(refund_now.get("wood", 0)),
 		"stone": int(refund_now.get("stone", 0)),
@@ -459,10 +519,25 @@ func take_completion_refund() -> Dictionary:
 	return r
 
 
+func dejure_castle_labor() -> int:
+	if base_map == null or not base_map.has_method("find_province_for_building"):
+		return 0
+	var prov = base_map.find_province_for_building(self)
+	if prov == null or prov.get("dejure") == null:
+		return 0
+	var pid := int(prov.dejure)
+	if pid < 0 or not prov.has_method("get_labor_category"):
+		return 0
+	return int(prov.get_labor_category(pid, "castle"))
+
+
 func construction_summary() -> String:
 	if not project_active:
 		if not has_castle:
 			return "Empty castle plot"
 		return "%s (operational)" % get_castle_type_name()
 	var tgt := "dismantle (empty)" if project_target < 0 else castle_type_display_name(project_target)
-	return "Constructing %s — %d / %d work" % [tgt, project_progress, project_work_needed]
+	var seasons := seasons_to_complete(dejure_castle_labor())
+	return "Constructing %s — %d / %d work · ~%d seasons" % [
+		tgt, project_progress, project_work_needed, seasons
+	]

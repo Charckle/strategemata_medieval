@@ -42,7 +42,7 @@ const UNIT_STATS := {
 # (equals siege engines level 2). Battle uses siege_inside_bonus() instead.
 const CASTLE_INSIDE_BONUS := 3.0
 # Outside garrison multiplier used in battle resolution (not affected by siege engines).
-const CASTLE_OUTSIDE_BATTLE_BONUS := 1.5
+const CASTLE_OUTSIDE_BATTLE_BONUS := 1.2
 # Max siege-engine level an army can build while Sieging a castle.
 const SIEGE_MAX_LEVEL := 3
 # Inside bonus by attacker siege-engine level (0 = none … 3 = complete).
@@ -56,12 +56,10 @@ func siege_inside_bonus(level: int) -> float:
 # Minimum men that must remain in both the original and the split-off army.
 const MIN_SPLIT_MEN := 20
 
-# Levy recruitment: max fraction of season-start province population.
-const LEVY_MAX_FRACTION := 0.80
-# First this fraction of season-start pop can be levied with no happiness hit.
-const LEVY_HAPPINESS_FREE_FRACTION := 0.10
-# Happiness lost per percent levied above the free band (at 80% ≈ −35).
-const LEVY_HAPPINESS_PER_PERCENT := 0.5
+# Levy recruitment knobs: GameBalance.
+const LEVY_MAX_FRACTION := GameBalance.LEVY_MAX_FRACTION
+const LEVY_HAPPINESS_FREE_FRACTION := GameBalance.LEVY_HAPPINESS_FREE_FRACTION
+const LEVY_HAPPINESS_PER_PERCENT := GameBalance.LEVY_HAPPINESS_PER_PERCENT
 # Caravan movement points spent automatically each season.
 const CARAVAN_MOVEMENT_POINTS := 10
 # Notify owner once after this many consecutive seasons with no path.
@@ -94,15 +92,27 @@ const UNIT_WEAPON_COST := {
 	UNIT_TYPE.KNIGHTS: {"horses": 1, "armour": 1},
 }
 
-# Merchant buy price = matching unit strength * this (tweak later).
-const WEAPON_PRICE_STRENGTH_MULT := 4
-# When 2+ merchants share a province, prices drop by this fraction.
-const MERCHANT_COMPETITION_DISCOUNT := 0.15
+# Train/arm marks: GameBalance.
+const ARM_TRAIN_MARKS := GameBalance.ARM_TRAIN_MARKS
+const ARM_TRAIN_MARKS_KNIGHT := GameBalance.ARM_TRAIN_MARKS_KNIGHT
+# Types you can arm peasants into (not peasant itself).
+const ARMABLE_UNIT_TYPES := [
+	UNIT_TYPE.MACEMEN,
+	UNIT_TYPE.PIKEMEN,
+	UNIT_TYPE.ARCHER,
+	UNIT_TYPE.SWORDSMEN,
+	UNIT_TYPE.CROSSBOWMEN,
+	UNIT_TYPE.KNIGHTS,
+]
 
-# Sellsword hire price = unit strength * count * this (tweak later).
-const SELLSWORD_PRICE_STRENGTH_MULT := 3
-const SELLSWORD_STACK_MIN := 50
-const SELLSWORD_STACK_MAX := 200
+# Merchant buy / competition knobs: GameBalance.
+const WEAPON_PRICE_STRENGTH_MULT := GameBalance.WEAPON_PRICE_STRENGTH_MULT
+const MERCHANT_COMPETITION_DISCOUNT := GameBalance.MERCHANT_COMPETITION_DISCOUNT
+
+# Sellsword hire knobs: GameBalance.
+const SELLSWORD_PRICE_STRENGTH_MULT := GameBalance.SELLSWORD_PRICE_STRENGTH_MULT
+const SELLSWORD_STACK_MIN := GameBalance.SELLSWORD_STACK_MIN
+const SELLSWORD_STACK_MAX := GameBalance.SELLSWORD_STACK_MAX
 # Hireable types (no peasants).
 const SELLSWORD_UNIT_POOL := [
 	UNIT_TYPE.MACEMEN,
@@ -113,42 +123,35 @@ const SELLSWORD_UNIT_POOL := [
 	UNIT_TYPE.KNIGHTS,
 ]
 
-# Seasonal upkeep (marks per man). Player total is ceiled.
-const UPKEEP_LEVY_PEASANT := 0.5
-const UPKEEP_LEVY_KNIGHT := 2.0
-const UPKEEP_LEVY_OTHER := 1.0
-const UPKEEP_SELLSWORD_KNIGHT := 5.0
-const UPKEEP_SELLSWORD_OTHER := 3.0
-# Transport fleets: flat marks per ship; unpaid ships are not struck (v1).
-const UPKEEP_TRANSPORT_SHIP := 20
-const TRANSPORT_SHIP_CAPACITY := 100
-const TRANSPORT_SHIP_MP := 20
-const TRANSPORT_SHIP_WOOD_COST := 300
-const TRANSPORT_SHIP_MARKS_COST := 500
-# Army embarks onto an adjacent own fleet (army spends + fleet spends).
-const TRANSPORT_EMBARK_ARMY_MP := 4
-const TRANSPORT_EMBARK_FLEET_MP := 3
-# Disembark / landing merge / landing attack from a fleet onto shore.
-const TRANSPORT_LANDING_MP := 8
+# Upkeep / ships / wage loot: GameBalance.
+const UPKEEP_LEVY_PEASANT := GameBalance.UPKEEP_LEVY_PEASANT
+const UPKEEP_LEVY_KNIGHT := GameBalance.UPKEEP_LEVY_KNIGHT
+const UPKEEP_LEVY_OTHER := GameBalance.UPKEEP_LEVY_OTHER
+const UPKEEP_SELLSWORD_KNIGHT := GameBalance.UPKEEP_SELLSWORD_KNIGHT
+const UPKEEP_SELLSWORD_OTHER := GameBalance.UPKEEP_SELLSWORD_OTHER
+const UPKEEP_TRANSPORT_SHIP := GameBalance.UPKEEP_TRANSPORT_SHIP
+const TRANSPORT_SHIP_CAPACITY := GameBalance.TRANSPORT_SHIP_CAPACITY
+const TRANSPORT_SHIP_MP := GameBalance.TRANSPORT_SHIP_MP
+const TRANSPORT_SHIP_WOOD_COST := GameBalance.TRANSPORT_SHIP_WOOD_COST
+const TRANSPORT_SHIP_MARKS_COST := GameBalance.TRANSPORT_SHIP_MARKS_COST
+const TRANSPORT_EMBARK_ARMY_MP := GameBalance.TRANSPORT_EMBARK_ARMY_MP
+const TRANSPORT_EMBARK_FLEET_MP := GameBalance.TRANSPORT_EMBARK_FLEET_MP
+const TRANSPORT_LANDING_MP := GameBalance.TRANSPORT_LANDING_MP
 # Shore defender bonus when attacked by an army landing from a fleet.
 const LANDING_DEFENDER_BONUS := 1.5
-# Missed pays: strike 1 warn, 2 sellswords leave, 3+ levy desertion.
-const UPKEEP_STRIKES_MAX := 3
-const UPKEEP_CLEAR_PAYS := 10
-# Fraction of each unpaid levy stack that deserts (ceil).
-const UPKEEP_DESERT_FRACTION := 0.10
-# Attacker wage loot: one roll per battle × next-season upkeep of wiped side.
-const WAGE_CAPTURE_MIN := 0.60
-const WAGE_CAPTURE_MAX := 0.80
+const UPKEEP_STRIKES_MAX := GameBalance.UPKEEP_STRIKES_MAX
+const UPKEEP_CLEAR_PAYS := GameBalance.UPKEEP_CLEAR_PAYS
+const UPKEEP_DESERT_FRACTION := GameBalance.UPKEEP_DESERT_FRACTION
+const WAGE_CAPTURE_MIN := GameBalance.WAGE_CAPTURE_MIN
+const WAGE_CAPTURE_MAX := GameBalance.WAGE_CAPTURE_MAX
 
-# Campaign foraging: grain per man per season outside controller de jure.
-const FOOD_GRAIN_PER_MAN_MOBILE := 1.0
-const FOOD_GRAIN_PER_MAN_GARRISON := 0.5
-# After one warning season, this fraction of each stack dies (ceil).
-const FOOD_ATTRITION_FRACTION := 0.10
+# Economy knobs live in GameBalance (global_scripts/game_balance.gd) — edit there.
+const FOOD_GRAIN_PER_MAN_MOBILE := GameBalance.FOOD_GRAIN_PER_MAN_MOBILE
+const FOOD_GRAIN_PER_MAN_GARRISON := GameBalance.FOOD_GRAIN_PER_MAN_GARRISON
+const FOOD_ATTRITION_FRACTION := GameBalance.FOOD_ATTRITION_FRACTION
 
 # --- Civilian rations (holding setting; feeds settlement pop each season) -----
-# Grain spend order from province stock: seed reserve → local armies → people.
+# Grain spend order from province stock: seed reserve → local forces → people.
 enum RATION {
 	NONE,
 	QUARTER,
@@ -158,35 +161,9 @@ enum RATION {
 	QUADRUPLE,
 }
 const RATION_DEFAULT := RATION.NORMAL
-# Grain per person per season at each ration level.
-const RATION_GRAIN_PER_PERSON := {
-	RATION.NONE: 0.0,
-	RATION.QUARTER: 0.125,
-	RATION.HALF: 0.25,
-	RATION.NORMAL: 0.5,
-	RATION.DOUBLE: 1.0,
-	RATION.QUADRUPLE: 2.0,
-}
-# Happiness delta applied to each owned settlement when that ration is effective.
-const RATION_HAPPINESS_DELTA := {
-	RATION.NONE: -15.0,
-	RATION.QUARTER: -8.0,
-	RATION.HALF: -4.0,
-	RATION.NORMAL: 4.0,
-	RATION.DOUBLE: 8.0,
-	RATION.QUADRUPLE: 12.0,
-}
-# Population change fraction (ceil abs); replaces flat settlement growth.
-const RATION_POP_DELTA := {
-	RATION.NONE: -0.15,
-	RATION.QUARTER: -0.08,
-	RATION.HALF: -0.04,
-	RATION.NORMAL: 0.04,
-	RATION.DOUBLE: 0.08,
-	RATION.QUADRUPLE: 0.12,
-}
-# First positive growth from an empty (0-pop) settlement.
-const RATION_ZERO_POP_BOOTSTRAP := 10
+const RATION_HAPPINESS_DELTA := GameBalance.RATION_HAPPINESS_DELTA
+const RATION_POP_DELTA := GameBalance.RATION_POP_DELTA
+const RATION_ZERO_POP_BOOTSTRAP := GameBalance.RATION_ZERO_POP_BOOTSTRAP
 # Descending order for "highest affordable ≤ requested" resolution.
 const RATION_LEVELS_DESC := [
 	RATION.QUADRUPLE,
@@ -206,29 +183,10 @@ enum TAX {
 	BRUTAL,
 }
 const TAX_DEFAULT := TAX.NORMAL
-const TAX_COLLECT_MP := 1
-# Marks deposited into each settlement coffer per person (ceil).
-const TAX_MARKS_PER_PERSON := {
-	TAX.NONE: 0,
-	TAX.NORMAL: 1,
-	TAX.HEAVY: 2,
-	TAX.HARSH: 3,
-	TAX.BRUTAL: 4,
-}
-const TAX_HAPPINESS_DELTA := {
-	TAX.NONE: 10.0,
-	TAX.NORMAL: 5.0,
-	TAX.HEAVY: -5.0,
-	TAX.HARSH: -10.0,
-	TAX.BRUTAL: -18.0,
-}
-const TAX_POP_DELTA := {
-	TAX.NONE: 0.05,
-	TAX.NORMAL: 0.025,
-	TAX.HEAVY: -0.025,
-	TAX.HARSH: -0.05,
-	TAX.BRUTAL: -0.10,
-}
+const TAX_COLLECT_MP := GameBalance.TAX_COLLECT_MP
+const TAX_MARKS_PER_PERSON := GameBalance.TAX_MARKS_PER_PERSON
+const TAX_HAPPINESS_DELTA := GameBalance.TAX_HAPPINESS_DELTA
+const TAX_POP_DELTA := GameBalance.TAX_POP_DELTA
 const TAX_LEVELS := [
 	TAX.NONE,
 	TAX.NORMAL,
@@ -252,13 +210,7 @@ const WEAPON_PRICE_UNIT := {
 # Note: grain "has"/"will" are per-player Dictionaries ({pid: n, "all": n}).
 const MATERIAL_KEYS := ["grain", "wood", "stone", "iron"]
 
-# Placeholder merchant prices (marks each); tweak later.
-const MATERIAL_MARK_PRICES := {
-	"grain": 2,
-	"wood": 3,
-	"stone": 4,
-	"iron": 5,
-}
+const MATERIAL_MARK_PRICES := GameBalance.MATERIAL_MARK_PRICES
 
 # --- Fields / agriculture ---------------------------------------------------
 # Winter: plan grain + assign sow labor. Seed spent when leaving winter only for
@@ -266,24 +218,22 @@ const MATERIAL_MARK_PRICES := {
 # Autumn: higher labor for harvest; yield paid when leaving autumn.
 # Horses: each pasture hosts up to HORSES_PER_FIELD; labor need is per occupied
 # pasture; foals scale with (horses/cap)×(workers/need) every season incl. winter.
-const GRAIN_SEED_PER_FIELD := 5
-const GRAIN_YIELD_PER_FIELD := 80
-## People per grain field in winter (sow) and autumn (harvest).
-const PEOPLE_PER_GRAIN_FIELD_PEAK := 20
-## People per grain field in spring and summer (tend).
-const PEOPLE_PER_GRAIN_FIELD_TEND := 10
+const GRAIN_SEED_PER_FIELD := GameBalance.GRAIN_SEED_PER_FIELD
+const GRAIN_YIELD_PER_FIELD := GameBalance.GRAIN_YIELD_PER_FIELD
+const PEOPLE_PER_GRAIN_FIELD_PEAK := GameBalance.PEOPLE_PER_GRAIN_FIELD_PEAK
+const PEOPLE_PER_GRAIN_FIELD_TEND := GameBalance.PEOPLE_PER_GRAIN_FIELD_TEND
 ## Legacy alias = tend rate (prefer people_per_grain_field(season)).
 const PEOPLE_PER_GRAIN_FIELD := PEOPLE_PER_GRAIN_FIELD_TEND
-const PEOPLE_PER_HORSE_FIELD := 10
-const HORSES_PER_FIELD := 20
-const FOAL_EFF_HIGH := 0.75
-const FOAL_EFF_MID := 0.25
-const FOAL_HIGH_MIN := 2
-const FOAL_HIGH_MAX := 5
-const FOAL_MID_MIN := 1
-const FOAL_MID_MAX := 3
+const PEOPLE_PER_HORSE_FIELD := GameBalance.PEOPLE_PER_HORSE_FIELD
+const HORSES_PER_FIELD := GameBalance.HORSES_PER_FIELD
+const FOAL_EFF_HIGH := GameBalance.FOAL_EFF_HIGH
+const FOAL_EFF_MID := GameBalance.FOAL_EFF_MID
+const FOAL_HIGH_MIN := GameBalance.FOAL_HIGH_MIN
+const FOAL_HIGH_MAX := GameBalance.FOAL_HIGH_MAX
+const FOAL_MID_MIN := GameBalance.FOAL_MID_MIN
+const FOAL_MID_MAX := GameBalance.FOAL_MID_MAX
 ## Legacy single-grain seed; prefer PROVINCE_START_* kit.
-const STARTING_GRAIN := 40
+const STARTING_GRAIN := GameBalance.STARTING_GRAIN
 
 
 ## Winter (0) + autumn (3) = peak sow/harvest labor; spring/summer = tend.
@@ -293,13 +243,13 @@ func people_per_grain_field(season: int) -> int:
 	return PEOPLE_PER_GRAIN_FIELD_TEND
 
 # Default holding kit applied once per province owner at map start.
-const PROVINCE_START_GRAIN := 1000
-const PROVINCE_START_WOOD := 200
-const PROVINCE_START_IRON := 200
-const PROVINCE_START_MARKS := 400
-const PROVINCE_START_MACES := 50
-const PROVINCE_START_PIKES := 50
-const PROVINCE_START_BOWS := 50
+const PROVINCE_START_GRAIN := GameBalance.PROVINCE_START_GRAIN
+const PROVINCE_START_WOOD := GameBalance.PROVINCE_START_WOOD
+const PROVINCE_START_IRON := GameBalance.PROVINCE_START_IRON
+const PROVINCE_START_MARKS := GameBalance.PROVINCE_START_MARKS
+const PROVINCE_START_MACES := GameBalance.PROVINCE_START_MACES
+const PROVINCE_START_PIKES := GameBalance.PROVINCE_START_PIKES
+const PROVINCE_START_BOWS := GameBalance.PROVINCE_START_BOWS
 
 # Local council AI targets (town garrison only).
 const COUNCIL_TARGET_MACEMEN := 100
@@ -307,57 +257,34 @@ const COUNCIL_TARGET_PIKEMEN := 100
 const COUNCIL_TARGET_ARCHERS := 100
 
 # Labor category keys shared by fields + economy + castle construction.
+# Order is the fixed tie-break when priorities match (and when manuals compete).
 const LABOR_CATEGORIES := ["grain", "horses", "wood", "stone", "iron", "silver", "blacksmith", "castle"]
+## 0 = manual (keep slider target); 1+ = auto-fill to category cap in that order.
+const LABOR_PRIORITY_MANUAL := 0
+const LABOR_PRIORITY_MAX := 8
 
-# --- Economy buildings ------------------------------------------------------
-# Subtype ints match basic_building.SUBTYPES:
-# 0 woodcutter, 1 iron mine, 3 silver mine, 4 stone quarry, 5 blacksmith.
-# Costs / workers arrays are [Small, Medium, Big]: build cost or worker cap at that stage;
-# upgrade Small→Medium uses Medium cost, Medium→Big uses Big cost.
-const ECONOMY_STAGE_COSTS := {
-	0: [100, 400, 800],
-	1: [500, 1300, 3000],
-	3: [800, 3000, 13000],
-	4: [500, 1500, 3500],
-	5: [250, 750, 1500],
-}
-const ECONOMY_WORKERS_BY_SUBTYPE := {
-	0: [100, 250, 500],
-	1: [100, 250, 500],
-	3: [50, 150, 300],
-	4: [50, 150, 300],
-	5: [50, 150, 300],
-}
-# Output per assigned worker per season.
-const ECONOMY_WOOD_PER_WORKER := 1
-const ECONOMY_STONE_PER_WORKER := 1
-const ECONOMY_IRON_PER_WORKER := 1
-const ECONOMY_SILVER_MARKS_PER_WORKER := 2
+# --- Economy buildings / settlement / castle / forge: GameBalance ------------
+const ECONOMY_STAGE_COSTS := GameBalance.ECONOMY_STAGE_COSTS
+const ECONOMY_WORKERS_BY_SUBTYPE := GameBalance.ECONOMY_WORKERS_BY_SUBTYPE
+const ECONOMY_WOOD_PER_WORKER := GameBalance.ECONOMY_WOOD_PER_WORKER
+const ECONOMY_STONE_PER_WORKER := GameBalance.ECONOMY_STONE_PER_WORKER
+const ECONOMY_IRON_PER_WORKER := GameBalance.ECONOMY_IRON_PER_WORKER
+const ECONOMY_SILVER_MARKS_PER_WORKER := GameBalance.ECONOMY_SILVER_MARKS_PER_WORKER
 
-# --- Settlement marks (town / village) --------------------------------------
-# Base tax from population; tier % applies only to that settlement's base.
-const SETTLEMENT_MARKS_POP_RATE := 0.10
-# Tier index: 0=Small, 1=Medium, 2=Big, 3=Very Big
-const SETTLEMENT_TIER_MARKS_BONUS := [0.0, 0.10, 0.20, 0.30]
-# Population ceilings for Small / Medium / Big (above last → Very Big).
-const TOWN_TIER_POP_MAX := [300, 600, 900]
-const VILLAGE_TIER_POP_MAX := [20, 60, 120]
-# Soft population caps (growth may overshoot; overflow applies pressure next tick).
-const TOWN_POPULATION_CAP := 2000
-const VILLAGE_POPULATION_CAP := 300
-# When over cap: at least −this fraction (ceil), or worse ration/tax delta if larger.
-const SETTLEMENT_OVERFLOW_SHRINK_FRAC := 0.10
-# Random jitter added to over-cap delta (inclusive), seeded per season.
-const TOWN_OVERFLOW_JITTER := 50
-const VILLAGE_OVERFLOW_JITTER := 10
+const SETTLEMENT_MARKS_POP_RATE := GameBalance.SETTLEMENT_MARKS_POP_RATE
+const SETTLEMENT_TIER_MARKS_BONUS := GameBalance.SETTLEMENT_TIER_MARKS_BONUS
+const TOWN_TIER_POP_MAX := GameBalance.TOWN_TIER_POP_MAX
+const VILLAGE_TIER_POP_MAX := GameBalance.VILLAGE_TIER_POP_MAX
+const TOWN_POPULATION_CAP := GameBalance.TOWN_POPULATION_CAP
+const VILLAGE_POPULATION_CAP := GameBalance.VILLAGE_POPULATION_CAP
+const SETTLEMENT_OVERFLOW_SHRINK_FRAC := GameBalance.SETTLEMENT_OVERFLOW_SHRINK_FRAC
+const TOWN_OVERFLOW_JITTER := GameBalance.TOWN_OVERFLOW_JITTER
+const VILLAGE_OVERFLOW_JITTER := GameBalance.VILLAGE_OVERFLOW_JITTER
 
-# --- Castle construction (CASTLE_TYPE 0..5) ----------------------------------
-# Materials paid upfront into the worksite; 1 labor = 1 work / season.
-const CASTLE_COST_WOOD := [500, 1000, 1000, 1000, 1500, 2000]
-const CASTLE_COST_STONE := [0, 0, 1000, 2500, 3200, 4500]
-const CASTLE_WORK := [500, 1000, 2500, 3500, 4500, 6000]
-## Holding-wide marks bonus on Σ settlement base (CASTLE_TYPE 0..5). Mid-build = 0.
-const CASTLE_HOLDING_MARKS_BONUS := [0.10, 0.20, 0.30, 0.50, 0.80, 1.00]
+const CASTLE_COST_WOOD := GameBalance.CASTLE_COST_WOOD
+const CASTLE_COST_STONE := GameBalance.CASTLE_COST_STONE
+const CASTLE_WORK := GameBalance.CASTLE_WORK
+const CASTLE_HOLDING_MARKS_BONUS := GameBalance.CASTLE_HOLDING_MARKS_BONUS
 ## Target level for dismantle-to-empty projects.
 const CASTLE_TARGET_EMPTY := -1
 
@@ -476,25 +403,10 @@ func castle_material_refund(from_level: int, to_level: int) -> Dictionary:
 		"stone": maxi(0, int(a["stone"]) - int(b["stone"])),
 	}
 
-# Blacksmith: one recipe per smith. Labor + materials per finished weapon.
-const BLACKSMITH_CRAFTABLE := ["maces", "pikes", "bows", "swords", "crossbows", "armour"]
-const BLACKSMITH_LABOR := {
-	"bows": 1,
-	"maces": 2,
-	"pikes": 2,
-	"swords": 3,
-	"crossbows": 6,
-	"armour": 10,
-}
-# Materials consumed per weapon crafted.
-const BLACKSMITH_RECIPES := {
-	"bows": {"wood": 10},
-	"pikes": {"wood": 3, "iron": 7},
-	"armour": {"iron": 28},
-	"maces": {"wood": 3, "iron": 3},
-	"swords": {"wood": 10, "iron": 3},
-	"crossbows": {"wood": 10, "iron": 15},
-}
+# Blacksmith: one recipe per smith. Labor + materials — GameBalance.
+const BLACKSMITH_CRAFTABLE := GameBalance.BLACKSMITH_CRAFTABLE
+const BLACKSMITH_LABOR := GameBalance.BLACKSMITH_LABOR
+const BLACKSMITH_RECIPES := GameBalance.BLACKSMITH_RECIPES
 
 const WOUND_RECOVER_SEASONS := 2
 const HOSTAGE_RECOVER_SEASONS := 2
@@ -764,7 +676,7 @@ func desertion_from_stack(stack: Dictionary) -> int:
 	return int(ceili(float(n) * UPKEEP_DESERT_FRACTION))
 
 
-## Grain needed to feed `men` for one season (garrison half-rate, ceil).
+## Grain needed to feed `men` for one season (garrison cheaper, ceil).
 func force_grain_need(men: int, is_garrison: bool) -> int:
 	if men <= 0:
 		return 0
@@ -963,6 +875,64 @@ func weapon_cost_for_type(type_: int) -> Dictionary:
 	return UNIT_WEAPON_COST.get(type_, {}).duplicate()
 
 
+## Marks to train one man from peasant into this armed levy type.
+func arm_training_marks_for_type(type_: int) -> int:
+	if int(type_) == UNIT_TYPE.KNIGHTS:
+		return ARM_TRAIN_MARKS_KNIGHT
+	return ARM_TRAIN_MARKS
+
+
+## Training marks for an arm composition: Array of {type, count} (armed types only).
+func arm_training_marks_for_composition(composition: Array) -> int:
+	var total := 0
+	for entry in composition:
+		var n := int(entry.get("count", 0))
+		if n <= 0:
+			continue
+		total += arm_training_marks_for_type(int(entry.get("type", UNIT_TYPE.PEASANT))) * n
+	return total
+
+
+## Fighting levy peasants owned by `owner` (includes militia peasants).
+func is_armable_peasant_stack(stack: Dictionary, owner: int) -> bool:
+	if int(stack.get("type", -1)) != UNIT_TYPE.PEASANT:
+		return false
+	if int(stack.get("owner", -1)) != owner:
+		return false
+	if int(stack.get("source", SOURCE.LEVY)) != SOURCE.LEVY:
+		return false
+	return is_fighting_stack(stack)
+
+
+func count_armable_peasants(units: Array, owner: int) -> int:
+	var total := 0
+	for s in units:
+		if is_armable_peasant_stack(s, owner):
+			total += int(s.get("count", 0))
+	return total
+
+
+## Remove up to `want` armable peasants in place. Returns how many were removed.
+func take_armable_peasants(units: Array, owner: int, want: int) -> int:
+	var remaining := maxi(0, want)
+	var taken := 0
+	for s in units:
+		if remaining <= 0:
+			break
+		if not is_armable_peasant_stack(s, owner):
+			continue
+		var take: int = mini(int(s.get("count", 0)), remaining)
+		s["count"] = int(s["count"]) - take
+		remaining -= take
+		taken += take
+	var i := units.size() - 1
+	while i >= 0:
+		if int(units[i].get("count", 0)) <= 0:
+			units.remove_at(i)
+		i -= 1
+	return taken
+
+
 ## Aggregate weapon costs for a composition: Array of {type, count}.
 func weapons_needed_for_composition(composition: Array) -> Dictionary:
 	var need := empty_weapon_stock()
@@ -1071,7 +1041,7 @@ func ration_name(level: int) -> String:
 
 
 func ration_grain_per_person(level: int) -> float:
-	return float(RATION_GRAIN_PER_PERSON.get(clamp_ration(level), 0.5))
+	return GameBalance.ration_grain_per_person(clamp_ration(level))
 
 
 func ration_happiness_delta(level: int) -> float:

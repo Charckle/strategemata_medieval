@@ -3,6 +3,7 @@ extends Area2D
 ## Attach to a building's Area2D to enable info popups.
 ## - Hovering the building for HOVER (see OBaseMap) shows a transient popup.
 ## - Left-clicking shows a pinned popup (closed via the X in its header).
+## - Double-clicking opens the province economy menu (see OBaseMap).
 ## Interactions are routed to the overworld map (OBaseMap) found by walking up
 ## the tree, so this works for any building/field regardless of base_map wiring.
 
@@ -53,5 +54,6 @@ func _on_input_event(_viewport: Node, event: InputEvent, _shape_idx: int) -> voi
 		if bm.has_method("is_mouse_over_gui") and bm.is_mouse_over_gui():
 			get_viewport().set_input_as_handled()
 			return
-		if bm.on_building_clicked(_building):
+		var mb := event as InputEventMouseButton
+		if bm.on_building_clicked(_building, mb.double_click):
 			get_viewport().set_input_as_handled()
