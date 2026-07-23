@@ -1,10 +1,11 @@
 extends PanelContainer
 
-## New Game setup: add Human/AI slots, edit human name + heraldry, pick AI doctrine.
+## New Game setup: add Human/AI slots, edit human name + heraldry, pick order colour + AI doctrine.
 ## Shield editing is a draft popup (Accept / Cancel); row has quick Random.
 
 const SHIELD_SIZE := 72
 const ROW_SHIELD_SIZE := 36
+const SWATCH_SIZE := 28
 const TYPE_HUMAN := 0
 const TYPE_AI := 1
 
@@ -64,7 +65,7 @@ func _build_ui() -> void:
 	root.add_child(title)
 
 	var hint := Label.new()
-	hint.text = "Up to %d lords. Leftover provinces become councils." % GlobalSet.MAX_SETUP_PLAYERS
+	hint.text = "Up to %d lords. Pick a unique order colour (borders / flags). Leftover provinces become councils." % GlobalSet.MAX_SETUP_PLAYERS
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(hint)
@@ -260,6 +261,22 @@ func _make_slot_row(idx: int) -> PanelContainer:
 		roll_name.pressed.connect(func(): _on_reroll_name(idx))
 		top.add_child(roll_name)
 
+	var swatch := ColorRect.new()
+	swatch.name = "slot_swatch"
+	swatch.custom_minimum_size = Vector2(SWATCH_SIZE, SWATCH_SIZE)
+	swatch.color = GlobalStuff.order_color_to_color(
+		GlobalStuff.normalize_order_color(slot.get("color", {}))
+	)
+	swatch.tooltip_text = "Order colour (borders / flags)"
+	swatch.gui_input.connect(func(ev): _on_swatch_gui_input(idx, ev))
+	top.add_child(swatch)
+
+	var colour_btn := Button.new()
+	colour_btn.text = "Colour"
+	colour_btn.tooltip_text = "Cycle order colour"
+	colour_btn.pressed.connect(func(): _on_cycle_color(idx))
+	top.add_child(colour_btn)
+
 	var shield := TextureRect.new()
 	shield.name = "slot_shield"
 	shield.custom_minimum_size = Vector2(ROW_SHIELD_SIZE, ROW_SHIELD_SIZE)
@@ -314,7 +331,8 @@ func _on_add_pressed() -> void:
 	if _slots.size() >= GlobalSet.MAX_SETUP_PLAYERS:
 		return
 	var used := _used_names()
-	var slot := GlobalSet.make_default_ai_slot()
+	var used_cols := GlobalStuff.used_order_color_keys_from_slots(_slots)
+	var slot := GlobalSet.make_default_ai_slot(used_cols)
 	while used.has(str(slot["name"])):
 		slot["name"] = GlobalSet.random_lord_name(used)
 	_slots.append(slot)
@@ -326,6 +344,32 @@ func _used_names() -> Dictionary:
 	for s in _slots:
 		used[str(s.get("name", ""))] = true
 	return used
+
+
+func _on_swatch_gui_input(idx: int, event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_on_cycle_color(idx)
+
+
+func _on_cycle_color(idx: int) -> void:
+	if idx < 0 or idx >= _slots.size():
+		return
+	var used := GlobalStuff.used_order_color_keys_from_slots(_slots, idx)
+	var cur: Dictionary = GlobalStuff.normalize_order_color(_slots[idx].get("color", {}))
+	_slots[idx]["color"] = GlobalStuff.cycle_order_color(used, cur)
+	_refresh_slot_swatch(idx)
+
+
+func _refresh_slot_swatch(idx: int) -> void:
+	if idx < 0 or idx >= _slots_box.get_child_count() or idx >= _slots.size():
+		return
+	var panel := _slots_box.get_child(idx)
+	var swatch := panel.find_child("slot_swatch", true, false)
+	if swatch == null or not (swatch is ColorRect):
+		return
+	swatch.color = GlobalStuff.order_color_to_color(
+		GlobalStuff.normalize_order_color(_slots[idx].get("color", {}))
+	)
 
 
 func _on_remove(idx: int) -> void:
@@ -359,6 +403,7 @@ func _on_type_changed(idx: int, type_idx: int) -> void:
 			"type": "human",
 			"name": str(_slots[idx].get("name", GlobalSet.random_lord_name())),
 			"heraldry": _slots[idx].get("heraldry", Heraldry.random_heraldry()),
+			"color": GlobalStuff.normalize_order_color(_slots[idx].get("color", {})),
 		}
 	else:
 		var doctrine := LordAI.DOCTRINE_OFFENSE if randf() < 0.5 else LordAI.DOCTRINE_DEFENSE
@@ -367,6 +412,7 @@ func _on_type_changed(idx: int, type_idx: int) -> void:
 			"name": str(_slots[idx].get("name", GlobalSet.random_lord_name())),
 			"heraldry": _slots[idx].get("heraldry", Heraldry.random_heraldry()),
 			"ai_doctrine": doctrine,
+			"color": GlobalStuff.normalize_order_color(_slots[idx].get("color", {})),
 		}
 	_rebuild_slot_list()
 
@@ -606,6 +652,7 @@ func _on_start_pressed() -> void:
 			"type": str(s.get("type", "human")),
 			"name": str(s.get("name", "")).strip_edges(),
 			"heraldry": Heraldry.normalize(s.get("heraldry", {})),
+			"color": GlobalStuff.normalize_order_color(s.get("color", {})),
 		}
 		if entry["name"] == "":
 			entry["name"] = GlobalSet.random_lord_name()

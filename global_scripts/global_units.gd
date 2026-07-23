@@ -113,6 +113,8 @@ const MERCHANT_COMPETITION_DISCOUNT := GameBalance.MERCHANT_COMPETITION_DISCOUNT
 const SELLSWORD_PRICE_STRENGTH_MULT := GameBalance.SELLSWORD_PRICE_STRENGTH_MULT
 const SELLSWORD_STACK_MIN := GameBalance.SELLSWORD_STACK_MIN
 const SELLSWORD_STACK_MAX := GameBalance.SELLSWORD_STACK_MAX
+const SELLSWORD_HIRE_MIN := GameBalance.SELLSWORD_HIRE_MIN
+const SELLSWORD_FULL_OFFER_DISCOUNT := GameBalance.SELLSWORD_FULL_OFFER_DISCOUNT
 # Hireable types (no peasants).
 const SELLSWORD_UNIT_POOL := [
 	UNIT_TYPE.MACEMEN,
@@ -598,6 +600,100 @@ func sellsword_offer_mark_price(offer: Array) -> int:
 			int(entry.get("count", 0))
 		)
 	return total
+
+
+## Deep-copy offer Array of { "type", "count" }.
+func sellsword_offer_copy(offer: Array) -> Array:
+	var out: Array = []
+	for entry in offer:
+		out.append({
+			"type": int(entry.get("type", UNIT_TYPE.PEASANT)),
+			"count": int(entry.get("count", 0)),
+		})
+	return out
+
+
+## Total men across an offer.
+func sellsword_offer_men(offer: Array) -> int:
+	var total := 0
+	for entry in offer:
+		total += maxi(0, int(entry.get("count", 0)))
+	return total
+
+
+## True when two offers have the same types and counts (order-sensitive).
+func sellsword_offers_equal(a: Array, b: Array) -> bool:
+	if a.size() != b.size():
+		return false
+	for i in a.size():
+		if int(a[i].get("type", -1)) != int(b[i].get("type", -1)):
+			return false
+		if int(a[i].get("count", 0)) != int(b[i].get("count", 0)):
+			return false
+	return true
+
+
+## True when remaining offer is still the untouched original stock.
+func sellsword_is_full_stock(remaining: Array, original: Array) -> bool:
+	return sellsword_offers_equal(remaining, original) and sellsword_offer_men(remaining) > 0
+
+
+## Marks charged for a hire. full_discount only when buying the untouched original offer.
+func sellsword_hire_mark_price(selection: Array, full_discount: bool) -> int:
+	var base := sellsword_offer_mark_price(selection)
+	if base <= 0:
+		return 0
+	if not full_discount:
+		return base
+	return int(ceili(float(base) * (1.0 - SELLSWORD_FULL_OFFER_DISCOUNT)))
+
+
+## Validate selection against remaining offer. Returns "" if OK, else error text.
+## selection: Array of { "type", "count" } aligned to remaining (same size/order; 0 count = skip).
+func sellsword_validate_selection(remaining: Array, selection: Array, hire_all: bool) -> String:
+	if remaining.is_empty():
+		return "Nothing to hire"
+	if selection.size() != remaining.size():
+		return "Invalid selection"
+	var sel_men := 0
+	for i in remaining.size():
+		var rem_type := int(remaining[i].get("type", UNIT_TYPE.PEASANT))
+		var rem_cnt := int(remaining[i].get("count", 0))
+		var sel_type := int(selection[i].get("type", UNIT_TYPE.PEASANT))
+		var sel_cnt := int(selection[i].get("count", 0))
+		if sel_type != rem_type:
+			return "Invalid selection"
+		if sel_cnt < 0 or sel_cnt > rem_cnt:
+			return "Invalid count"
+		sel_men += sel_cnt
+	if sel_men <= 0:
+		return "Select at least some men"
+	var rem_men := sellsword_offer_men(remaining)
+	if hire_all:
+		for i in remaining.size():
+			if int(selection[i].get("count", 0)) != int(remaining[i].get("count", 0)):
+				return "Hire-all requires the full offer"
+	else:
+		var need := mini(SELLSWORD_HIRE_MIN, rem_men)
+		if sel_men < need:
+			return "Need at least %d men" % need
+	return ""
+
+
+## Subtract hired counts from remaining offer (in place). Drops zero stacks.
+func sellsword_subtract_from_offer(remaining: Array, selection: Array) -> void:
+	var i := 0
+	while i < remaining.size():
+		var rem_cnt := int(remaining[i].get("count", 0))
+		var take := 0
+		if i < selection.size():
+			take = clampi(int(selection[i].get("count", 0)), 0, rem_cnt)
+		var left := rem_cnt - take
+		if left <= 0:
+			remaining.remove_at(i)
+		else:
+			remaining[i]["count"] = left
+			i += 1
 
 
 ## Fighting and wounded need pay; hostages / captured / join_pending do not.

@@ -103,6 +103,10 @@ const ARM_TRAIN_MARKS_KNIGHT := 3
 const SELLSWORD_PRICE_STRENGTH_MULT := 3
 const SELLSWORD_STACK_MIN := 50
 const SELLSWORD_STACK_MAX := 200
+## Minimum men in one hire action (unless fewer remain at the camp).
+const SELLSWORD_HIRE_MIN := 20
+## Discount when hiring the untouched full original offer in one go (ceil of price × (1 − this)).
+const SELLSWORD_FULL_OFFER_DISCOUNT := 0.20
 
 ## Seasonal upkeep (marks per man). Player total is ceiled.
 const UPKEEP_LEVY_PEASANT := 0.5

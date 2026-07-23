@@ -229,7 +229,8 @@ func random_heraldry(rng: RandomNumberGenerator = null) -> Dictionary:
 	}
 
 
-## Write heraldry onto a player and sync PlayerData.color (except councils stay gray).
+## Write heraldry onto a player. Map order colour is separate (see GlobalStuff.ORDER_PALETTE).
+## Councils still force gray heraldry + gray order colour.
 func apply_to_player(player, h: Dictionary) -> Dictionary:
 	if player == null:
 		return {}
@@ -240,7 +241,6 @@ func apply_to_player(player, h: Dictionary) -> Dictionary:
 		return ch
 	var n := normalize(h)
 	player.heraldry = n
-	player.color = rgb_dict_of(str(n["primary"]))
 	return n
 
 

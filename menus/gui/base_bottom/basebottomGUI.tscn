@@ -727,6 +727,37 @@ layout_mode = 2
 button_pressed = true
 text = "Enabled"
 
+[node name="order_color_sep" type="HSeparator" parent="settings_menu/margin/vbox/tabs/Gameplay"]
+layout_mode = 2
+
+[node name="order_color_title" type="Label" parent="settings_menu/margin/vbox/tabs/Gameplay"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Order colour"
+
+[node name="order_color_row" type="HBoxContainer" parent="settings_menu/margin/vbox/tabs/Gameplay"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="order_color_swatch" type="ColorRect" parent="settings_menu/margin/vbox/tabs/Gameplay/order_color_row"]
+custom_minimum_size = Vector2(36, 36)
+layout_mode = 2
+tooltip_text = "Borders and flags on the map"
+
+[node name="order_color_btns" type="VBoxContainer" parent="settings_menu/margin/vbox/tabs/Gameplay/order_color_row"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="order_color_hint" type="Label" parent="settings_menu/margin/vbox/tabs/Gameplay/order_color_row/order_color_btns"]
+layout_mode = 2
+autowrap_mode = 3
+text = "Map identity for province borders and flags. Independent of your coat of arms. Must be unique among lords."
+
+[node name="order_color_cycle_btn" type="Button" parent="settings_menu/margin/vbox/tabs/Gameplay/order_color_row/order_color_btns"]
+layout_mode = 2
+text = "Cycle colour"
+
 [node name="heraldry_sep" type="HSeparator" parent="settings_menu/margin/vbox/tabs/Gameplay"]
 layout_mode = 2
 
@@ -753,7 +784,7 @@ theme_override_constants/separation = 6
 [node name="heraldry_hint" type="Label" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns"]
 layout_mode = 2
 autowrap_mode = 3
-text = "Each half/quarter has its own base colour, ink (patterns & charges), and layout. First field base also sets your border and flag colour."
+text = "Each half/quarter has its own base colour, ink (patterns & charges), and layout. This is only your shield — borders use Order colour above."
 
 [node name="heraldry_action_row" type="HBoxContainer" parent="settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns"]
 layout_mode = 2

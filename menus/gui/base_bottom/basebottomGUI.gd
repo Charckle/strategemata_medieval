@@ -16,6 +16,8 @@ const ArmyNames := preload("res://global_scripts/army_names.gd")
 @onready var heraldry_preview := $settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_preview
 @onready var heraldry_reroll_btn := $settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns/heraldry_action_row/heraldry_reroll_btn
 @onready var heraldry_editors := $settings_menu/margin/vbox/tabs/Gameplay/heraldry_row/heraldry_btns/heraldry_editors
+@onready var order_color_swatch := $settings_menu/margin/vbox/tabs/Gameplay/order_color_row/order_color_swatch
+@onready var order_color_cycle_btn := $settings_menu/margin/vbox/tabs/Gameplay/order_color_row/order_color_btns/order_color_cycle_btn
 
 var _heraldry_opt_division: OptionButton = null
 var _heraldry_field_rows: Array = []  # [{base, ink, pattern, charge, charge_type}, ...]
@@ -192,13 +194,20 @@ var _fr_base = null
 var _fr_force_id: String = ""
 var _fr_field: Node = null
 
-# Sellswords hire panel (all-or-nothing).
+# Sellswords hire panel (partial hire; full-stock −20%).
+const SS_PANEL_SIZE := Vector2(420, 360)
 var _ss_panel: PanelContainer = null
 var _ss_info_lbl: Label = null
+var _ss_scroll: ScrollContainer = null
 var _ss_body: VBoxContainer = null
 var _ss_total_lbl: Label = null
+var _ss_hint_lbl: Label = null
+var _ss_hire_btn: Button = null
+var _ss_hire_all_btn: Button = null
 var _ss_base = null
 var _ss_band: Node = null
+var _ss_spinboxes: Array = []  # SpinBox per offer row
+var _ss_offer: Array = []
 
 var _info_popup: PopupPanel = null
 var _info_popup_label: Label = null
@@ -390,6 +399,7 @@ var _ba_building: Node = null
 var _er_panel: PanelContainer = null
 var _er_title: Label = null
 var _er_body: Label = null
+var _er_roster: VBoxContainer = null
 var _er_goto: Button = null
 var _er_base = null
 var _er_event_id: String = ""
@@ -410,6 +420,10 @@ func _ready() -> void:
 	show_weather_chk.toggled.connect(_on_show_weather_toggled)
 	if heraldry_reroll_btn != null:
 		heraldry_reroll_btn.pressed.connect(_on_heraldry_reroll_pressed)
+	if order_color_cycle_btn != null:
+		order_color_cycle_btn.pressed.connect(_on_order_color_cycle_pressed)
+	if order_color_swatch != null:
+		order_color_swatch.gui_input.connect(_on_order_color_swatch_gui_input)
 	_ensure_heraldry_editors()
 	_ensure_province_levy_widgets()
 	if caravan_tab_send_btn != null:
@@ -437,6 +451,7 @@ func _ensure_admin_tab() -> void:
 	if tabs == null:
 		return
 	if tabs.get_node_or_null("Admin") != null:
+		_ensure_victory_debug_tab()
 		return
 	var root := VBoxContainer.new()
 	root.name = "Admin"
@@ -486,6 +501,55 @@ func _ensure_admin_tab() -> void:
 	settings_menu.custom_minimum_size = Vector2(780, 800)
 	settings_menu.size = Vector2(780, 800)
 
+	_ensure_victory_debug_tab()
+
+
+var _victory_debug_report: TextEdit = null
+
+
+func _ensure_victory_debug_tab() -> void:
+	var tabs: TabContainer = settings_menu.get_node_or_null("margin/vbox/tabs")
+	if tabs == null:
+		return
+	if tabs.get_node_or_null("Victory") != null:
+		return
+
+	var root := VBoxContainer.new()
+	root.name = "Victory"
+	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_theme_constant_override("separation", 8)
+	tabs.add_child(root)
+
+	var hint := Label.new()
+	hint.text = "Why victory has not fired (local lord)."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	root.add_child(hint)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	root.add_child(row)
+
+	var refresh_btn := Button.new()
+	refresh_btn.text = "Refresh"
+	refresh_btn.pressed.connect(_refresh_victory_debug_report)
+	row.add_child(refresh_btn)
+
+	_victory_debug_report = TextEdit.new()
+	_victory_debug_report.editable = false
+	_victory_debug_report.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	_victory_debug_report.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_victory_debug_report.custom_minimum_size = Vector2(0, 320)
+	root.add_child(_victory_debug_report)
+
+
+func _refresh_victory_debug_report() -> void:
+	if _victory_debug_report == null:
+		return
+	if not is_instance_valid(parent_n) or not parent_n.has_method("get_victory_debug_report"):
+		_victory_debug_report.text = "No map / victory report available."
+		return
+	_victory_debug_report.text = str(parent_n.get_victory_debug_report())
+
 
 func _on_settings_btn_pressed() -> void:
 	settings_menu.custom_minimum_size = Vector2(780, 800)
@@ -494,7 +558,36 @@ func _on_settings_btn_pressed() -> void:
 	if settings_menu.visible:
 		_refresh_admin_province_list()
 		_refresh_admin_report()
+		_refresh_victory_debug_report()
 		_refresh_heraldry_preview()
+		_refresh_order_color_swatch()
+
+
+func _refresh_order_color_swatch() -> void:
+	if order_color_swatch == null:
+		return
+	if not is_instance_valid(parent_n):
+		return
+	var players = parent_n.get("players")
+	var my_id = parent_n.get("my_pl_id")
+	if players == null or my_id == null or not players.has(my_id):
+		return
+	order_color_swatch.color = GlobalStuff.order_color_to_color(
+		GlobalStuff.normalize_order_color(players[my_id].color)
+	)
+
+
+func _on_order_color_cycle_pressed() -> void:
+	if not is_instance_valid(parent_n):
+		return
+	if parent_n.has_method("cycle_my_order_color"):
+		parent_n.cycle_my_order_color()
+	_refresh_order_color_swatch()
+
+
+func _on_order_color_swatch_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_on_order_color_cycle_pressed()
 
 
 func _refresh_heraldry_preview() -> void:
@@ -566,8 +659,6 @@ func _rebuild_heraldry_field_editors(division: int, keep_values: Array = []) -> 
 		wrap.add_theme_constant_override("separation", 2)
 		var title := Label.new()
 		var title_txt := str(labels[i])
-		if i == 0:
-			title_txt += "  (base also sets border / flag colour)"
 		title.text = title_txt
 		title.add_theme_font_size_override("font_size", 13)
 		wrap.add_child(title)
@@ -6445,7 +6536,9 @@ func _ensure_event_report() -> void:
 	# Below hostage / building-action menus so follow-ups stay clickable.
 	_er_panel.z_index = 140
 	_er_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_er_panel.clip_contents = true
 	_er_panel.visible = false
+	_er_panel.custom_minimum_size = Vector2(560, 520)
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		margin.add_theme_constant_override(side, 14)
@@ -6460,9 +6553,22 @@ func _ensure_event_report() -> void:
 	close_btn.pressed.connect(_close_event_report)
 	header.add_child(_er_title)
 	header.add_child(close_btn)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var scroll_body := VBoxContainer.new()
+	scroll_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_body.add_theme_constant_override("separation", 12)
 	_er_body = Label.new()
 	_er_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_er_body.custom_minimum_size = Vector2(320, 0)
+	_er_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_er_body.custom_minimum_size = Vector2(512, 0)
+	scroll_body.add_child(_er_body)
+	_er_roster = VBoxContainer.new()
+	_er_roster.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_er_roster.add_theme_constant_override("separation", 14)
+	scroll_body.add_child(_er_roster)
+	scroll.add_child(scroll_body)
 	var actions := HBoxContainer.new()
 	actions.add_theme_constant_override("separation", 8)
 	_er_goto = Button.new()
@@ -6474,11 +6580,87 @@ func _ensure_event_report() -> void:
 	actions.add_child(_er_goto)
 	actions.add_child(ok_btn)
 	vbox.add_child(header)
-	vbox.add_child(_er_body)
+	vbox.add_child(scroll)
 	vbox.add_child(actions)
 	margin.add_child(vbox)
 	_er_panel.add_child(margin)
 	add_child(_er_panel)
+
+
+func _fit_event_report_panel() -> void:
+	if _er_panel == null:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	var max_w := minf(560.0, vp.x * 0.92)
+	var max_h := minf(520.0, vp.y * 0.8)
+	_er_body.custom_minimum_size = Vector2(max_w - 48.0, 0)
+	_er_panel.custom_minimum_size = Vector2(max_w, max_h)
+	_er_panel.size = Vector2(max_w, max_h)
+	_er_panel.position = (vp - _er_panel.size) * 0.5
+	_er_panel.position.x = clampf(_er_panel.position.x, 0.0, maxf(0.0, vp.x - _er_panel.size.x))
+	_er_panel.position.y = clampf(_er_panel.position.y, 0.0, maxf(0.0, vp.y - _er_panel.size.y))
+
+
+func _er_clear_roster() -> void:
+	if _er_roster == null:
+		return
+	for child in _er_roster.get_children():
+		_er_roster.remove_child(child)
+		child.queue_free()
+
+
+func _er_make_cell(text: String, expand: bool = false, bold: bool = false) -> Label:
+	var lbl := Label.new()
+	lbl.text = text
+	if expand:
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	else:
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		lbl.custom_minimum_size = Vector2(64, 0)
+	if bold:
+		lbl.add_theme_font_size_override("font_size", 15)
+	return lbl
+
+
+func _er_build_roster_tables(event: Dictionary) -> void:
+	_er_clear_roster()
+	var tables: Array = GameEvents.roster_tables(event)
+	if tables.is_empty():
+		return
+	for table in tables:
+		var side_box := VBoxContainer.new()
+		side_box.add_theme_constant_override("separation", 4)
+		var side_title := Label.new()
+		side_title.text = "%s  (%d → %d men)" % [
+			str(table.get("side", "")),
+			int(table.get("before_men", 0)),
+			int(table.get("after_men", 0)),
+		]
+		side_title.add_theme_font_size_override("font_size", 15)
+		side_box.add_child(side_title)
+		var grid := GridContainer.new()
+		grid.columns = 3
+		grid.add_theme_constant_override("h_separation", 16)
+		grid.add_theme_constant_override("v_separation", 2)
+		grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(_er_make_cell("Unit", true, true))
+		grid.add_child(_er_make_cell("Before", false, true))
+		grid.add_child(_er_make_cell("After", false, true))
+		var rows: Array = table.get("rows", [])
+		if rows.is_empty():
+			grid.add_child(_er_make_cell("(none)", true))
+			grid.add_child(_er_make_cell("0"))
+			grid.add_child(_er_make_cell("0"))
+		else:
+			for row in rows:
+				grid.add_child(_er_make_cell(str(row.get("label", "")), true))
+				grid.add_child(_er_make_cell(str(int(row.get("before", 0)))))
+				grid.add_child(_er_make_cell(str(int(row.get("after", 0)))))
+		grid.add_child(_er_make_cell("Total", true, true))
+		grid.add_child(_er_make_cell(str(int(table.get("before_men", 0))), false, true))
+		grid.add_child(_er_make_cell(str(int(table.get("after_men", 0))), false, true))
+		side_box.add_child(grid)
+		_er_roster.add_child(side_box)
 
 
 func open_event_report(base_map, event_id: String) -> void:
@@ -6497,19 +6679,17 @@ func open_event_report(base_map, event_id: String) -> void:
 	var name_cb := Callable(base_map, "player_display_name")
 	_er_title.text = GameEvents.report_title(event, reader_id)
 	_er_body.text = GameEvents.report_body(event, reader_id, name_cb)
+	_er_build_roster_tables(event)
 	_er_panel.visible = true
 	_er_panel.z_index = 200
 	move_child(_er_panel, get_child_count() - 1)
-	# Center roughly on screen.
-	var vp := get_viewport().get_visible_rect().size
-	_er_panel.reset_size()
-	var sz := _er_panel.get_combined_minimum_size()
-	_er_panel.position = Vector2((vp.x - sz.x) * 0.5, (vp.y - sz.y) * 0.35)
+	_fit_event_report_panel()
 
 
 func _close_event_report() -> void:
 	if _er_panel != null:
 		_er_panel.visible = false
+	_er_clear_roster()
 	_er_base = null
 	_er_event_id = ""
 
@@ -8507,10 +8687,20 @@ func _ensure_sellswords_hire() -> void:
 	_ss_panel.z_index = 140
 	_ss_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_ss_panel.visible = false
+	_ss_panel.custom_minimum_size = SS_PANEL_SIZE
+	_ss_panel.size = SS_PANEL_SIZE
+	# Fixed host so PanelContainer cannot stretch with content.
+	var host := Control.new()
+	host.custom_minimum_size = SS_PANEL_SIZE
+	host.size = SS_PANEL_SIZE
+	host.clip_contents = true
 	var margin := MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	for side in ["left", "right", "top", "bottom"]:
 		margin.add_theme_constant_override("margin_" + side, 12)
 	var vbox := VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_theme_constant_override("separation", 8)
 	var header := HBoxContainer.new()
 	var title := Label.new()
@@ -8525,32 +8715,50 @@ func _ensure_sellswords_hire() -> void:
 	vbox.add_child(header)
 	_ss_info_lbl = Label.new()
 	_ss_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_ss_info_lbl.custom_minimum_size = Vector2(320, 0)
+	_ss_info_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_ss_info_lbl)
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0, 120)
+	_ss_scroll = ScrollContainer.new()
+	_ss_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ss_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_ss_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_ss_body = VBoxContainer.new()
 	_ss_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_ss_body.add_theme_constant_override("separation", 4)
-	scroll.add_child(_ss_body)
-	vbox.add_child(scroll)
+	_ss_body.add_theme_constant_override("separation", 6)
+	_ss_scroll.add_child(_ss_body)
+	vbox.add_child(_ss_scroll)
 	_ss_total_lbl = Label.new()
 	_ss_total_lbl.text = "Total: 0 marks"
+	_ss_total_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_ss_total_lbl)
+	_ss_hint_lbl = Label.new()
+	_ss_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_ss_hint_lbl.add_theme_font_size_override("font_size", 12)
+	_ss_hint_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_ss_hint_lbl)
 	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 6)
 	var cancel_btn := Button.new()
 	cancel_btn.text = "Cancel"
 	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cancel_btn.pressed.connect(_close_sellswords_hire)
 	btn_row.add_child(cancel_btn)
-	var hire_btn := Button.new()
-	hire_btn.text = "Hire"
-	hire_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hire_btn.pressed.connect(_on_sellswords_hire_confirm)
-	btn_row.add_child(hire_btn)
+	_ss_hire_btn = Button.new()
+	_ss_hire_btn.text = "Hire"
+	_ss_hire_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ss_hire_btn.pressed.connect(_on_sellswords_hire_confirm)
+	btn_row.add_child(_ss_hire_btn)
 	vbox.add_child(btn_row)
+	_ss_hire_all_btn = Button.new()
+	_ss_hire_all_btn.text = "Hire all (−20%)"
+	_ss_hire_all_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Stay in layout when unavailable so panel height does not jump.
+	_ss_hire_all_btn.disabled = true
+	_ss_hire_all_btn.modulate.a = 0.35
+	_ss_hire_all_btn.pressed.connect(_on_sellswords_hire_all_confirm)
+	vbox.add_child(_ss_hire_all_btn)
 	margin.add_child(vbox)
-	_ss_panel.add_child(margin)
+	host.add_child(margin)
+	_ss_panel.add_child(host)
 	add_child(_ss_panel)
 
 
@@ -8558,6 +8766,8 @@ func open_sellswords_hire(base_map: Node, band: Node) -> void:
 	_ensure_sellswords_hire()
 	_ss_base = base_map
 	_ss_band = band
+	_ss_spinboxes.clear()
+	_ss_offer = []
 	var prov = band.get("province")
 	var pname := "Province"
 	if prov != null and prov.get("p_name") != null:
@@ -8571,22 +8781,91 @@ func open_sellswords_hire(base_map: Node, band: Node) -> void:
 	for child in _ss_body.get_children():
 		child.queue_free()
 	var offer: Array = band.get("offer") if band.get("offer") != null else []
-	var total := 0
-	for entry in offer:
+	_ss_offer = GlobalUnits.sellsword_offer_copy(offer)
+	var rem_men := GlobalUnits.sellsword_offer_men(_ss_offer)
+	var min_hire := mini(GlobalUnits.SELLSWORD_HIRE_MIN, rem_men)
+	_ss_hint_lbl.text = "Pick how many of each. Minimum %d men per hire." % min_hire
+
+	for entry in _ss_offer:
 		var ut := int(entry.get("type", GlobalUnits.UNIT_TYPE.PEASANT))
 		var cnt := int(entry.get("count", 0))
-		var cost := GlobalUnits.sellsword_stack_mark_price(ut, cnt)
-		total += cost
-		var row := Label.new()
-		row.text = "%d %s — %d marks" % [cnt, GlobalUnits.unit_name(ut), cost]
+		var unit_price := GlobalUnits.sellsword_stack_mark_price(ut, 1)
+		var row := HBoxContainer.new()
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_theme_constant_override("separation", 8)
+		var name_lbl := Label.new()
+		name_lbl.text = "%s (%d max, %d mk/man)" % [GlobalUnits.unit_name(ut), cnt, unit_price]
+		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_lbl.clip_text = true
+		name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		row.add_child(name_lbl)
+		var spin := SpinBox.new()
+		spin.min_value = 0
+		spin.max_value = cnt
+		spin.step = 1
+		spin.value = 0
+		spin.custom_minimum_size = Vector2(100, 0)
+		spin.size_flags_horizontal = Control.SIZE_SHRINK_END
+		spin.value_changed.connect(_on_sellswords_selection_changed)
+		_ss_spinboxes.append(spin)
+		row.add_child(spin)
 		_ss_body.add_child(row)
-	_ss_total_lbl.text = "Total: %d marks (all or nothing)" % total
 
+	var original: Array = band.get("original_offer") if band.get("original_offer") != null else []
+	var full_stock := GlobalUnits.sellsword_is_full_stock(_ss_offer, original)
+	if full_stock:
+		var disc := GlobalUnits.sellsword_hire_mark_price(_ss_offer, true)
+		_ss_hire_all_btn.text = "Hire all (−20%%): %d marks" % disc
+		_ss_hire_all_btn.disabled = marks < disc
+		_ss_hire_all_btn.modulate.a = 1.0 if marks >= disc else 0.55
+	else:
+		_ss_hire_all_btn.text = "Hire all (−20%)"
+		_ss_hire_all_btn.disabled = true
+		_ss_hire_all_btn.modulate.a = 0.35
+
+	_refresh_sellswords_hire_totals()
 	_ss_panel.visible = true
-	_ss_panel.reset_size()
+	_ss_panel.size = SS_PANEL_SIZE
+	_ss_panel.custom_minimum_size = SS_PANEL_SIZE
 	var vp := get_viewport().get_visible_rect().size
-	_ss_panel.size = Vector2(minf(420, vp.x * 0.9), minf(320, vp.y * 0.75))
-	_ss_panel.position = (vp - _ss_panel.size) * 0.5
+	_ss_panel.position = (vp - SS_PANEL_SIZE) * 0.5
+
+
+func _sellswords_current_selection() -> Array:
+	var selection: Array = []
+	for i in _ss_offer.size():
+		var ut := int(_ss_offer[i].get("type", GlobalUnits.UNIT_TYPE.PEASANT))
+		var cnt := 0
+		if i < _ss_spinboxes.size() and is_instance_valid(_ss_spinboxes[i]):
+			cnt = int(_ss_spinboxes[i].value)
+		selection.append({"type": ut, "count": cnt})
+	return selection
+
+
+func _on_sellswords_selection_changed(_value: float = 0.0) -> void:
+	_refresh_sellswords_hire_totals()
+
+
+func _refresh_sellswords_hire_totals() -> void:
+	var selection := _sellswords_current_selection()
+	var cost := GlobalUnits.sellsword_hire_mark_price(selection, false)
+	var men := GlobalUnits.sellsword_offer_men(selection)
+	var rem_men := GlobalUnits.sellsword_offer_men(_ss_offer)
+	var min_hire := mini(GlobalUnits.SELLSWORD_HIRE_MIN, rem_men)
+	_ss_total_lbl.text = "Selected: %d men — %d marks" % [men, cost]
+	var marks := 0
+	if _ss_base != null and _ss_base.players.has(_ss_base.my_pl_id):
+		marks = int(_ss_base.players[_ss_base.my_pl_id].game_data.get("marks", 0))
+	var err := GlobalUnits.sellsword_validate_selection(_ss_offer, selection, false)
+	var ok := err == "" and cost > 0 and marks >= cost
+	if _ss_hire_btn != null:
+		_ss_hire_btn.disabled = not ok
+		if men > 0 and men < min_hire:
+			_ss_hire_btn.tooltip_text = "Need at least %d men" % min_hire
+		elif cost > marks:
+			_ss_hire_btn.tooltip_text = "Need %d marks" % cost
+		else:
+			_ss_hire_btn.tooltip_text = ""
 
 
 func _close_sellswords_hire() -> void:
@@ -8594,18 +8873,34 @@ func _close_sellswords_hire() -> void:
 		_ss_panel.visible = false
 	_ss_base = null
 	_ss_band = null
+	_ss_spinboxes.clear()
+	_ss_offer = []
 
 
 func _on_sellswords_hire_confirm() -> void:
 	var base = _ss_base
 	var band = _ss_band
+	var selection := _sellswords_current_selection()
 	var band_id := ""
 	if band != null:
 		band_id = String(band.name)
 	_close_sellswords_hire()
 	if base == null or band_id == "":
 		return
-	base.do_hire_sellswords(band_id)
+	base.do_hire_sellswords(band_id, selection, false)
+
+
+func _on_sellswords_hire_all_confirm() -> void:
+	var base = _ss_base
+	var band = _ss_band
+	var selection := GlobalUnits.sellsword_offer_copy(_ss_offer)
+	var band_id := ""
+	if band != null:
+		band_id = String(band.name)
+	_close_sellswords_hire()
+	if base == null or band_id == "":
+		return
+	base.do_hire_sellswords(band_id, selection, true)
 
 
 # --- Transport fleets -------------------------------------------------------

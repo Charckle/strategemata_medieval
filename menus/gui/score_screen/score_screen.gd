@@ -262,10 +262,11 @@ func _on_graph_draw() -> void:
 	if _graph == null:
 		return
 	var rect := Rect2(Vector2.ZERO, _graph.size)
-	_graph.draw_rect(rect, Color(0.08, 0.06, 0.04, 1.0))
+	# Mid gray so both dark and light lord colors stay readable.
+	_graph.draw_rect(rect, Color(0.55, 0.54, 0.52, 1.0))
 	var pad := 28.0
 	var plot := Rect2(pad, pad, maxf(10.0, rect.size.x - pad * 2.0), maxf(10.0, rect.size.y - pad * 2.0))
-	_graph.draw_rect(plot, Color(0.12, 0.09, 0.06, 1.0))
+	_graph.draw_rect(plot, Color(0.62, 0.61, 0.58, 1.0))
 
 	if _show_unit_mix:
 		_draw_unit_bars(plot)
@@ -281,8 +282,9 @@ func _on_graph_draw() -> void:
 			max_v = maxf(max_v, float(players[pid_s].get(_metric, 0)))
 
 	# Axes
-	_graph.draw_line(plot.position + Vector2(0, plot.size.y), plot.position + Vector2(plot.size.x, plot.size.y), Color(0.55, 0.45, 0.3), 2.0)
-	_graph.draw_line(plot.position, plot.position + Vector2(0, plot.size.y), Color(0.55, 0.45, 0.3), 2.0)
+	var axis_col := Color(0.22, 0.2, 0.18)
+	_graph.draw_line(plot.position + Vector2(0, plot.size.y), plot.position + Vector2(plot.size.x, plot.size.y), axis_col, 2.0)
+	_graph.draw_line(plot.position, plot.position + Vector2(0, plot.size.y), axis_col, 2.0)
 
 	var years: Array = []
 	for entry in _history:
@@ -317,13 +319,14 @@ func _on_graph_draw() -> void:
 	if n >= 1:
 		var font := ThemeDB.fallback_font
 		var fs := 12
-		_graph.draw_string(font, plot.position + Vector2(0, plot.size.y + 16), str(years[0]), HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.85, 0.8, 0.7))
+		var label_col := Color(0.18, 0.16, 0.14)
+		_graph.draw_string(font, plot.position + Vector2(0, plot.size.y + 16), str(years[0]), HORIZONTAL_ALIGNMENT_LEFT, -1, fs, label_col)
 		if n > 1:
 			var last_s := str(years[n - 1])
-			_graph.draw_string(font, plot.position + Vector2(plot.size.x - 40, plot.size.y + 16), last_s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.85, 0.8, 0.7))
+			_graph.draw_string(font, plot.position + Vector2(plot.size.x - 40, plot.size.y + 16), last_s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, label_col)
 		var metric_name := str(GameScore.METRIC_LABELS.get(_metric, _metric))
-		_graph.draw_string(font, plot.position + Vector2(8, -8), metric_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.9, 0.85, 0.75))
-		_graph.draw_string(font, plot.position + Vector2(8, 14), str(int(max_v)), HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.7, 0.65, 0.55))
+		_graph.draw_string(font, plot.position + Vector2(8, -8), metric_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, label_col)
+		_graph.draw_string(font, plot.position + Vector2(8, 14), str(int(max_v)), HORIZONTAL_ALIGNMENT_LEFT, -1, fs, label_col)
 
 
 func _draw_unit_bars(plot: Rect2) -> void:
@@ -361,7 +364,7 @@ func _draw_unit_bars(plot: Rect2) -> void:
 		var col := Color(0.55, 0.4, 0.2).lerp(Color(0.85, 0.7, 0.35), float(i) / float(maxi(entries.size() - 1, 1)))
 		_graph.draw_rect(Rect2(x + 4, y, maxf(8.0, bar_w - 8), h), col)
 		var label := GlobalUnits.unit_name(int(e["type"]))
-		_graph.draw_string(font, Vector2(x + 2, plot.position.y + plot.size.y + 14), label.left(4), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.85, 0.8, 0.7))
+		_graph.draw_string(font, Vector2(x + 2, plot.position.y + plot.size.y + 14), label.left(4), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.18, 0.16, 0.14))
 		i += 1
 
 

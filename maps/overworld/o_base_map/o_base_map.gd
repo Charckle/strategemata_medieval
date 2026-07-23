@@ -140,6 +140,7 @@ func dummy_player_data():
 	players[0] = GlobalStuff.PlayerData.new(
 		0, GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL, 1, 0, "Richard", {"marks": start_marks, "people": 0}
 	)
+	players[0].color = GlobalStuff.ORDER_PALETTE[0].duplicate()
 	players[1] = GlobalStuff.PlayerData.new(
 		1, GlobalStuff.PLAYER_TYPE.AI, 1, 1, "William", {
 			"marks": start_marks,
@@ -147,7 +148,7 @@ func dummy_player_data():
 			"ai_doctrine": "defense",
 		}
 	)
-	# Colors come from heraldry.primary once Heraldry.ensure_all runs.
+	players[1].color = GlobalStuff.ORDER_PALETTE[1].duplicate()
 
 
 ## Apply New Game setup: create lords, shuffle onto provinces, leftover → councils.
@@ -185,6 +186,9 @@ func apply_game_setup() -> void:
 		var h = slot.get("heraldry", {})
 		if h is Dictionary and Heraldry.is_set(h):
 			p.heraldry = Heraldry.normalize(h)
+		var col = slot.get("color", {})
+		if col is Dictionary and not col.is_empty():
+			p.color = GlobalStuff.normalize_order_color(col)
 		players[i] = p
 		if is_human:
 			human_indices.append(i)
@@ -228,6 +232,7 @@ func _ready() -> void:
 	apply_game_setup()
 	spawn_local_councils()
 	Heraldry.ensure_all(players)
+	GlobalStuff.ensure_order_colors(players)
 	update_player_data.rpc(players)
 	assign_players_home_provinces()
 	initialize_map()
@@ -2916,6 +2921,32 @@ func apply_battle_result(
 	refresh_all_building_flags()
 	refresh_all_vip_crowns()
 
+	# Soft conquest may unlock after the last garrison / field army falls.
+	var fold_force := attacker_id if attacker_won else defender_army_id
+	var fold_provs: Array = []
+	if building != null:
+		var bprov := find_province_for_building(building)
+		if bprov != null and not fold_provs.has(bprov):
+			fold_provs.append(bprov)
+	else:
+		for fid in [attacker_id, defender_army_id]:
+			if fid == "":
+				continue
+			var fprov := get_force_province(str(fid))
+			if fprov != null and not fold_provs.has(fprov):
+				fold_provs.append(fprov)
+	var folded_any := false
+	for fprov in fold_provs:
+		if try_fold_province_to_town_owner(fprov, fold_force):
+			folded_any = true
+	if folded_any:
+		refresh_all_building_flags()
+		if province_borders != null and province_borders.has_method("rebuild"):
+			province_borders.rebuild()
+		update_players_population()
+		if is_instance_valid(gui_node):
+			update_menus()
+
 	var event_id := _register_event(battle_event)
 	var participants: Array = battle_event.get("participant_ids", [])
 	var actor_id := int(battle_event.get("actor_id", -1))
@@ -3240,6 +3271,9 @@ func apply_capture_building(
 			prov.update_population_in_resources()
 		if prov.has_method("recalculate_marks_will_by_player"):
 			prov.recalculate_marks_will_by_player()
+	# Soft conquest: town held + no foreign garrisons / previous-owner field army.
+	if prov != null and not folded_council:
+		try_fold_province_to_town_owner(prov, force_id)
 	refresh_all_building_flags()
 	if province_borders != null and province_borders.has_method("rebuild"):
 		province_borders.rebuild()
@@ -3979,6 +4013,11 @@ func _on_sellswords_clicked(band: Node2D) -> void:
 	if prov == null or not prov.has_method("has_dejure") or not prov.has_dejure(my_pl_id):
 		gui_node.show_info_popup("Only the de jure owner can hire these sellswords")
 		return
+	var offer: Array = band.get("offer") if band.get("offer") != null else []
+	if GlobalUnits.sellsword_offer_men(offer) <= 0:
+		var stay := int(band.get("seasons_left")) if band.get("seasons_left") != null else 0
+		gui_node.show_info_popup("No sellswords left to hire.\nCamp stays %d more season(s)." % stay)
+		return
 	gui_node.open_sellswords_hire(self, band)
 
 
@@ -4089,12 +4128,19 @@ func _building_display_body(b: Node2D) -> String:
 		lines.append("Province: %s" % pname_ss)
 		lines.append("Staying: %d season(s)" % int(b.get("seasons_left")))
 		var offer: Array = b.get("offer") if b.get("offer") != null else []
+		if GlobalUnits.sellsword_offer_men(offer) <= 0:
+			lines.append("No men left to hire")
+			return "\n".join(lines)
 		for entry in offer:
 			var ut := int(entry.get("type", GlobalUnits.UNIT_TYPE.PEASANT))
 			var cnt := int(entry.get("count", 0))
 			var cost := GlobalUnits.sellsword_stack_mark_price(ut, cnt)
 			lines.append("%d %s — %d marks" % [cnt, GlobalUnits.unit_name(ut), cost])
-		lines.append("Total: %d marks" % GlobalUnits.sellsword_offer_mark_price(offer))
+		var total := GlobalUnits.sellsword_offer_mark_price(offer)
+		lines.append("Total: %d marks" % total)
+		var original: Array = b.get("original_offer") if b.get("original_offer") != null else []
+		if GlobalUnits.sellsword_is_full_stock(offer, original):
+			lines.append("Full company: %d marks (−20%%)" % GlobalUnits.sellsword_hire_mark_price(offer, true))
 		return "\n".join(lines)
 
 	var full := viewer_has_full_building_intel(b)
@@ -6612,7 +6658,30 @@ func get_sellswords_by_id(band_id: String) -> Node:
 	return sellswords.get_node_or_null(band_id)
 
 
-func do_hire_sellswords(band_id: String) -> void:
+## Free tile next to camp: prefer empty road, else any free adjacent walkable.
+func _free_spawn_cell_beside_sellswords(camp_cell: Vector2i) -> Vector2i:
+	var invalid := Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+	if pathfinding == null:
+		return invalid
+	var road_pick := invalid
+	var any_pick := invalid
+	for dir in pathfinding.EDGE_DIRS:
+		var n: Vector2i = camp_cell + dir
+		if not pathfinding.walkable_cells.has(n):
+			continue
+		if pathfinding.occupancy.has(n):
+			continue
+		if any_pick.x == 0x7FFFFFFF:
+			any_pick = n
+		if pathfinding.is_road_cell(n) and road_pick.x == 0x7FFFFFFF:
+			road_pick = n
+	if road_pick.x != 0x7FFFFFFF:
+		return road_pick
+	return any_pick
+
+
+## selection: Array of { "type", "count" } aligned to remaining offer. hire_all → −20% if full stock.
+func do_hire_sellswords(band_id: String, selection: Array, hire_all: bool = false) -> void:
 	var s := get_sellswords_by_id(band_id)
 	if s == null:
 		if is_instance_valid(gui_node):
@@ -6624,8 +6693,18 @@ func do_hire_sellswords(band_id: String) -> void:
 			gui_node.show_info_popup("Only the de jure owner can hire these sellswords")
 		return
 	var offer: Array = s.get("offer") if s.get("offer") != null else []
-	var total_cost := GlobalUnits.sellsword_offer_mark_price(offer)
-	if total_cost <= 0 or offer.is_empty():
+	var original: Array = s.get("original_offer") if s.get("original_offer") != null else []
+	var err := GlobalUnits.sellsword_validate_selection(offer, selection, hire_all)
+	if err != "":
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup(err)
+		return
+	if hire_all and not GlobalUnits.sellsword_is_full_stock(offer, original):
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("Full-company discount only on untouched stock")
+		return
+	var total_cost := GlobalUnits.sellsword_hire_mark_price(selection, hire_all)
+	if total_cost <= 0:
 		if is_instance_valid(gui_node):
 			gui_node.show_info_popup("Nothing to hire")
 		return
@@ -6634,11 +6713,16 @@ func do_hire_sellswords(band_id: String) -> void:
 		if is_instance_valid(gui_node):
 			gui_node.show_info_popup("Not enough marks (need %d)" % total_cost)
 		return
-	request_hire_sellswords.rpc_id(1, band_id, my_pl_id)
+	var spawn_cell := _free_spawn_cell_beside_sellswords(s.cell)
+	if spawn_cell.x == 0x7FFFFFFF:
+		if is_instance_valid(gui_node):
+			gui_node.show_info_popup("No free tile next to the camp")
+		return
+	request_hire_sellswords.rpc_id(1, band_id, my_pl_id, selection, hire_all)
 
 
 @rpc("any_peer", "call_local", "reliable")
-func request_hire_sellswords(band_id: String, player_id: int) -> void:
+func request_hire_sellswords(band_id: String, player_id: int, selection: Array, hire_all: bool = false) -> void:
 	if not multiplayer.is_server():
 		return
 	if not players.has(player_id):
@@ -6650,34 +6734,37 @@ func request_hire_sellswords(band_id: String, player_id: int) -> void:
 	if prov == null or not prov.has_method("has_dejure") or not prov.has_dejure(player_id):
 		return
 	var offer: Array = s.get("offer") if s.get("offer") != null else []
-	if offer.is_empty():
+	var original: Array = s.get("original_offer") if s.get("original_offer") != null else []
+	if GlobalUnits.sellsword_validate_selection(offer, selection, hire_all) != "":
 		return
-	var total_cost := GlobalUnits.sellsword_offer_mark_price(offer)
+	if hire_all and not GlobalUnits.sellsword_is_full_stock(offer, original):
+		return
+	var total_cost := GlobalUnits.sellsword_hire_mark_price(selection, hire_all)
 	if total_cost <= 0:
 		return
 	var marks := int(players[player_id].game_data.get("marks", 0))
 	if marks < total_cost:
 		return
-	var cell: Vector2i = s.cell
-	if cell.x == 0x7FFFFFFF:
+	var camp_cell: Vector2i = s.cell
+	if camp_cell.x == 0x7FFFFFFF:
+		return
+	var spawn_cell := _free_spawn_cell_beside_sellswords(camp_cell)
+	if spawn_cell.x == 0x7FFFFFFF:
 		return
 	_next_runtime_force += 1
 	var new_id := "rt_%d" % _next_runtime_force
-	# Deep-copy offer for the RPC payload.
-	var offer_copy: Array = []
-	for entry in offer:
-		offer_copy.append({
-			"type": int(entry.get("type", GlobalUnits.UNIT_TYPE.PEASANT)),
-			"count": int(entry.get("count", 0)),
-		})
-	apply_hire_sellswords.rpc(band_id, player_id, offer_copy, total_cost, new_id, cell.x, cell.y)
+	var selection_copy := GlobalUnits.sellsword_offer_copy(selection)
+	apply_hire_sellswords.rpc(
+		band_id, player_id, selection_copy, hire_all, total_cost, new_id, spawn_cell.x, spawn_cell.y
+	)
 
 
 @rpc("authority", "call_local", "reliable")
 func apply_hire_sellswords(
 	band_id: String,
 	player_id: int,
-	offer: Array,
+	selection: Array,
+	hire_all: bool,
 	total_cost: int,
 	new_id: String,
 	cell_x: int,
@@ -6688,11 +6775,20 @@ func apply_hire_sellswords(
 		return
 	if not players.has(player_id):
 		return
+	var offer: Array = s.get("offer") if s.get("offer") != null else []
+	var original: Array = s.get("original_offer") if s.get("original_offer") != null else []
+	if GlobalUnits.sellsword_validate_selection(offer, selection, hire_all) != "":
+		return
+	if hire_all and not GlobalUnits.sellsword_is_full_stock(offer, original):
+		return
+	var expected := GlobalUnits.sellsword_hire_mark_price(selection, hire_all)
+	if expected != total_cost or total_cost <= 0:
+		return
 	var marks := int(players[player_id].game_data.get("marks", 0))
 	if marks < total_cost:
 		return
 	var units: Array = []
-	for entry in offer:
+	for entry in selection:
 		var cnt := int(entry.get("count", 0))
 		if cnt <= 0:
 			continue
@@ -6705,7 +6801,8 @@ func apply_hire_sellswords(
 	if units.is_empty():
 		return
 	players[player_id].game_data["marks"] = marks - total_cost
-	_remove_sellswords_band(s)
+	GlobalUnits.sellsword_subtract_from_offer(s.offer, selection)
+	# Camp stays for remaining seasons even with 0 men left.
 	# -1 = full effective MP for the hired band this turn.
 	_spawn_army_figure(new_id, units, Vector2i(cell_x, cell_y), -1, player_id)
 	if is_instance_valid(gui_node):
@@ -7965,7 +8062,7 @@ func spawn_local_councils() -> void:
 		prov.player_owner = next_id
 		prov.home_province = false
 		next_id += 1
-		# Heraldry.ensure_all (called after spawn) fills color + coat.
+		# Heraldry.ensure_all + ensure_order_colors fill coat and gray order colour.
 
 
 func mark_auto_turn_players_ended() -> void:
@@ -7978,6 +8075,173 @@ func is_local_council_player(player_id: int) -> bool:
 	if not players.has(player_id):
 		return false
 	return GlobalStuff.is_local_council(players[player_id].type)
+
+
+## Lord conquest: if town owner holds the town and the province has no foreign fighting
+## garrisons and no previous-owner field army, flip remaining holdings (VIPs → prisoners).
+## Recheck after captures / battles. Local-council town collapse stays separate.
+func try_fold_province_to_town_owner(prov: Node, capturer_force_id: String = "") -> bool:
+	if prov == null or not prov.has_method("get_town"):
+		return false
+	var town: Node = prov.get_town()
+	if town == null or town.get("player_owner") == null:
+		return false
+	var capturer := int(town.player_owner)
+	if capturer < 0:
+		return false
+	var foreign: Array = _province_buildings_not_owned_by(prov, capturer)
+	if foreign.is_empty():
+		return false
+	if _province_has_foreign_fighting_garrison(prov, capturer):
+		return false
+	var prev_owners: Array = _unique_building_owners(foreign)
+	for pid in prev_owners:
+		if _player_has_field_army_in_province(int(pid), prov):
+			return false
+	_fold_province_holdings_to(prov, capturer, foreign, capturer_force_id)
+	return true
+
+
+func _province_all_holdings(prov: Node) -> Array:
+	var out: Array = []
+	if prov == null:
+		return out
+	for container_name in ["settlements", "economy", "defense"]:
+		var container = prov.get_node_or_null(container_name)
+		if container == null:
+			continue
+		for b in container.get_children():
+			if b.get("player_owner") == null:
+				continue
+			out.append(b)
+	return out
+
+
+func _province_buildings_not_owned_by(prov: Node, owner_id: int) -> Array:
+	var out: Array = []
+	for b in _province_all_holdings(prov):
+		if int(b.player_owner) != owner_id:
+			out.append(b)
+	return out
+
+
+func _unique_building_owners(buildings: Array) -> Array:
+	var seen: Array = []
+	for b in buildings:
+		if b == null or b.get("player_owner") == null:
+			continue
+		var pid := int(b.player_owner)
+		if pid >= 0 and not seen.has(pid):
+			seen.append(pid)
+	return seen
+
+
+## Fighting men on a garrison whose unit owner or force controller is not `capturer`.
+func _province_has_foreign_fighting_garrison(prov: Node, capturer: int) -> bool:
+	for b in _province_all_holdings(prov):
+		for fid in _building_garrison_force_ids(b):
+			if not forces.has(fid):
+				continue
+			var units: Array = forces[fid].get("units", [])
+			if GlobalUnits.fighting_men(units) <= 0:
+				continue
+			var ctrl := get_force_controller(str(fid))
+			if ctrl >= 0 and ctrl != capturer:
+				return true
+			for oid in GlobalUnits.owners_in(GlobalUnits.fighting_units(units)):
+				if int(oid) != capturer:
+					return true
+	return false
+
+
+func _player_has_field_army_in_province(player_id: int, prov: Node) -> bool:
+	if player_id < 0 or prov == null:
+		return false
+	for fid in forces.keys():
+		if get_force_controller(str(fid)) != player_id:
+			continue
+		var loc: Dictionary = forces[fid].get("location", {})
+		if str(loc.get("kind", "")) != "cell":
+			continue
+		if GlobalUnits.fighting_men(forces[fid].get("units", [])) <= 0:
+			continue
+		if get_force_province(str(fid)) == prov:
+			return true
+	return false
+
+
+func _vip_prisoner_dest_force(prov: Node, capturer: int, preferred_force_id: String) -> String:
+	if preferred_force_id != "" and forces.has(preferred_force_id) \
+			and get_force_controller(preferred_force_id) == capturer:
+		return preferred_force_id
+	for fid in forces.keys():
+		if get_force_controller(str(fid)) != capturer:
+			continue
+		var loc: Dictionary = forces[fid].get("location", {})
+		if str(loc.get("kind", "")) != "cell":
+			continue
+		if get_force_province(str(fid)) == prov:
+			return str(fid)
+	var town: Node = prov.get_town() if prov.has_method("get_town") else null
+	if town != null:
+		return ensure_building_vip_force(town)
+	return ""
+
+
+func _fold_province_holdings_to(
+	prov: Node,
+	capturer: int,
+	foreign_buildings: Array,
+	capturer_force_id: String = ""
+) -> void:
+	if prov == null or capturer < 0 or foreign_buildings.is_empty():
+		return
+	var dest_vip := _vip_prisoner_dest_force(prov, capturer, capturer_force_id)
+	var prev_owners: Array = _unique_building_owners(foreign_buildings)
+	# Enemy VIPs on folded holdings become prisoners on the capturer's force.
+	if dest_vip != "":
+		var vip_ids: Array = []
+		for b in foreign_buildings:
+			for vid in get_building_vip_ids(b):
+				var v: Dictionary = get_vip(str(vid))
+				if v.is_empty() or not bool(v.get("alive", false)):
+					continue
+				if int(v.get("owner", -1)) == capturer:
+					continue
+				if not vip_ids.has(str(vid)):
+					vip_ids.append(str(vid))
+		if not vip_ids.is_empty():
+			move_vips_to_force(vip_ids, dest_vip)
+	for b in foreign_buildings:
+		var previous_owner := int(b.player_owner) if b.get("player_owner") != null else -1
+		if previous_owner == capturer:
+			continue
+		if previous_owner >= 0 and b.get("fields") != null \
+				and prov.has_method("transfer_holding_stock_for_settlement"):
+			prov.transfer_holding_stock_for_settlement(b, previous_owner, capturer)
+		b.player_owner = capturer
+		if is_settlement_building(b) and previous_owner >= 0:
+			set_settlement_militia_loyal_to(b, previous_owner)
+		if b.has_method("set_flags"):
+			b.set_flags()
+		if previous_owner >= 0:
+			_reassign_building_garrison_owner(b, previous_owner, capturer)
+	for pid in prev_owners:
+		var prev := int(pid)
+		if prev < 0 or prev == capturer:
+			continue
+		if prov.has_method("player_has_holding") and not prov.player_has_holding(prev) \
+				and prov.has_method("transfer_remaining_holding_stock"):
+			prov.transfer_remaining_holding_stock(prev, capturer)
+	prov.recompute_control()
+	try_clear_militia_loyalty_for_province(prov, capturer)
+	if prov.has_method("update_population_in_resources"):
+		prov.update_population_in_resources()
+	if prov.has_method("recalculate_marks_will_by_player"):
+		prov.recalculate_marks_will_by_player()
+	if prov.has_method("ensure_holding"):
+		prov.ensure_holding(capturer)
+	refresh_all_vip_crowns()
 
 
 ## Town fell to a lord: flip remaining council buildings, transfer stock/treasury, remove council.
@@ -8319,7 +8583,7 @@ func update_visuals_and_stats():
 	refresh_army_labels()
 
 
-## Apply a new coat of arms for the local player and refresh map/UI colors.
+## Apply a new coat of arms for the local player and refresh map/UI.
 func reroll_my_heraldry() -> Dictionary:
 	if not players.has(my_pl_id):
 		return {}
@@ -8342,16 +8606,62 @@ func set_my_heraldry(h: Dictionary) -> Dictionary:
 	return applied
 
 
+## Cycle local player's map order colour to the next free palette entry.
+func cycle_my_order_color() -> Dictionary:
+	if not players.has(my_pl_id):
+		return {}
+	var p = players[my_pl_id]
+	if GlobalStuff.is_local_council(p.type):
+		return {}
+	var used := {}
+	for pid in players.keys():
+		if int(pid) == int(my_pl_id):
+			continue
+		if GlobalStuff.is_local_council(players[pid].type):
+			continue
+		used[GlobalStuff.order_color_key(GlobalStuff.normalize_order_color(players[pid].color))] = true
+	p.color = GlobalStuff.cycle_order_color(used, p.color)
+	_refresh_after_order_color_change()
+	return p.color.duplicate()
+
+
+func set_my_order_color(c: Dictionary) -> Dictionary:
+	if not players.has(my_pl_id):
+		return {}
+	var p = players[my_pl_id]
+	if GlobalStuff.is_local_council(p.type):
+		return {}
+	var want := GlobalStuff.normalize_order_color(c)
+	var used := {}
+	for pid in players.keys():
+		if int(pid) == int(my_pl_id):
+			continue
+		if GlobalStuff.is_local_council(players[pid].type):
+			continue
+		used[GlobalStuff.order_color_key(GlobalStuff.normalize_order_color(players[pid].color))] = true
+	p.color = GlobalStuff.pick_free_order_color(used, want)
+	_refresh_after_order_color_change()
+	return p.color.duplicate()
+
+
 func _refresh_after_heraldry_change() -> void:
 	update_player_data.rpc(players)
 	refresh_all_building_flags()
-	if province_borders != null and province_borders.has_method("rebuild"):
-		province_borders.rebuild()
 	refresh_province_labels()
 	if is_instance_valid(gui_node) and gui_node.has_method("update_pname"):
 		gui_node.update_pname(players[my_pl_id].name_)
 	if is_instance_valid(gui_node) and gui_node.has_method("_refresh_heraldry_preview"):
 		gui_node._refresh_heraldry_preview()
+
+
+func _refresh_after_order_color_change() -> void:
+	update_player_data.rpc(players)
+	refresh_all_building_flags()
+	if province_borders != null and province_borders.has_method("rebuild"):
+		province_borders.rebuild()
+	refresh_province_labels()
+	if is_instance_valid(gui_node) and gui_node.has_method("_refresh_order_color_swatch"):
+		gui_node._refresh_order_color_swatch()
 
 
 func refresh_province_labels() -> void:
@@ -8517,6 +8827,158 @@ func _check_campaign_win() -> void:
 		elif names.size() == 1:
 			sub = "%s stands unopposed." % names[0]
 		_finish_campaign("victory", winners, sub)
+
+
+## Admin Settings → Victory tab: blockers for campaign win.
+func get_victory_debug_report() -> String:
+	var lines: PackedStringArray = []
+	var me := int(my_pl_id)
+	lines.append("=== Victory debug ===")
+	lines.append("Year %d · season %s · turn %d" % [
+		current_year(), GlobalStuff.get_season_name(int(season)), turn
+	])
+	lines.append("my_pl_id=%d" % me)
+	lines.append("endless_solo=%s" % str(endless_solo))
+	lines.append("game_outcome_done=%s" % str(game_outcome_done))
+	lines.append("Win checked at season start (after End Turn), not mid-season.")
+	lines.append("")
+
+	if not players.has(me):
+		lines.append("BLOCKED: local player id missing.")
+		return "\n".join(lines)
+
+	var me_p = players[me]
+	var status_names := {
+		int(GlobalStuff.PLAYER_STATUS.PLAYING): "PLAYING",
+		int(GlobalStuff.PLAYER_STATUS.DEFEATED): "DEFEATED",
+		int(GlobalStuff.PLAYER_STATUS.SURRENDERED): "SURRENDERED",
+		int(GlobalStuff.PLAYER_STATUS.DISCONNECTED): "DISCONNECTED",
+		int(GlobalStuff.PLAYER_STATUS.SPECTATOR): "SPECTATOR",
+	}
+	var type_names := {
+		int(GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL): "HUMAN",
+		int(GlobalStuff.PLAYER_TYPE.AI): "AI",
+		int(GlobalStuff.PLAYER_TYPE.LOCAL_COUNCIL): "COUNCIL",
+	}
+	lines.append("--- You ---")
+	lines.append("name=%s  type=%s  status=%s" % [
+		str(me_p.name_),
+		type_names.get(int(me_p.type), str(me_p.type)),
+		status_names.get(int(me_p.status), str(me_p.status)),
+	])
+	lines.append("dejure=%d  men=%d  landless_streak=%d/%d" % [
+		GameScore.dejure_count(self, me),
+		GameScore.men_count(self, me),
+		int(landless_seasons.get(me, 0)),
+		GameScore.LANDLESS_SEASONS_TO_LOSE,
+	])
+	lines.append("")
+
+	var blockers: PackedStringArray = []
+	if game_outcome_done:
+		blockers.append("Outcome already finished (score should have shown).")
+	if endless_solo:
+		blockers.append("endless_solo=true — win checks are disabled (Continue playing).")
+	if not GameScore.is_campaign_lord(me_p):
+		blockers.append("You are not a campaign lord (councils cannot win).")
+	elif int(me_p.status) != int(GlobalStuff.PLAYER_STATUS.PLAYING):
+		blockers.append("Your status is not PLAYING.")
+
+	var rivals := GameScore.rival_lords(self, me)
+	if rivals.is_empty() and blockers.is_empty() and GameScore.is_playing_lord(me_p):
+		lines.append("WIN CONDITION MET for you right now.")
+		lines.append("If no score screen: End Turn so season-start evaluate can fire.")
+		lines.append("(Or outcome already done / UI failed.)")
+	elif not rivals.is_empty():
+		blockers.append("%d non-allied PLAYING lord(s) still alive:" % rivals.size())
+
+	lines.append("--- Blockers ---")
+	if blockers.is_empty():
+		lines.append("(none listed)")
+	else:
+		for b in blockers:
+			lines.append("• %s" % b)
+	lines.append("")
+
+	lines.append("--- Rival lords (block win) ---")
+	if rivals.is_empty():
+		lines.append("(none)")
+	else:
+		for rid in rivals:
+			if not players.has(rid):
+				continue
+			var rp = players[rid]
+			var dej := GameScore.dejure_count(self, rid)
+			var men := GameScore.men_count(self, rid)
+			var streak := int(landless_seasons.get(rid, 0))
+			var wipe := GameScore.is_wipeout(self, rid)
+			var allied := are_allied(me, rid)
+			lines.append(
+				"id=%d  %s  [%s]  status=%s" % [
+					rid,
+					str(rp.name_),
+					type_names.get(int(rp.type), str(rp.type)),
+					status_names.get(int(rp.status), str(rp.status)),
+				]
+			)
+			lines.append(
+				"  dejure=%d  men=%d  landless=%d/%d  wipeout_now=%s  allied_with_you=%s"
+				% [dej, men, streak, GameScore.LANDLESS_SEASONS_TO_LOSE, str(wipe), str(allied)]
+			)
+			if dej > 0:
+				lines.append("  → still holds provinces (not eliminated).")
+			elif men > 0:
+				lines.append("  → landless but has men; needs wipeout (0 men) or %d landless seasons." % GameScore.LANDLESS_SEASONS_TO_LOSE)
+			else:
+				lines.append("  → wipeout ready; should defeat on next season-start check.")
+	lines.append("")
+
+	lines.append("--- All campaign lords ---")
+	var pids: Array = players.keys()
+	pids.sort()
+	for pid in pids:
+		var p = players[pid]
+		if not GameScore.is_campaign_lord(p):
+			continue
+		var id := int(pid)
+		lines.append(
+			"id=%d  %s  [%s]  %s  dejure=%d  men=%d  landless=%d"
+			% [
+				id,
+				str(p.name_),
+				type_names.get(int(p.type), str(p.type)),
+				status_names.get(int(p.status), str(p.status)),
+				GameScore.dejure_count(self, id),
+				GameScore.men_count(self, id),
+				int(landless_seasons.get(id, 0)),
+			]
+		)
+
+	lines.append("")
+	lines.append("--- Councils still in players dict ---")
+	var council_n := 0
+	for pid in pids:
+		var p = players[pid]
+		if not GlobalStuff.is_local_council(p.type):
+			continue
+		council_n += 1
+		lines.append(
+			"id=%d  %s  dejure=%d  men=%d  (ignored for win)"
+			% [
+				int(pid),
+				str(p.name_),
+				GameScore.dejure_count(self, int(pid)),
+				GameScore.men_count(self, int(pid)),
+			]
+		)
+	if council_n == 0:
+		lines.append("(none)")
+
+	lines.append("")
+	var winners := GameScore.current_winners(self)
+	lines.append("current_winners=%s" % str(winners))
+	lines.append("has_won(you)=%s" % str(GameScore.has_won(self, me)))
+	return "\n".join(lines)
 
 
 func _has_playing_local_human() -> bool:

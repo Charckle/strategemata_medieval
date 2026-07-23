@@ -1,6 +1,6 @@
 extends Node2D
 
-## Hireable sellsword camp: occupies one walkable tile; de jure owner can hire the offer.
+## Hireable sellsword camp: occupies one walkable tile; de jure owner can hire stacks.
 
 var type_ = GlobalStuff.BUILDING_TYPE.SELLSWORDS
 
@@ -9,8 +9,10 @@ var province: Node = null
 var cell: Vector2i = Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
 ## Seasons remaining before the band leaves (rolled 1–3 on arrival).
 var seasons_left: int = 1
-## Array of { "type": UNIT_TYPE, "count": int } — the all-or-nothing hire offer.
+## Remaining hireable stacks: Array of { "type": UNIT_TYPE, "count": int }.
 var offer: Array = []
+## Untouched original stock (for full-offer discount eligibility).
+var original_offer: Array = []
 
 const CELL_CENTER_OFFSET := Vector2(32, 16)
 
@@ -28,10 +30,10 @@ func shows_ownership_triangle() -> bool:
 	return false
 
 
-## Yellow+green always; +orange for 2 stacks; +blue for 3 stacks.
+## Yellow+green always; +orange for 2 stacks; +blue for 3 stacks (by original size).
 func _banner_colors_for_offer() -> Array:
 	var colors: Array = [BANNER_YELLOW, BANNER_GREEN]
-	var n := offer.size()
+	var n := original_offer.size() if not original_offer.is_empty() else offer.size()
 	if n >= 2:
 		colors.append(BANNER_ORANGE)
 	if n >= 3:
@@ -62,8 +64,17 @@ func roll_stay(rng: RandomNumberGenerator) -> void:
 
 func roll_offer(rng: RandomNumberGenerator) -> void:
 	offer = GlobalUnits.roll_sellsword_offer(rng)
+	original_offer = GlobalUnits.sellsword_offer_copy(offer)
 	_setup_decorative_flags()
+
+
+func is_full_stock() -> bool:
+	return GlobalUnits.sellsword_is_full_stock(offer, original_offer)
 
 
 func offer_total_cost() -> int:
 	return GlobalUnits.sellsword_offer_mark_price(offer)
+
+
+func full_hire_discount_cost() -> int:
+	return GlobalUnits.sellsword_hire_mark_price(offer, true)

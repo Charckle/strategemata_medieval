@@ -11,7 +11,7 @@ var return_to_new_game := false
 ## Pending New Game config consumed by the map on load. Cleared after apply.
 ## Shape: { "map_path": String, "slots": Array[Dictionary] }
 ## Slot: { "type": "human"|"ai", "name": String, "heraldry": Dictionary,
-##         "ai_doctrine": "offense"|"defense" (AI only) }
+##         "color": {red,green,blue}, "ai_doctrine": "offense"|"defense" (AI only) }
 var pending_game_setup: Dictionary = {}
 
 const TEST_MAP_01 := "res://maps/overworld/test_maps/test_map_01/test_map_01.tscn"
@@ -31,21 +31,23 @@ func has_pending_game_setup() -> bool:
 		and not (pending_game_setup["slots"] as Array).is_empty()
 
 
-func make_default_human_slot() -> Dictionary:
+func make_default_human_slot(used_colors: Dictionary = {}) -> Dictionary:
 	return {
 		"type": "human",
 		"name": random_lord_name(),
 		"heraldry": Heraldry.random_heraldry(),
+		"color": GlobalStuff.pick_free_order_color(used_colors),
 	}
 
 
-func make_default_ai_slot() -> Dictionary:
+func make_default_ai_slot(used_colors: Dictionary = {}) -> Dictionary:
 	var doctrine := LordAI.DOCTRINE_OFFENSE if randf() < 0.5 else LordAI.DOCTRINE_DEFENSE
 	return {
 		"type": "ai",
 		"name": random_lord_name(),
 		"heraldry": Heraldry.random_heraldry(),
 		"ai_doctrine": doctrine,
+		"color": GlobalStuff.pick_free_order_color(used_colors),
 	}
 
 

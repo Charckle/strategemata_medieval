@@ -215,28 +215,78 @@ static func _battle_body(event: Dictionary, reader_id: int, player_name_cb: Call
 	if def_names != "":
 		lines.append("Defenders: %s" % def_names)
 
-	_append_roster_section(lines, event)
 	return lines
 
 
-static func _append_roster_section(lines: PackedStringArray, event: Dictionary) -> void:
+## Structured before/after roster tables for the event report UI.
+## Returns Array of { "side", "before_men", "after_men", "rows": [{ "label", "before", "after" }] }.
+static func roster_tables(event: Dictionary) -> Array:
 	if not event.has("attacker_units_before") and not event.has("defender_units_before"):
-		return
-	lines.append("")
-	lines.append("Attacker before (%d men):" % GlobalUnits.total_men(event.get("attacker_units_before", [])))
-	_append_roster_lines(lines, event.get("attacker_units_before", []))
-	lines.append("Attacker after (%d men):" % GlobalUnits.total_men(event.get("attacker_units_after", [])))
-	_append_roster_lines(lines, event.get("attacker_units_after", []))
-	lines.append("Defender before (%d men):" % GlobalUnits.total_men(event.get("defender_units_before", [])))
-	_append_roster_lines(lines, event.get("defender_units_before", []))
-	lines.append("Defender after (%d men):" % GlobalUnits.total_men(event.get("defender_units_after", [])))
-	_append_roster_lines(lines, event.get("defender_units_after", []))
+		return []
+	var out: Array = []
+	out.append(_roster_table_data(
+		"Attacker",
+		event.get("attacker_units_before", []),
+		event.get("attacker_units_after", [])
+	))
+	out.append(_roster_table_data(
+		"Defender",
+		event.get("defender_units_before", []),
+		event.get("defender_units_after", [])
+	))
+	return out
 
 
-static func _append_roster_lines(lines: PackedStringArray, units: Array) -> void:
-	var desc := GlobalUnits.describe_units(units)
-	for line in desc.split("\n"):
-		lines.append("  %s" % line)
+static func _roster_table_data(side: String, before: Array, after: Array) -> Dictionary:
+	var before_counts := _roster_counts(before)
+	var after_counts := _roster_counts(after)
+	var keys: Array = []
+	for k in before_counts.keys():
+		if not keys.has(k):
+			keys.append(k)
+	for k in after_counts.keys():
+		if not keys.has(k):
+			keys.append(k)
+	keys.sort()
+	var rows: Array = []
+	for k in keys:
+		var label := str(k)
+		var sep := label.find("|")
+		if sep >= 0:
+			label = label.substr(sep + 1)
+		rows.append({
+			"label": label,
+			"before": int(before_counts.get(k, 0)),
+			"after": int(after_counts.get(k, 0)),
+		})
+	return {
+		"side": side,
+		"before_men": GlobalUnits.total_men(before),
+		"after_men": GlobalUnits.total_men(after),
+		"rows": rows,
+	}
+
+
+## Sortable key → men. Prefix keeps unit types ordered; label follows after "|".
+static func _roster_counts(units: Array) -> Dictionary:
+	var counts: Dictionary = {}
+	for s in units:
+		var n := int(s.get("count", 0))
+		if n <= 0:
+			continue
+		var ut := int(s.get("type", GlobalUnits.UNIT_TYPE.PEASANT))
+		var src := int(s.get("source", GlobalUnits.SOURCE.LEVY))
+		var st := GlobalUnits.stack_status(s)
+		var label := "%s (%s)" % [GlobalUnits.unit_name(ut), GlobalUnits.source_name(src)]
+		if st != GlobalUnits.STATUS.FIGHTING:
+			label += " [%s]" % GlobalUnits.status_name(st)
+		if bool(s.get("join_pending", false)):
+			label += " (join)"
+		if GlobalUnits.is_militia_stack(s):
+			label += " (militia)"
+		var key := "%02d|%s" % [ut, label]
+		counts[key] = int(counts.get(key, 0)) + n
+	return counts
 
 
 static func _hostage_fate_line(event: Dictionary, hostages: int, attacker_view: bool) -> String:
