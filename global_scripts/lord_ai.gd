@@ -4,21 +4,19 @@ class_name LordAI
 ## Seasonal AI-lord brain (host, season start). Councils stay on CouncilAI.
 ##
 ## Doctrine (`players[pid].game_data["ai_doctrine"]`):
-##   "defense" (default) — Quad rations + stable tax (~100 happiness), economy,
-##     castle ladder → Concentric one step at a time (mats produce / merchant-buy),
-##     fill castle+town first (50/25/25); villages/economy only after Concentric (lvl 5).
-##     No field armies.
-##   "offense" — Pass 1 turtle + Pass 2a world war (council towns). See offense section.
-##
-## Offense Pass 1 — per province (when doctrine == offense):
-##   food → forge kit → threat levy → castle (wooden / motte by holding count).
-## Offense Pass 2a — world war (council towns); drip-feed grain/sortie; etc.
+##   "defense" (default) — Quad rations + stable tax, Concentric castle, garrisons.
+##     Villages/economy fill only after Concentric. Always runs on every holding.
+##   Knight conquest (automatic) — when every holding is fully fortified, raise/reuse a
+##     knight field army (1.3× weakest adjacent council town), grain trip+4, capture,
+##     leave knights in the field, fortify the new province (caravan arms), repeat.
+##   "offense" — legacy Pass 1/2a (dormant unless doctrine forced); prefer knight conquest.
 
 const THREAT_STRAIGHT_FILTER := 20
 const WAR_STRENGTH_MARGIN := 1.3
 const WAR_RETARGET_WAIT_SEASONS := 2
 const WAR_DRIP_MEN_CAP := 80
 const AI_WAR_KEY := "ai_war"
+const AI_KNIGHT_WAR_KEY := "ai_knight_war"
 const AI_DOCTRINE_KEY := "ai_doctrine"
 const DOCTRINE_DEFENSE := "defense"
 const DOCTRINE_OFFENSE := "offense"
@@ -32,6 +30,9 @@ const DEFENSE_DRIP_OTHER := 25
 const DEFENSE_HAPPY_RECOVER_BELOW := 95.0
 ## Iron stock floor before buying from merchant for smithing.
 const DEFENSE_IRON_BUY_FLOOR := 3
+## Knight conquest: strength vs town defense; max knights levied per season.
+const KNIGHT_STRENGTH_MARGIN := 1.3
+const KNIGHT_LEVY_DRIP := 40
 const AI_DEBUG_BUYS_KEY := "ai_debug_buys"
 
 
@@ -39,21 +40,24 @@ static func tick_all(base_map: Node) -> void:
 	if base_map == null or base_map.get("players") == null:
 		return
 	var players: Dictionary = base_map.players
-	for pid in players.keys():
+	# Snapshot — conquering a council erases that player mid-tick.
+	var pids: Array = players.keys()
+	for pid in pids:
+		if not players.has(pid):
+			continue
 		var p = players[pid]
+		if p == null:
+			continue
 		if not GlobalStuff.is_ai_lord(p.type):
+			continue
+		if int(p.status) != int(GlobalStuff.PLAYER_STATUS.PLAYING):
 			continue
 		_ensure_doctrine(base_map, int(pid))
 		var holdings := _provinces_for_lord(base_map, int(pid))
-		var holding_n := holdings.size()
-		var doctrine := _doctrine(base_map, int(pid))
+		# Defense policy on every dejure holding; knight conquest when ready.
 		for prov in holdings:
-			if doctrine == DOCTRINE_DEFENSE:
-				tick_province_defense(base_map, prov, int(pid))
-			else:
-				tick_province_offense(base_map, prov, int(pid), holding_n)
-		if doctrine == DOCTRINE_OFFENSE:
-			tick_world(base_map, int(pid), holdings)
+			tick_province_defense(base_map, prov, int(pid))
+		tick_knight_conquest(base_map, int(pid), holdings)
 
 
 static func _ensure_doctrine(base_map: Node, pid: int) -> void:
@@ -119,15 +123,33 @@ static func tick_province_defense(base_map: Node, prov: Node, pid: int) -> void:
 	# Grain buy may unlock Quadruple — re-pair tax.
 	_set_defense_rations_and_tax(base_map, prov, pid)
 
-	# 5) No field armies — park strays into buildings.
-	_absorb_field_into_garrison(base_map, pid, prov, "")
+	# 5) Troop logistics — always absorb field stacks before any levy/upgrade.
+	var keep_fid := _knight_force_id(base_map, pid)
+	var starting_upgrade := _defense_can_start_castle_upgrade(
+		base_map, prov, pid, castle, next_castle
+	)
 
-	# 6) Fill: castle to capacity first, then drip town/villages/economy.
-	_defense_fill_all_garrisons(base_map, prov, pid)
+	_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
+	_defense_redistribute_into_castle(base_map, prov, pid)
+	_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
 
-	# 7) Castle ladder one step toward Concentric when mats allow.
-	if next_castle >= 0:
+	if starting_upgrade:
+		# Free town/village room, start project — do NOT levy into the castle this season
+		# (it would just get expelled again).
+		_defense_evacuate_castle_for_upgrade(base_map, prov, pid, castle)
 		_try_advance_castle(base_map, prov, pid, castle, next_castle)
+		# Expel remnant (if any) → park again → disband whatever still can't fit.
+		_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
+		_defense_disband_unparked_field(base_map, pid, prov, keep_fid)
+	else:
+		_defense_fill_all_garrisons(base_map, prov, pid, false)
+		# Mid-build: keep parking strays into town/villages.
+		if castle != null and castle.has_method("is_under_construction") \
+				and bool(castle.is_under_construction()):
+			_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
+		_defense_disband_unparked_field(base_map, pid, prov, keep_fid)
+
+	_set_defense_rations_and_tax(base_map, prov, pid)
 
 
 ## Next CASTLE_TYPE to build (standing + 1), or -1 if at max / no plot.
@@ -281,12 +303,176 @@ static func _set_craft_for_defense(
 			b.craft_weapon = best_key
 
 
-static func _defense_fill_all_garrisons(base_map: Node, prov: Node, pid: int) -> void:
+static func _defense_fill_all_garrisons(
+	base_map: Node, prov: Node, pid: int, castle_only: bool = false
+) -> void:
+	# Never levy while unparked field troops could still fill holes.
+	var keep_fid := _knight_force_id(base_map, pid)
+	_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
+	if _defense_has_stray_field(base_map, pid, prov, keep_fid):
+		# Room is full everywhere we can park — don't add more mouths.
+		return
+	if _defense_grain_headroom_men(base_map, prov, pid) <= 0:
+		return
 	for slot in _defense_active_slots_for_pid(prov, pid):
+		if castle_only and str(slot.get("prio", "")) != "castle":
+			continue
 		var drip := -1
 		if str(slot.get("prio", "other")) != "castle":
 			drip = DEFENSE_DRIP_OTHER
 		_defense_fill_spot(base_map, prov, pid, slot["b"], int(slot["spot"]), drip)
+		# After each slot, pull any new strays (shouldn't create any) and stop if blocked.
+		_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
+
+
+## True when mats are ready and we would start a new castle project this season.
+static func _defense_can_start_castle_upgrade(
+	base_map: Node, prov: Node, pid: int, castle: Node, target_level: int
+) -> bool:
+	if castle == null or target_level < 0:
+		return false
+	if castle.has_method("is_under_construction") and castle.is_under_construction():
+		return false
+	var standing := int(castle.standing_level()) if castle.has_method("standing_level") else GlobalUnits.CASTLE_TARGET_EMPTY
+	if standing >= target_level:
+		return false
+	if not castle.has_method("preview_retarget"):
+		return false
+	var preview: Dictionary = castle.preview_retarget(target_level)
+	if preview.is_empty():
+		return false
+	var pay: Dictionary = preview.get("pay", {})
+	for key in ["wood", "stone"]:
+		var need := int(pay.get(key, 0))
+		if need > 0 and prov.get_player_material(pid, key) < need:
+			return false
+	return base_map != null and base_map.has_method("apply_retarget_castle")
+
+
+## Extra garrison men we can raise while still affording Quad for civilians.
+static func _defense_grain_headroom_men(base_map: Node, prov: Node, pid: int) -> int:
+	if prov == null or not prov.has_method("preview_holding_rations"):
+		return 999999
+	var preview: Dictionary = prov.preview_holding_rations(pid)
+	var pop := int(preview.get("population", 0))
+	var stock := int(preview.get("stock", 0))
+	var seed_r := int(preview.get("seed_reserve", 0))
+	var army_need := int(preview.get("army_need", 0))
+	var quad_need := GlobalUnits.ration_grain_need(pop, GlobalUnits.RATION.QUADRUPLE)
+	var max_army_grain := maxi(0, stock - seed_r - quad_need)
+	var extra_grain := maxi(0, max_army_grain - army_need)
+	var per := float(GlobalUnits.FOOD_GRAIN_PER_MAN_GARRISON)
+	if per <= 0.0:
+		return 999999
+	return int(floor(float(extra_grain) / per))
+
+
+static func _defense_has_stray_field(
+	base_map: Node, pid: int, prov: Node, keep_fid: String
+) -> bool:
+	if base_map.get("armies") == null:
+		return false
+	for fig in base_map.armies.get_children():
+		var fid := String(fig.name)
+		if fid == keep_fid or not base_map.forces.has(fid):
+			continue
+		var loc: Dictionary = base_map.forces[fid].get("location", {})
+		if str(loc.get("kind", "")) != "cell":
+			continue
+		if int(base_map.get_force_controller(fid)) != pid:
+			continue
+		if base_map.has_method("province_under_force") and base_map.province_under_force(fid) != prov:
+			continue
+		if GlobalUnits.total_men(base_map.forces[fid].get("units", [])) > 0:
+			return true
+	return false
+
+
+## Move town/village troops back into castle after an upgrade finishes.
+static func _defense_redistribute_into_castle(base_map: Node, prov: Node, pid: int) -> void:
+	if base_map == null or prov == null:
+		return
+	var castle = prov.get_castle_plot() if prov.has_method("get_castle_plot") else null
+	if castle == null or not castle.has_method("is_operational") or not castle.is_operational():
+		return
+	if not base_map.has_method("apply_transfer_units"):
+		return
+	var sources: Array = []
+	var town = prov.get_town() if prov.has_method("get_town") else null
+	if town != null:
+		sources.append({"b": town, "spot": GlobalUnits.SPOT.FLAT})
+	if prov.get("settlements") != null:
+		for s in prov.settlements.get_children():
+			if s == town:
+				continue
+			if int(s.get("type_")) == int(GlobalStuff.BUILDING_TYPE.VILLAGE):
+				sources.append({"b": s, "spot": GlobalUnits.SPOT.FLAT})
+	for spot in [GlobalUnits.SPOT.INSIDE, GlobalUnits.SPOT.OUTSIDE]:
+		var room := _garrison_room(base_map, castle, spot)
+		if room <= 0:
+			continue
+		var dest_gid := _ensure_spot_garrison(base_map, castle, spot)
+		if dest_gid == "":
+			continue
+		for src in sources:
+			room = _garrison_room(base_map, castle, spot)
+			if room <= 0:
+				break
+			var src_gid := _ensure_spot_garrison(base_map, src["b"], int(src["spot"]))
+			if src_gid == "" or not base_map.forces.has(src_gid):
+				continue
+			var src_men := GlobalUnits.total_men(base_map.forces[src_gid].get("units", []))
+			if src_men <= 0:
+				continue
+			var take_n := mini(room, src_men)
+			if src_men - take_n > 0 and src_men - take_n < GlobalUnits.MIN_SPLIT_MEN:
+				if room >= src_men:
+					take_n = src_men
+				else:
+					take_n = maxi(0, src_men - GlobalUnits.MIN_SPLIT_MEN)
+			if take_n <= 0:
+				continue
+			var out_units := _extract_any_stacks(
+				base_map.forces[src_gid].get("units", []), pid, take_n
+			)
+			if out_units.is_empty():
+				continue
+			base_map.apply_transfer_units(src_gid, dest_gid, out_units, {})
+
+
+## Disband leftover non-knight field stacks that could not be parked into any garrison.
+static func _defense_disband_unparked_field(
+	base_map: Node, pid: int, prov: Node, keep_fid: String
+) -> void:
+	if base_map.get("armies") == null or not base_map.has_method("request_disband_force"):
+		return
+	# One more absorb pass in case room opened.
+	_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
+	var to_cut: Array = []
+	for fig in base_map.armies.get_children():
+		var fid := String(fig.name)
+		if fid == keep_fid or not base_map.forces.has(fid):
+			continue
+		var loc: Dictionary = base_map.forces[fid].get("location", {})
+		if str(loc.get("kind", "")) != "cell":
+			continue
+		if int(base_map.get_force_controller(fid)) != pid:
+			continue
+		if base_map.has_method("province_under_force") and base_map.province_under_force(fid) != prov:
+			continue
+		if GlobalUnits.total_men(base_map.forces[fid].get("units", [])) <= 0:
+			continue
+		to_cut.append(fid)
+	for fid in to_cut:
+		if base_map.forces.has(fid):
+			base_map.request_disband_force(fid)
+
+
+## Legacy name — grain-crisis cull now always disbands unparked field.
+static func _defense_cull_surplus_field(
+	base_map: Node, pid: int, prov: Node, keep_fid: String
+) -> void:
+	_defense_disband_unparked_field(base_map, pid, prov, keep_fid)
 
 
 static func _defense_fill_spot(
@@ -348,20 +534,22 @@ static func _defense_fill_spot(
 	var men := GlobalUnits.composition_total_men(want_comp)
 	if men <= 0:
 		return
-	# Keep current ration (prefer Quad) affordable after this levy.
-	var target_ration := GlobalUnits.RATION_DEFAULT
-	if prov.has_method("get_holding_ration"):
-		target_ration = int(prov.get_holding_ration(pid))
-	target_ration = maxi(target_ration, GlobalUnits.RATION_DEFAULT)
-	if prov.has_method("preview_holding_rations"):
-		var preview: Dictionary = prov.preview_holding_rations(pid)
-		var stock := int(preview.get("stock", 0))
-		var seed_r := int(preview.get("seed_reserve", 0))
-		var army_need := int(preview.get("army_need", 0)) + GlobalUnits.force_grain_need(men, true)
-		var civ_pop := maxi(0, pop - men)
-		var people_budget := maxi(0, stock - seed_r - army_need)
-		if GlobalUnits.affordable_ration(civ_pop, target_ration, people_budget) < target_ration:
+	# Never levy past what still leaves Quad affordable for civilians.
+	var headroom := _defense_grain_headroom_men(base_map, prov, pid)
+	if headroom <= 0:
+		return
+	if men > headroom:
+		want_comp = CouncilAI._trim_composition(want_comp, headroom)
+		men = GlobalUnits.composition_total_men(want_comp)
+		if men <= 0:
 			return
+		need = GlobalUnits.weapons_needed_for_composition(want_comp)
+		if not prov.can_afford_weapons_for(pid, need):
+			want_comp = CouncilAI._trim_to_weapons(prov, pid, want_comp)
+			men = GlobalUnits.composition_total_men(want_comp)
+			if men <= 0:
+				return
+			need = GlobalUnits.weapons_needed_for_composition(want_comp)
 
 	prov.subtract_weapons_for(pid, need)
 	if not _add_units_to_garrison(base_map, prov, pid, building, spot, want_comp):
@@ -369,7 +557,498 @@ static func _defense_fill_spot(
 
 
 # =============================================================================
-# Offense doctrine — Pass 1 province tick
+# Knight conquest (automatic after all holdings fully fortified)
+# =============================================================================
+
+
+static func _knight_war_state(base_map: Node, pid: int) -> Dictionary:
+	if not base_map.players.has(pid):
+		return {}
+	var gd: Dictionary = base_map.players[pid].game_data
+	if not gd.has(AI_KNIGHT_WAR_KEY) or typeof(gd[AI_KNIGHT_WAR_KEY]) != TYPE_DICTIONARY:
+		gd[AI_KNIGHT_WAR_KEY] = {
+			"target_province_id": "",
+			"staging_province_id": "",
+			"force_id": "",
+			"marching": false,
+			"halt_reason": "",
+		}
+	return gd[AI_KNIGHT_WAR_KEY]
+
+
+static func _set_knight_war_state(base_map: Node, pid: int, war: Dictionary) -> void:
+	if not base_map.players.has(pid):
+		return
+	base_map.players[pid].game_data[AI_KNIGHT_WAR_KEY] = war
+
+
+static func _knight_force_id(base_map: Node, pid: int) -> String:
+	var war: Dictionary = _knight_war_state(base_map, pid)
+	var fid := str(war.get("force_id", ""))
+	if fid != "" and base_map.forces.has(fid):
+		return fid
+	return ""
+
+
+## Concentric standing + active slots full (or grain-capped so we can't fill more),
+## and no stray non-knight field armies left from castle expels.
+static func _province_defense_complete(base_map: Node, prov: Node, pid: int) -> bool:
+	if prov == null or not prov.has_method("has_dejure") or not prov.has_dejure(pid):
+		return false
+	var castle = prov.get_castle_plot() if prov.has_method("get_castle_plot") else null
+	if castle == null or not castle.has_method("standing_level"):
+		return false
+	if int(castle.standing_level()) < DEFENSE_CASTLE_MAX:
+		return false
+	if castle.has_method("is_under_construction") and castle.is_under_construction():
+		return false
+	if _defense_has_stray_field(base_map, pid, prov, _knight_force_id(base_map, pid)):
+		return false
+	var headroom := _defense_grain_headroom_men(base_map, prov, pid)
+	for slot in _defense_active_slots_for_pid(prov, pid):
+		var b = slot["b"]
+		var spot := int(slot["spot"])
+		var cap := int(b.get_garrison_capacity(spot)) if b.has_method("get_garrison_capacity") else 0
+		var have := GlobalUnits.total_men(base_map.get_building_garrison(b, spot))
+		if have < cap and headroom > 0:
+			return false
+	return true
+
+
+static func _all_holdings_defense_complete(base_map: Node, pid: int, holdings: Array) -> bool:
+	if holdings.is_empty():
+		return false
+	for prov in holdings:
+		if not _province_defense_complete(base_map, prov, pid):
+			return false
+	return true
+
+
+static func tick_knight_conquest(base_map: Node, pid: int, holdings: Array) -> void:
+	if base_map == null or pid < 0 or holdings.is_empty():
+		return
+	var war: Dictionary = _knight_war_state(base_map, pid)
+	# Validate / rediscover knight force.
+	var fid := str(war.get("force_id", ""))
+	if fid != "" and not base_map.forces.has(fid):
+		fid = ""
+		war["force_id"] = ""
+	if fid == "":
+		fid = _find_knight_field_army(base_map, pid)
+		if fid != "":
+			war["force_id"] = fid
+
+	# Always ship arms toward incomplete holdings.
+	_knight_caravan_supply_arms(base_map, pid, holdings)
+
+	var all_done := _all_holdings_defense_complete(base_map, pid, holdings)
+	if not all_done:
+		# Wait / fortify — park in place; only pull strays onto the knight stack.
+		if fid == "":
+			fid = _find_knight_field_army(base_map, pid)
+			if fid == "":
+				fid = _find_field_army(base_map, pid)
+		if fid != "":
+			fid = _merge_all_field_into_force(base_map, pid, fid)
+			war["force_id"] = fid
+		_set_knight_war_state(base_map, pid, war)
+		return
+
+	# Pick or keep a council target on our border.
+	var target_id := str(war.get("target_province_id", ""))
+	var target_prov = null
+	if target_id != "" and base_map.has_method("_get_province_by_id"):
+		target_prov = base_map._get_province_by_id(target_id)
+	if target_prov == null or not _is_valid_council_target(base_map, target_prov):
+		var pick: Dictionary = _pick_council_target(base_map, pid, holdings)
+		if pick.is_empty():
+			war["target_province_id"] = ""
+			war["staging_province_id"] = ""
+			war["marching"] = false
+			war["halt_reason"] = "no council target on border"
+			_set_knight_war_state(base_map, pid, war)
+			return
+		war["target_province_id"] = str(pick.get("province_id", ""))
+		war["staging_province_id"] = str(pick.get("staging_id", ""))
+		war["marching"] = false
+		war["halt_reason"] = ""
+		target_id = str(war["target_province_id"])
+		target_prov = base_map._get_province_by_id(target_id) if base_map.has_method("_get_province_by_id") else null
+
+	# Prefer staging where the knight army already sits (if owned).
+	if fid != "" and base_map.has_method("province_under_force"):
+		var under = base_map.province_under_force(fid)
+		if under != null and under.has_method("has_dejure") and under.has_dejure(pid):
+			war["staging_province_id"] = String(under.name)
+	if str(war.get("staging_province_id", "")) == "":
+		var pick2: Dictionary = _pick_council_target(base_map, pid, holdings)
+		war["staging_province_id"] = str(pick2.get("staging_id", String(holdings[0].name)))
+
+	_execute_knight_war_season(base_map, pid, war, holdings)
+	_set_knight_war_state(base_map, pid, war)
+
+
+static func _find_knight_field_army(base_map: Node, pid: int) -> String:
+	if base_map.get("armies") == null or base_map.get("forces") == null:
+		return ""
+	var best := ""
+	var best_k := 0
+	for fig in base_map.armies.get_children():
+		var fid := String(fig.name)
+		if not base_map.forces.has(fid):
+			continue
+		var loc: Dictionary = base_map.forces[fid].get("location", {})
+		if str(loc.get("kind", "")) != "cell":
+			continue
+		if int(base_map.get_force_controller(fid)) != pid:
+			continue
+		var k := 0
+		for s in base_map.forces[fid].get("units", []):
+			if int(s.get("owner", -1)) != pid:
+				continue
+			if int(s.get("type", -1)) == int(GlobalUnits.UNIT_TYPE.KNIGHTS):
+				k += int(s.get("count", 0))
+		if k > best_k:
+			best_k = k
+			best = fid
+	return best
+
+
+static func _knight_count_in_force(base_map: Node, fid: String, pid: int) -> int:
+	if not base_map.forces.has(fid):
+		return 0
+	var n := 0
+	for s in base_map.forces[fid].get("units", []):
+		if int(s.get("owner", -1)) != pid:
+			continue
+		if int(s.get("type", -1)) == int(GlobalUnits.UNIT_TYPE.KNIGHTS):
+			n += int(s.get("count", 0))
+	return n
+
+
+static func _knights_needed_for_strength(need_str: int) -> int:
+	var per := maxi(1, GlobalUnits.unit_strength(GlobalUnits.UNIT_TYPE.KNIGHTS))
+	return maxi(GlobalUnits.MIN_SPLIT_MEN, int(ceil(float(maxi(need_str, 1)) / float(per))))
+
+
+static func _set_craft_armour(base_map: Node, prov: Node, pid: int) -> void:
+	if prov == null or prov.get("economy") == null:
+		return
+	for b in prov.economy.get_children():
+		if int(b.get("player_owner")) != pid:
+			continue
+		if not b.has_method("is_built") or not b.is_built():
+			continue
+		if int(b.get("subtype")) != 5:
+			continue
+		if b.has_method("set_craft_weapon"):
+			b.set_craft_weapon("armour")
+		elif b.get("craft_weapon") != null:
+			b.craft_weapon = "armour"
+
+
+static func _try_buy_knight_kit(base_map: Node, prov: Node, pid: int, want_knights: int) -> void:
+	if want_knights <= 0 or prov == null:
+		return
+	var stock: Dictionary = prov.get_weapons_for(pid) if prov.has_method("get_weapons_for") else {}
+	var need_h := maxi(0, want_knights - int(stock.get("horses", 0)))
+	var need_a := maxi(0, want_knights - int(stock.get("armour", 0)))
+	if need_h <= 0 and need_a <= 0:
+		return
+	var merchant = _merchant_in_province(base_map, prov)
+	if merchant == null:
+		return
+	var competition := bool(base_map.merchant_competition_in_province(prov)) if base_map.has_method("merchant_competition_in_province") else false
+	var spendable := _marks_spendable(base_map, pid)
+	var buy: Dictionary = GlobalUnits.empty_weapon_stock()
+	var cost := 0
+	for e in [{"k": "horses", "n": need_h}, {"k": "armour", "n": need_a}]:
+		var want := int(e["n"])
+		if want <= 0:
+			continue
+		var unit_p := maxi(1, GlobalUnits.weapon_mark_price_discounted(str(e["k"]), competition))
+		var can := mini(want, int(floor(float(spendable - cost) / float(unit_p))))
+		if can > 0:
+			buy[str(e["k"])] = can
+			cost += unit_p * can
+	if cost <= 0 or cost > spendable:
+		return
+	if base_map.has_method("apply_buy_from_merchant"):
+		base_map.apply_buy_from_merchant(
+			String(merchant.name), buy, GlobalUnits.empty_material_stock(), pid, cost
+		)
+
+
+static func _execute_knight_war_season(
+	base_map: Node, pid: int, war: Dictionary, holdings: Array
+) -> void:
+	war["halt_reason"] = ""
+	var target_id := str(war.get("target_province_id", ""))
+	var staging_id := str(war.get("staging_province_id", ""))
+	var target_prov = base_map._get_province_by_id(target_id) if base_map.has_method("_get_province_by_id") else null
+	var staging = base_map._get_province_by_id(staging_id) if base_map.has_method("_get_province_by_id") else null
+	if target_prov == null or staging == null:
+		war["halt_reason"] = "no target/staging"
+		return
+	var enemy_town = target_prov.get_town() if target_prov.has_method("get_town") else null
+	if enemy_town == null:
+		war["halt_reason"] = "target has no town"
+		return
+
+	var fid := str(war.get("force_id", ""))
+	if fid != "" and not base_map.forces.has(fid):
+		fid = ""
+		war["force_id"] = ""
+		war["marching"] = false
+
+	var preview: Dictionary = {}
+	if base_map.has_method("get_settlement_defense_preview"):
+		preview = base_map.get_settlement_defense_preview(enemy_town, fid)
+	var def_str := int(preview.get("strength", 0))
+	var need_str := maxi(1, int(ceil(float(def_str) * KNIGHT_STRENGTH_MARGIN)))
+	var need_knights := _knights_needed_for_strength(need_str)
+
+	# Raise / reinforce only while still at home (dejure). Never levy into a foreign stack.
+	var raise_prov = staging
+	var at_home := false
+	if fid != "" and base_map.has_method("province_under_force"):
+		var under = base_map.province_under_force(fid)
+		if under != null and under.has_method("has_dejure") and under.has_dejure(pid):
+			raise_prov = under
+			at_home = true
+		elif under != null:
+			at_home = false
+	else:
+		at_home = true
+
+	if at_home and not bool(war.get("marching", false)):
+		_set_craft_armour(base_map, raise_prov, pid)
+		_try_buy_knight_kit(base_map, raise_prov, pid, need_knights)
+		fid = _knight_reinforce_force(base_map, raise_prov, pid, fid, need_knights)
+		war["force_id"] = fid
+	if fid == "" or not base_map.forces.has(fid):
+		war["halt_reason"] = "no knight force yet"
+		return
+
+	# Merge every other field stack onto the knight force (never move the main).
+	fid = _merge_all_field_into_force(base_map, pid, fid)
+	war["force_id"] = fid
+	if fid == "" or not base_map.forces.has(fid):
+		war["halt_reason"] = "force lost after merge"
+		return
+
+	# Mark campaign as underway once we've left home toward this target.
+	if not at_home:
+		war["marching"] = true
+
+	var marching := bool(war.get("marching", false))
+	var my_str := _force_strength(base_map, fid)
+	var men := GlobalUnits.total_men(base_map.forces[fid].get("units", []))
+	var cargo_grain := int(base_map.get_force_cargo(fid).get("grain", 0)) if base_map.has_method("get_force_cargo") else 0
+	var season_need := GlobalUnits.force_grain_need(men, false)
+
+	# At the town — always assault (no 1.3× recheck once in contact).
+	if _force_adjacent_to_building(base_map, fid, enemy_town):
+		war["marching"] = true
+		war["halt_reason"] = "assaulting (str %d vs need %d)" % [my_str, need_str]
+		_try_knight_assault_and_capture(base_map, pid, fid, enemy_town, war)
+		return
+
+	# Still at home: need full strength + full trip grain before first march step.
+	if not marching:
+		_try_buy_war_grain(base_map, raise_prov, pid, enemy_town, fid)
+		var grain_ready := _load_war_grain_partial(base_map, pid, raise_prov, fid, enemy_town)
+		my_str = _force_strength(base_map, fid)
+		if my_str < need_str:
+			war["halt_reason"] = "raising — str %d / need %d (knights %d / %d)" % [
+				my_str, need_str, _knight_count_in_force(base_map, fid, pid), need_knights
+			]
+			return
+		if not grain_ready:
+			cargo_grain = int(base_map.get_force_cargo(fid).get("grain", 0)) if base_map.has_method("get_force_cargo") else 0
+			var want := _war_grain_wanted(base_map, fid, enemy_town)
+			war["halt_reason"] = "waiting grain cargo %d / %d" % [cargo_grain, want]
+			return
+		if men < GlobalUnits.MIN_SPLIT_MEN:
+			war["halt_reason"] = "force too small to march"
+			return
+		war["marching"] = true
+		war["halt_reason"] = "marching out"
+		_move_force_toward_building(base_map, fid, enemy_town)
+		return
+
+	# Already committed: keep advancing — do not re-gate on full trip grain or strength.
+	if cargo_grain < season_need:
+		war["halt_reason"] = "marching low cargo %d < season %d (committed — still advancing)" % [
+			cargo_grain, season_need
+		]
+		if at_home:
+			_try_buy_war_grain(base_map, raise_prov, pid, enemy_town, fid)
+			_load_war_grain_partial(base_map, pid, raise_prov, fid, enemy_town)
+	else:
+		war["halt_reason"] = "marching (cargo=%d str=%d)" % [cargo_grain, my_str]
+	if men < GlobalUnits.MIN_SPLIT_MEN:
+		war["halt_reason"] = "halted — force too small"
+		return
+	_move_force_toward_building(base_map, fid, enemy_town)
+
+
+## Levy knights into `fid` (or create a new field force). Returns force id.
+static func _knight_reinforce_force(
+	base_map: Node, prov: Node, pid: int, fid: String, need_knights: int
+) -> String:
+	if prov == null:
+		return fid
+	var have := _knight_count_in_force(base_map, fid, pid) if fid != "" else 0
+	var short := maxi(0, need_knights - have)
+	if short <= 0:
+		return fid if fid != "" else _find_knight_field_army(base_map, pid)
+
+	var raise := mini(short, KNIGHT_LEVY_DRIP)
+	raise = _clamp_levy_men(base_map, prov, pid, raise, false)
+	if raise < GlobalUnits.MIN_SPLIT_MEN:
+		# Can't open a new legal field stack this season.
+		if fid != "":
+			return fid
+		return ""
+
+	var stock: Dictionary = prov.get_weapons_for(pid) if prov.has_method("get_weapons_for") else {}
+	var by_kit := mini(int(stock.get("horses", 0)), int(stock.get("armour", 0)))
+	raise = mini(raise, by_kit)
+	if raise < GlobalUnits.MIN_SPLIT_MEN:
+		return fid
+
+	var comp: Array = [{"type": GlobalUnits.UNIT_TYPE.KNIGHTS, "count": raise}]
+	var new_id := _levy_composition_field(base_map, prov, pid, comp)
+	if new_id == "":
+		return fid
+	if fid == "" or not base_map.forces.has(fid):
+		return new_id
+	if new_id == fid:
+		return fid
+	# Fold the fresh levy into the campaign stack (snap beside it if needed).
+	return _absorb_field_force_into(base_map, fid, new_id)
+
+
+## Capture town; leave the knight army in the field (no occupation plant).
+static func _try_knight_assault_and_capture(
+	base_map: Node, pid: int, fid: String, town: Node, war: Dictionary
+) -> void:
+	var key := str(base_map._building_key(town)) if base_map.has_method("_building_key") else ""
+	if key == "":
+		return
+	var def_men := GlobalUnits.fighting_men(base_map.get_all_building_garrison(town))
+	var will_militia := false
+	if base_map.has_method("settlement_should_raise_militia"):
+		will_militia = bool(base_map.settlement_should_raise_militia(town, fid))
+	if def_men > 0 or will_militia:
+		if base_map.has_method("request_battle_attack"):
+			base_map.request_battle_attack(fid, "", key)
+		def_men = GlobalUnits.fighting_men(base_map.get_all_building_garrison(town))
+		will_militia = false
+		if base_map.has_method("settlement_should_raise_militia"):
+			will_militia = bool(base_map.settlement_should_raise_militia(town, fid))
+	if def_men > 0 or will_militia:
+		return
+	if not base_map.forces.has(fid):
+		return
+	if not base_map.has_method("force_has_movement") or not base_map.force_has_movement(fid, 2):
+		return
+	if base_map.has_method("request_capture_building"):
+		base_map.request_capture_building(fid, key)
+	# Knights stay in the field — clear target until the new holding is fortified.
+	war["target_province_id"] = ""
+	war["staging_province_id"] = ""
+	war["force_id"] = fid if base_map.forces.has(fid) else ""
+	war["marching"] = false
+	war["halt_reason"] = "captured — fortifying"
+
+
+## Caravan bows/swords/pikes from surplus holdings into incomplete ones.
+static func _knight_caravan_supply_arms(base_map: Node, pid: int, holdings: Array) -> void:
+	if not base_map.has_method("request_send_caravan"):
+		return
+	var incomplete: Array = []
+	var complete: Array = []
+	for prov in holdings:
+		if _province_defense_complete(base_map, prov, pid):
+			complete.append(prov)
+		else:
+			incomplete.append(prov)
+	if incomplete.is_empty() or complete.is_empty():
+		# Still craft toward active holes on incomplete sites.
+		for prov in incomplete:
+			_set_craft_for_defense(base_map, prov, pid, false)
+		return
+
+	for dest in incomplete:
+		_set_craft_for_defense(base_map, dest, pid, false)
+		var holes := _defense_weapon_holes(base_map, dest, pid)
+		var stock: Dictionary = dest.get_weapons_for(pid) if dest.has_method("get_weapons_for") else {}
+		var need: Dictionary = GlobalUnits.empty_weapon_stock()
+		var any := false
+		for k in ["bows", "swords", "pikes"]:
+			var short := maxi(0, int(holes.get(k, 0)) - int(stock.get(k, 0)))
+			if short > 0:
+				need[k] = short
+				any = true
+		if not any:
+			continue
+		for src in complete:
+			if String(src.name) == String(dest.name):
+				continue
+			if not base_map.has_method("can_spawn_caravan_at") or not base_map.can_spawn_caravan_at(String(src.name)):
+				continue
+			# Skip if a caravan already going to dest from this owner.
+			if _has_caravan_to(base_map, pid, String(dest.name)):
+				break
+			var src_stock: Dictionary = src.get_weapons_for(pid) if src.has_method("get_weapons_for") else {}
+			var cargo := GlobalUnits.empty_caravan_cargo()
+			var sent := false
+			for k in ["bows", "swords", "pikes"]:
+				var want := int(need.get(k, 0))
+				if want <= 0:
+					continue
+				# Keep a small reserve on the donor.
+				var spare := maxi(0, int(src_stock.get(k, 0)) - 20)
+				var give := mini(want, spare)
+				if give > 0:
+					cargo[k] = give
+					need[k] = want - give
+					sent = true
+			if not sent:
+				continue
+			if not GlobalUnits.caravan_cargo_has_any(cargo):
+				continue
+			base_map.request_send_caravan(String(src.name), String(dest.name), cargo, pid)
+			break
+
+
+static func _defense_weapon_holes(base_map: Node, prov: Node, pid: int) -> Dictionary:
+	var out := {"bows": 0, "swords": 0, "pikes": 0}
+	for slot in _defense_active_slots_for_pid(prov, pid):
+		var cap := int(slot["b"].get_garrison_capacity(int(slot["spot"]))) if slot["b"].has_method("get_garrison_capacity") else 0
+		var mix: Dictionary = _defense_mix_counts(cap)
+		var have: Dictionary = _spot_fighting_counts(base_map, slot["b"], int(slot["spot"]), pid)
+		out["bows"] += maxi(0, int(mix.get(GlobalUnits.UNIT_TYPE.ARCHER, 0)) - int(have.get(GlobalUnits.UNIT_TYPE.ARCHER, 0)))
+		out["swords"] += maxi(0, int(mix.get(GlobalUnits.UNIT_TYPE.SWORDSMEN, 0)) - int(have.get(GlobalUnits.UNIT_TYPE.SWORDSMEN, 0)))
+		out["pikes"] += maxi(0, int(mix.get(GlobalUnits.UNIT_TYPE.PIKEMEN, 0)) - int(have.get(GlobalUnits.UNIT_TYPE.PIKEMEN, 0)))
+	return out
+
+
+static func _has_caravan_to(base_map: Node, pid: int, dest_id: String) -> bool:
+	if base_map.get("caravans") == null:
+		return false
+	for c in base_map.caravans.get_children():
+		if int(c.get("player_owner")) != pid:
+			continue
+		if str(c.get("dest_province_id")) == dest_id:
+			return true
+	return false
+
+
+# =============================================================================
+# Offense doctrine — Pass 1 province tick (legacy / dormant)
 # =============================================================================
 
 
@@ -1413,7 +2092,10 @@ static func _is_valid_council_target(base_map: Node, prov: Node) -> bool:
 	var dejure := int(prov.dejure) if prov.get("dejure") != null else int(prov.get("player_owner"))
 	if dejure < 0 or not base_map.players.has(dejure):
 		return false
-	if not GlobalStuff.is_local_council(base_map.players[dejure].type):
+	var holder = base_map.players[dejure]
+	if holder == null:
+		return false
+	if not GlobalStuff.is_local_council(holder.type):
 		return false
 	var town = prov.get_town() if prov.has_method("get_town") else null
 	return town != null
@@ -2324,6 +3006,7 @@ static func _absorb_other_field_into_garrison(
 ) -> void:
 	if base_map.get("armies") == null:
 		return
+	var ids: Array = []
 	for fig in base_map.armies.get_children():
 		var other := String(fig.name)
 		if other == keep_fid or not base_map.forces.has(other):
@@ -2335,7 +3018,125 @@ static func _absorb_other_field_into_garrison(
 			continue
 		if base_map.has_method("province_under_force") and base_map.province_under_force(other) != prov:
 			continue
-		_garrison_force_while_waiting(base_map, pid, prov, other)
+		ids.append(other)
+	for other in ids:
+		_defense_ingest_field_force(base_map, pid, prov, other)
+
+
+## Slots used to park expelled / stray field troops.
+## Always include town + villages so overflow has somewhere to go during upgrades.
+static func _defense_park_slots(prov: Node) -> Array:
+	var out: Array = []
+	if prov == null:
+		return out
+	var castle = prov.get_castle_plot() if prov.has_method("get_castle_plot") else null
+	if castle != null and castle.has_method("is_operational") and castle.is_operational():
+		out.append({"b": castle, "spot": GlobalUnits.SPOT.INSIDE})
+		out.append({"b": castle, "spot": GlobalUnits.SPOT.OUTSIDE})
+	var town = prov.get_town() if prov.has_method("get_town") else null
+	if town != null:
+		out.append({"b": town, "spot": GlobalUnits.SPOT.FLAT})
+	if prov.get("settlements") != null:
+		for s in prov.settlements.get_children():
+			if s == town:
+				continue
+			if int(s.get("type_")) == int(GlobalStuff.BUILDING_TYPE.VILLAGE):
+				out.append({"b": s, "spot": GlobalUnits.SPOT.FLAT})
+	return out
+
+
+## Park a field force into holding garrisons with no adjacency / MP checks.
+## Castle upgrades expel onto arbitrary free tiles; normal garrison rules can't reach them.
+static func _defense_ingest_field_force(
+	base_map: Node, pid: int, prov: Node, fid: String
+) -> void:
+	if not base_map.forces.has(fid) or prov == null:
+		return
+	var loc: Dictionary = base_map.forces[fid].get("location", {})
+	if str(loc.get("kind", "")) != "cell":
+		return
+	var targets: Array = _defense_park_slots(prov)
+	if targets.is_empty():
+		return
+	var last_dest := ""
+	for t in targets:
+		if not base_map.forces.has(fid):
+			return
+		var room := _garrison_room(base_map, t["b"], int(t["spot"]))
+		if room <= 0:
+			continue
+		var men := GlobalUnits.total_men(base_map.forces[fid].get("units", []))
+		if men <= 0:
+			break
+		var take_n := mini(room, men)
+		var out_units := _extract_any_stacks(base_map.forces[fid].get("units", []), pid, take_n)
+		if out_units.is_empty():
+			continue
+		var dest_gid := _ensure_spot_garrison(base_map, t["b"], int(t["spot"]))
+		if dest_gid == "":
+			continue
+		GlobalUnits.subtract_units(base_map.forces[fid]["units"], out_units)
+		base_map.forces[dest_gid]["units"] = GlobalUnits.merge_units(
+			base_map.forces[dest_gid].get("units", []),
+			GlobalUnits.units_from_spec(out_units)
+		)
+		last_dest = dest_gid
+		if base_map.has_method("_building_key") and base_map.has_method("refresh_building_flags"):
+			base_map.refresh_building_flags(str(base_map._building_key(t["b"])))
+	if not base_map.forces.has(fid):
+		return
+	if GlobalUnits.total_men(base_map.forces[fid].get("units", [])) <= 0:
+		if last_dest != "" and base_map.has_method("_flush_cargo_if_force_empty"):
+			base_map._flush_cargo_if_force_empty(fid, last_dest)
+		if base_map.has_method("_cleanup_force_if_empty"):
+			base_map._cleanup_force_if_empty(fid)
+		if base_map.get("pathfinding") != null and base_map.pathfinding.has_method("rebuild_occupancy"):
+			base_map.pathfinding.rebuild_occupancy()
+		if base_map.has_method("update_all_army_visuals"):
+			base_map.update_all_army_visuals()
+
+
+## Before starting an upgrade, move castle troops into town/villages so expel is a no-op.
+static func _defense_evacuate_castle_for_upgrade(
+	base_map: Node, prov: Node, pid: int, castle: Node
+) -> void:
+	if castle == null or not castle.has_method("is_operational") or not castle.is_operational():
+		return
+	if not base_map.has_method("apply_transfer_units"):
+		return
+	var sinks: Array = []
+	var town = prov.get_town() if prov.has_method("get_town") else null
+	if town != null:
+		sinks.append({"b": town, "spot": GlobalUnits.SPOT.FLAT})
+	if prov.get("settlements") != null:
+		for s in prov.settlements.get_children():
+			if s == town:
+				continue
+			if int(s.get("type_")) == int(GlobalStuff.BUILDING_TYPE.VILLAGE):
+				sinks.append({"b": s, "spot": GlobalUnits.SPOT.FLAT})
+	for src_spot in [GlobalUnits.SPOT.INSIDE, GlobalUnits.SPOT.OUTSIDE]:
+		var src_gid := _ensure_spot_garrison(base_map, castle, src_spot)
+		if src_gid == "" or not base_map.forces.has(src_gid):
+			continue
+		for sink in sinks:
+			if not base_map.forces.has(src_gid):
+				break
+			var have := GlobalUnits.total_men(base_map.forces[src_gid].get("units", []))
+			if have <= 0:
+				break
+			var room := _garrison_room(base_map, sink["b"], int(sink["spot"]))
+			if room <= 0:
+				continue
+			var take_n := mini(room, have)
+			var out_units := _extract_any_stacks(
+				base_map.forces[src_gid].get("units", []), pid, take_n
+			)
+			if out_units.is_empty():
+				continue
+			var dest_gid := _ensure_spot_garrison(base_map, sink["b"], int(sink["spot"]))
+			if dest_gid == "":
+				continue
+			base_map.apply_transfer_units(src_gid, dest_gid, out_units, {})
 
 
 static func _ensure_war_force(
@@ -2704,6 +3505,11 @@ static func _garrison_force_while_waiting(
 	if not base_map.has_method("apply_garrison_units"):
 		return
 	var targets: Array = _staging_garrison_slots(prov)
+	# Mid-upgrade: castle is offline — park into town.
+	if targets.is_empty():
+		var town_only = prov.get_town() if prov.has_method("get_town") else null
+		if town_only != null:
+			targets = [{"b": town_only, "spot": GlobalUnits.SPOT.FLAT}]
 	if targets.is_empty():
 		return
 
@@ -2718,27 +3524,35 @@ static func _garrison_force_while_waiting(
 	if anchor == null and town != null and _garrison_room(base_map, town, GlobalUnits.SPOT.FLAT) > 0:
 		anchor = town
 	if anchor == null:
+		# Still try town even if "full" — remnant may fit after MIN_SPLIT rules.
+		anchor = town if town != null else castle
+	if anchor == null:
 		return
 	if not _force_adjacent_to_building(base_map, fid, anchor):
-		_move_force_toward_building(base_map, fid, anchor)
-		if not _force_adjacent_to_building(base_map, fid, anchor):
-			# Try the other building this season.
-			var alt = town if anchor == castle else castle
-			if alt != null and _force_adjacent_to_building(base_map, fid, alt):
-				anchor = alt
-			else:
-				if alt != null:
-					_move_force_toward_building(base_map, fid, alt)
-				return
+		# Expelled stacks spawn with 0 MP — snap onto a free approach tile.
+		if not _snap_force_to_building_approach(base_map, fid, anchor):
+			_move_force_toward_building(base_map, fid, anchor)
+			if not _force_adjacent_to_building(base_map, fid, anchor):
+				var alt = town if anchor == castle else castle
+				if alt != null and (
+					_force_adjacent_to_building(base_map, fid, alt)
+					or _snap_force_to_building_approach(base_map, fid, alt)
+				):
+					anchor = alt
+				else:
+					if alt != null:
+						_move_force_toward_building(base_map, fid, alt)
+					return
 
 	for t in targets:
 		if not base_map.forces.has(fid):
 			return
 		# Must be adjacent to this building to garrison into it.
 		if not _force_adjacent_to_building(base_map, fid, t["b"]):
-			_move_force_toward_building(base_map, fid, t["b"])
-			if not _force_adjacent_to_building(base_map, fid, t["b"]):
-				continue
+			if not _snap_force_to_building_approach(base_map, fid, t["b"]):
+				_move_force_toward_building(base_map, fid, t["b"])
+				if not _force_adjacent_to_building(base_map, fid, t["b"]):
+					continue
 		var room := _garrison_room(base_map, t["b"], int(t["spot"]))
 		if room <= 0:
 			continue
@@ -2765,6 +3579,39 @@ static func _garrison_force_while_waiting(
 		if bkey == "":
 			continue
 		base_map.apply_garrison_units(fid, bkey, int(t["spot"]), out_units)
+
+
+## Place a field force on a free approach cell of `building` (for 0-MP expels).
+static func _snap_force_to_building_approach(base_map: Node, fid: String, building: Node) -> bool:
+	var pf = base_map.get("pathfinding")
+	if pf == null or building == null or not base_map.forces.has(fid):
+		return false
+	var fig = base_map.armies.get_node_or_null(fid)
+	if fig == null:
+		return false
+	if _force_adjacent_to_building(base_map, fid, building):
+		return true
+	var approach: Array[Vector2i] = pf.get_approach_cells(building) if pf.has_method("get_approach_cells") else []
+	for cell in approach:
+		if pf.get("walkable_cells") != null and not pf.walkable_cells.has(cell):
+			continue
+		if pf.occupancy.has(cell) and pf.occupancy[cell] != fig:
+			continue
+		if pf.has_method("place_army_at_cell"):
+			pf.place_army_at_cell(fig, cell)
+		if pf.has_method("rebuild_occupancy"):
+			pf.rebuild_occupancy()
+		return _force_adjacent_to_building(base_map, fid, building)
+	# Last resort: nearest free cell from map helper (may still be approach).
+	if base_map.has_method("get_nearest_free_cell_for_building"):
+		var cell2: Vector2i = base_map.get_nearest_free_cell_for_building(building)
+		if cell2 != Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
+			if pf.has_method("place_army_at_cell"):
+				pf.place_army_at_cell(fig, cell2)
+			if pf.has_method("rebuild_occupancy"):
+				pf.rebuild_occupancy()
+			return _force_adjacent_to_building(base_map, fid, building)
+	return false
 
 
 static func _garrison_room(base_map: Node, building: Node, spot: int) -> int:
@@ -3060,14 +3907,29 @@ static func _move_force_toward_building(base_map: Node, fid: String, building: N
 	var pf = base_map.get("pathfinding")
 	if pf == null or building == null:
 		return
+	var approach: Array[Vector2i] = pf.get_approach_cells(building) if pf.has_method("get_approach_cells") else []
+	if approach.is_empty():
+		return
+	_move_force_toward_cells(base_map, fid, approach)
+
+
+## March `mover_fid` toward free tiles beside `target_fid` (can't path onto occupied cells).
+static func _move_force_toward_force(base_map: Node, mover_fid: String, target_fid: String) -> void:
+	var goals := _free_cells_adjacent_to_force(base_map, target_fid, mover_fid)
+	if goals.is_empty():
+		return
+	_move_force_toward_cells(base_map, mover_fid, goals)
+
+
+static func _move_force_toward_cells(base_map: Node, fid: String, goals: Array[Vector2i]) -> void:
+	var pf = base_map.get("pathfinding")
+	if pf == null or goals.is_empty():
+		return
 	var fig = base_map.armies.get_node_or_null(fid)
 	if fig == null:
 		return
 	var from_cell: Vector2i = pf.get_army_cell(fig)
-	var approach: Array[Vector2i] = pf.get_approach_cells(building)
-	if approach.is_empty():
-		return
-	var path: Array[Vector2i] = pf.find_path_for_mover(fig, from_cell, approach)
+	var path: Array[Vector2i] = pf.find_path_for_mover(fig, from_cell, goals)
 	if path.size() < 2:
 		return
 	var mp_left := int(fig.movement_left) if fig.get("movement_left") != null else 0
@@ -3085,6 +3947,135 @@ static func _move_force_toward_building(base_map: Node, fid: String, building: N
 		spent += int(pf.enter_cost(path[i], fig)) if pf.has_method("enter_cost") else 1
 	if base_map.has_method("apply_army_move"):
 		base_map.apply_army_move(fid, end.x, end.y, spent)
+
+
+## Free walkable cells edge-adjacent to `fid` (optionally treating `ignore_fid` as non-blocking).
+static func _free_cells_adjacent_to_force(
+	base_map: Node, fid: String, ignore_fid: String = ""
+) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var pf = base_map.get("pathfinding")
+	if pf == null or not base_map.forces.has(fid):
+		return out
+	var fig = base_map.armies.get_node_or_null(fid)
+	if fig == null:
+		return out
+	var cell: Vector2i = pf.get_army_cell(fig)
+	var ignore = base_map.armies.get_node_or_null(ignore_fid) if ignore_fid != "" else null
+	var dirs: Array = pf.EDGE_DIRS if pf.get("EDGE_DIRS") != null else [
+		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)
+	]
+	for dir_variant in dirs:
+		var n: Vector2i = cell + dir_variant
+		if pf.has_method("_is_walkable_cell") and not bool(pf._is_walkable_cell(n)):
+			continue
+		elif pf.get("walkable_cells") != null and not pf.walkable_cells.has(n):
+			continue
+		if pf.occupancy.has(n):
+			var occ = pf.occupancy[n]
+			if occ != fig and occ != ignore:
+				continue
+		out.append(n)
+	return out
+
+
+## Place `mover_fid` on a free cell beside `main_fid` (for immediate merge). Returns success.
+static func _snap_force_beside(base_map: Node, mover_fid: String, main_fid: String) -> bool:
+	var pf = base_map.get("pathfinding")
+	if pf == null:
+		return false
+	var mover = base_map.armies.get_node_or_null(mover_fid)
+	if mover == null or not base_map.forces.has(main_fid):
+		return false
+	var goals := _free_cells_adjacent_to_force(base_map, main_fid, mover_fid)
+	if goals.is_empty():
+		return false
+	var dest: Vector2i = goals[0]
+	if pf.has_method("place_army_at_cell"):
+		pf.place_army_at_cell(mover, dest)
+	if pf.has_method("rebuild_occupancy"):
+		pf.rebuild_occupancy()
+	return _forces_same_or_adjacent_cell(base_map, main_fid, mover_fid)
+
+
+## Merge `source_fid` into `main_fid`. Snap beside if needed; else march toward. Never moves main.
+static func _absorb_field_force_into(base_map: Node, main_fid: String, source_fid: String) -> String:
+	if main_fid == "" or not base_map.forces.has(main_fid):
+		return source_fid if base_map.forces.has(source_fid) else ""
+	if source_fid == "" or source_fid == main_fid or not base_map.forces.has(source_fid):
+		return main_fid
+	if not base_map.has_method("apply_merge_forces"):
+		return main_fid
+	if _forces_same_or_adjacent_cell(base_map, main_fid, source_fid):
+		base_map.apply_merge_forces(main_fid, source_fid)
+		return main_fid if base_map.forces.has(main_fid) else ""
+	# Same province: snap beside the main stack and merge this season.
+	var same_prov := false
+	if base_map.has_method("province_under_force"):
+		var a = base_map.province_under_force(main_fid)
+		var b = base_map.province_under_force(source_fid)
+		same_prov = a != null and a == b
+	if same_prov and _snap_force_beside(base_map, source_fid, main_fid):
+		if _forces_same_or_adjacent_cell(base_map, main_fid, source_fid):
+			base_map.apply_merge_forces(main_fid, source_fid)
+			return main_fid if base_map.forces.has(main_fid) else ""
+	_move_force_toward_force(base_map, source_fid, main_fid)
+	if base_map.forces.has(main_fid) and base_map.forces.has(source_fid) \
+			and _forces_same_or_adjacent_cell(base_map, main_fid, source_fid):
+		base_map.apply_merge_forces(main_fid, source_fid)
+	return main_fid if base_map.forces.has(main_fid) else (
+		source_fid if base_map.forces.has(source_fid) else ""
+	)
+
+
+## Pull every other owned field army onto `main_fid`. Never relocates the main stack.
+static func _merge_all_field_into_force(base_map: Node, pid: int, main_fid: String) -> String:
+	if base_map.get("armies") == null or base_map.get("forces") == null:
+		return main_fid
+	if main_fid == "" or not base_map.forces.has(main_fid):
+		main_fid = _find_knight_field_army(base_map, pid)
+		if main_fid == "":
+			main_fid = _find_field_army(base_map, pid)
+	if main_fid == "" or not base_map.forces.has(main_fid):
+		return ""
+	# Multi-pass: snap/merge clears a ring of strays that block each other.
+	for _pass in range(8):
+		var others: Array = []
+		for fig in base_map.armies.get_children():
+			var other := String(fig.name)
+			if other == main_fid or not base_map.forces.has(other):
+				continue
+			var loc: Dictionary = base_map.forces[other].get("location", {})
+			if str(loc.get("kind", "")) != "cell":
+				continue
+			if int(base_map.get_force_controller(other)) != pid:
+				continue
+			if GlobalUnits.total_men(base_map.forces[other].get("units", [])) <= 0:
+				continue
+			others.append(other)
+		if others.is_empty():
+			break
+		var before := others.size()
+		for other in others:
+			if not base_map.forces.has(main_fid):
+				break
+			if not base_map.forces.has(other):
+				continue
+			main_fid = _absorb_field_force_into(base_map, main_fid, other)
+		var left := 0
+		for fig2 in base_map.armies.get_children():
+			var oid := String(fig2.name)
+			if oid == main_fid or not base_map.forces.has(oid):
+				continue
+			if int(base_map.get_force_controller(oid)) != pid:
+				continue
+			var loc2: Dictionary = base_map.forces[oid].get("location", {})
+			if str(loc2.get("kind", "")) != "cell":
+				continue
+			left += 1
+		if left >= before:
+			break
+	return main_fid if base_map.forces.has(main_fid) else ""
 
 
 static func _try_assault_and_capture(
@@ -3221,13 +4212,15 @@ static func debug_status(base_map: Node, pid: int) -> Dictionary:
 		]
 	)
 
-	if doctrine == DOCTRINE_DEFENSE:
+	if true:
+		# Defense holdings + knight conquest status (primary AI path).
 		out["phase"] = "defense"
-		out["goal"] = "Quad+tax, Concentric; castle+town garrisons until Concentric then expand"
+		out["goal"] = "Fortify holdings, then knight-conquer adjacent councils"
 		var blockers: Array = []
 		var buys_all: Dictionary = {}
 		if typeof(base_map.players[pid].game_data.get(AI_DEBUG_BUYS_KEY, {})) == TYPE_DICTIONARY:
 			buys_all = base_map.players[pid].game_data.get(AI_DEBUG_BUYS_KEY, {})
+		var all_done := _all_holdings_defense_complete(base_map, pid, holdings)
 		for prov in holdings:
 			var castle = prov.get_castle_plot() if prov.has_method("get_castle_plot") else null
 			var next_c := _defense_next_castle_level(castle)
@@ -3271,8 +4264,9 @@ static func debug_status(base_map: Node, pid: int) -> Dictionary:
 				for k in buy_row.keys():
 					if int(buy_row[k]) > 0:
 						buy_bits.append("%s=%d" % [str(k), int(buy_row[k])])
+			var done := _province_defense_complete(base_map, prov, pid)
 			lines.append(
-				"%s — castle=%s need_w/s=%d/%d garrison=%d castle_room=%d room=%d peri=%s"
+				"%s — castle=%s need_w/s=%d/%d garrison=%d castle_room=%d room=%d peri=%s done=%s"
 				% [
 					String(prov.name),
 					cstat,
@@ -3282,6 +4276,7 @@ static func debug_status(base_map: Node, pid: int) -> Dictionary:
 					castle_room,
 					room_left,
 					"yes" if peri else "no",
+					"yes" if done else "no",
 				]
 			)
 			lines.append(
@@ -3294,28 +4289,71 @@ static func debug_status(base_map: Node, pid: int) -> Dictionary:
 					", ".join(PackedStringArray(buy_bits)),
 				]
 			)
-			if standing < DEFENSE_CASTLE_MAX:
-				blockers.append("%s castle" % String(prov.name))
-			if int(short.get("wood", 0)) > 0 or int(short.get("stone", 0)) > 0:
-				blockers.append(
-					"%s mats +%dwood +%dstone" % [
-						String(prov.name), int(short.get("wood", 0)), int(short.get("stone", 0))
-					]
-				)
-			if castle_room > 0:
-				blockers.append("%s castle garrison (+%d)" % [String(prov.name), castle_room])
-			elif room_left > 0:
-				blockers.append("%s garrison drip (+%d)" % [String(prov.name), room_left])
-		if blockers.is_empty():
-			out["blocker"] = "fully fortified"
+			if not done:
+				if standing < DEFENSE_CASTLE_MAX:
+					blockers.append("%s castle" % String(prov.name))
+				if int(short.get("wood", 0)) > 0 or int(short.get("stone", 0)) > 0:
+					blockers.append(
+						"%s mats +%dwood +%dstone" % [
+							String(prov.name), int(short.get("wood", 0)), int(short.get("stone", 0))
+						]
+					)
+				if castle_room > 0:
+					blockers.append("%s castle garrison (+%d)" % [String(prov.name), castle_room])
+				elif room_left > 0:
+					blockers.append("%s garrison drip (+%d)" % [String(prov.name), room_left])
+
+		var kw: Dictionary = _knight_war_state(base_map, pid)
+		var kfid := str(kw.get("force_id", ""))
+		var kmen := 0
+		var kstr := 0
+		var cargo_g := 0
+		if kfid != "" and base_map.forces.has(kfid):
+			kmen = _knight_count_in_force(base_map, kfid, pid)
+			kstr = _force_strength(base_map, kfid)
+			if base_map.has_method("get_force_cargo"):
+				cargo_g = int(base_map.get_force_cargo(kfid).get("grain", 0))
+		var halt := str(kw.get("halt_reason", ""))
+		lines.append(
+			"Knight war — ready=%s target=%s staging=%s force=%s knights=%d str=%d cargo=%d marching=%s"
+			% [
+				"yes" if all_done else "no",
+				str(kw.get("target_province_id", "")),
+				str(kw.get("staging_province_id", "")),
+				kfid,
+				kmen,
+				kstr,
+				cargo_g,
+				"yes" if bool(kw.get("marching", false)) else "no",
+			]
+		)
+		if halt != "":
+			lines.append("  halt: " + halt)
+		if all_done:
+			out["phase"] = "knight_conquest"
+			if str(kw.get("target_province_id", "")) == "":
+				out["blocker"] = "ready — picking council target"
+			elif halt != "":
+				out["blocker"] = halt
+			else:
+				out["blocker"] = "knight campaign → %s" % str(kw.get("target_province_id", ""))
+		elif blockers.is_empty():
+			out["blocker"] = "fortifying"
 		else:
 			out["blocker"] = ", ".join(PackedStringArray(blockers))
-		lines.append("Phase: defense")
+		lines.append("Phase: " + str(out["phase"]))
 		lines.append("Goal: " + str(out["goal"]))
 		lines.append("Blocker: " + str(out["blocker"]))
 		out["lines"] = lines
+		out["target_province"] = str(kw.get("target_province_id", ""))
+		out["staging_province"] = str(kw.get("staging_province_id", ""))
+		out["force_id"] = kfid
+		out["army_men"] = kmen
+		out["army_strength"] = kstr
+		out["halt_reason"] = halt
 		return out
 
+	# Legacy offense debug (unreachable while `or true` above — kept for reference).
 	if bool(out["pause_until_stable"]):
 		out["phase"] = "pause_stabilize"
 		out["goal"] = "Stabilize all holdings (food + arms stock + castle ladder)"

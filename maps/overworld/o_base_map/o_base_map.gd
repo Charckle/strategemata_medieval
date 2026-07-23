@@ -63,6 +63,7 @@ const ARMY_FIGURE_SCENE := preload("res://objects/overworld/army/army_map_unit/a
 const CARAVAN_SCENE := preload("res://objects/overworld/othr/caravan/caravan.tscn")
 const TRANSPORT_SHIP_SCENE := preload("res://objects/overworld/othr/transport_ship/transport_ship.tscn")
 const MERCHANT_SCENE := preload("res://objects/overworld/othr/merchant/merchant.tscn")
+const SCORE_SCREEN_SCRIPT := preload("res://menus/gui/score_screen/score_screen.gd")
 const ArmyNames := preload("res://global_scripts/army_names.gd")
 ## One merchant per this many provinces (rounded up).
 const MERCHANTS_PER_PROVINCES := 5
@@ -83,6 +84,14 @@ const SELLSWORDS_SCENE := preload("res://objects/overworld/othr/sellswords/sells
 const SELLSWORDS_SPAWN_CHANCE := 0.10
 const SELLSWORDS_DOUBLE_CHANCE := 0.10
 const SELLSWORDS_MAX_PER_PROVINCE := 2
+
+## Campaign score history (yearly samples) + landless streaks for win/loss.
+var stats_history: Array = []
+var landless_seasons: Dictionary = {} # pid -> consecutive seasons with 0 dejure
+var endless_solo: bool = false
+var game_outcome_done: bool = false
+var _score_screen: CanvasLayer = null
+var _solo_prompt: ConfirmationDialog = null
 
 @onready var provinces = $provinces
 @onready var armies = $armies
@@ -141,8 +150,82 @@ func dummy_player_data():
 	# Colors come from heraldry.primary once Heraldry.ensure_all runs.
 
 
+## Apply New Game setup: create lords, shuffle onto provinces, leftover → councils.
+## Falls back to dummy_player_data() when no pending setup (editor run).
+func apply_game_setup() -> void:
+	players.clear()
+	if not GlobalSet.has_pending_game_setup():
+		dummy_player_data()
+		_mark_unowned_beyond_player_ids()
+		return
+
+	var slots: Array = GlobalSet.pending_game_setup.get("slots", [])
+	GlobalSet.clear_pending_game_setup()
+	if slots.is_empty():
+		dummy_player_data()
+		_mark_unowned_beyond_player_ids()
+		return
+
+	var start_marks := GlobalUnits.PROVINCE_START_MARKS
+	var human_indices: Array = []
+	for i in slots.size():
+		var slot: Dictionary = slots[i]
+		var is_human := str(slot.get("type", "human")) == "human"
+		var ptype = GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL if is_human \
+			else GlobalStuff.PLAYER_TYPE.AI
+		var gd := {"marks": start_marks, "people": 0}
+		if not is_human:
+			var doctrine := str(slot.get("ai_doctrine", LordAI.DOCTRINE_DEFENSE))
+			if doctrine != LordAI.DOCTRINE_OFFENSE:
+				doctrine = LordAI.DOCTRINE_DEFENSE
+			gd["ai_doctrine"] = doctrine
+		var p := GlobalStuff.PlayerData.new(
+			i, ptype, 1, 0, str(slot.get("name", "Lord")), gd
+		)
+		var h = slot.get("heraldry", {})
+		if h is Dictionary and Heraldry.is_set(h):
+			p.heraldry = Heraldry.normalize(h)
+		players[i] = p
+		if is_human:
+			human_indices.append(i)
+
+	# Randomize hotseat turn order among humans (local_slot).
+	human_indices.shuffle()
+	for slot_i in human_indices.size():
+		players[human_indices[slot_i]].local_slot = slot_i
+
+	_assign_setup_players_to_provinces()
+
+
+func _mark_unowned_beyond_player_ids() -> void:
+	## Editor fallback: keep authored ownership for known players; rest → unowned.
+	for prov in provinces.get_children():
+		if not players.has(int(prov.player_owner)):
+			prov.player_owner = GlobalStuff.UNOWNED_PLAYER
+			prov.home_province = false
+
+
+func _assign_setup_players_to_provinces() -> void:
+	var prov_list: Array = provinces.get_children()
+	if prov_list.is_empty():
+		return
+	prov_list.shuffle()
+	var pids: Array = players.keys()
+	pids.sort()
+	var n := mini(pids.size(), prov_list.size())
+	for i in prov_list.size():
+		var prov = prov_list[i]
+		if i < n:
+			var pid: int = int(pids[i])
+			prov.player_owner = pid
+			prov.home_province = true
+		else:
+			prov.player_owner = GlobalStuff.UNOWNED_PLAYER
+			prov.home_province = false
+
+
 func _ready() -> void:
-	dummy_player_data()
+	apply_game_setup()
 	spawn_local_councils()
 	Heraldry.ensure_all(players)
 	update_player_data.rpc(players)
@@ -153,6 +236,9 @@ func _ready() -> void:
 	LordAI.tick_all(self)
 	mark_auto_turn_players_ended()
 	set_players_turn()
+	update_players_population()
+	record_year_sample_if_needed(true)
+	call_deferred("_check_solo_or_opening_win")
 
 
 func initialize_map() -> void:	
@@ -7768,6 +7854,8 @@ func restore_ended_turn_players():
 	for p : GlobalStuff.PlayerData in players.values():
 		if GlobalStuff.is_auto_turn_player(p.type):
 			p.ended_turn = true
+		elif int(p.status) != int(GlobalStuff.PLAYER_STATUS.PLAYING):
+			p.ended_turn = true
 		else:
 			p.ended_turn = false
 	
@@ -7814,6 +7902,12 @@ func end_turn():
 
 @rpc("authority", "call_local", "reliable")
 func calculate_new_turn_game_data():
+	if game_outcome_done:
+		return
+	# Season already bumped — evaluate campaign win/loss at the start of the new season.
+	evaluate_campaign_outcome()
+	if game_outcome_done:
+		return
 	assign_players_home_provinces()
 	reset_all_army_movement()
 	tick_all_force_seasons()
@@ -7843,6 +7937,8 @@ func calculate_new_turn_game_data():
 	update_visuals_and_stats()
 	province_borders.rebuild()
 	build_province_neighbors()
+	record_year_sample_if_needed(false)
+	persist_score_state()
 
 
 ## Spawn a LOCAL_COUNCIL player for every map-authored unowned province (`player_owner == -1`).
@@ -8161,9 +8257,16 @@ func _make_civilian_food_event(player_id: int, entries: Array) -> void:
 	
 func set_players_turn():
 	# set the first players for the turn on each client
+	var peers_done := {}
 	for p : GlobalStuff.PlayerData in players.values():
-		var next_player_id = get_starting_player_for_peer(p.owner_peer_id).player_id
-		switch_to_player.rpc_id(p.owner_peer_id, next_player_id)
+		var peer_id := int(p.owner_peer_id)
+		if peers_done.has(peer_id):
+			continue
+		peers_done[peer_id] = true
+		var next_p = get_starting_player_for_peer(peer_id)
+		if next_p == null:
+			continue
+		switch_to_player.rpc_id(peer_id, next_p.player_id)
 
 func get_starting_player_for_peer(peer_id:int) -> GlobalStuff.PlayerData:
 	var selected : GlobalStuff.PlayerData = null
@@ -8269,6 +8372,202 @@ func refresh_army_labels() -> void:
 
 func current_year() -> int:
 	return START_YEAR + int(turn) / 4
+
+
+## --- Campaign win / loss / score history ------------------------------------
+
+func export_score_state() -> Dictionary:
+	return {
+		"stats_history": stats_history.duplicate(true),
+		"landless_seasons": landless_seasons.duplicate(true),
+		"endless_solo": endless_solo,
+		"game_outcome_done": game_outcome_done,
+		"players_meta": GameScore.player_meta(self),
+		"year": current_year(),
+		"turn": turn,
+		"season": int(season),
+	}
+
+
+func persist_score_state() -> void:
+	ContinueGame.save_score_state(export_score_state())
+
+
+func record_year_sample_if_needed(force: bool = false) -> void:
+	# Sample once per calendar year (winter / year rollover) and at game start.
+	if not force and int(season) != int(SEASONS.WINTER):
+		return
+	var year := current_year()
+	if not stats_history.is_empty():
+		var last: Dictionary = stats_history[stats_history.size() - 1]
+		if int(last.get("year", -1)) == year and not force:
+			return
+		# force at start: still skip duplicate year
+		if int(last.get("year", -1)) == year:
+			stats_history[stats_history.size() - 1] = GameScore.sample_year(self, year)
+			persist_score_state()
+			return
+	stats_history.append(GameScore.sample_year(self, year))
+	persist_score_state()
+
+
+func _check_solo_or_opening_win() -> void:
+	if game_outcome_done:
+		return
+	if GameScore.count_campaign_lords(self) <= 1:
+		_show_solo_endless_prompt()
+		return
+	# Opening: win check only (do not start landless clocks before season 1 ends).
+	_check_campaign_win()
+
+
+func _show_solo_endless_prompt() -> void:
+	if _solo_prompt != null and is_instance_valid(_solo_prompt):
+		_solo_prompt.queue_free()
+	_solo_prompt = ConfirmationDialog.new()
+	_solo_prompt.title = "No rivals"
+	_solo_prompt.dialog_text = (
+		"You are the only lord on this map.\n"
+		+ "Claim victory and view the score, or continue playing with no win condition "
+		+ "(you can still lose)."
+	)
+	_solo_prompt.ok_button_text = "Continue playing"
+	_solo_prompt.cancel_button_text = "Victory & score"
+	_solo_prompt.confirmed.connect(_on_solo_continue_playing)
+	_solo_prompt.canceled.connect(_on_solo_take_victory)
+	add_child(_solo_prompt)
+	_solo_prompt.popup_centered()
+
+
+func _on_solo_continue_playing() -> void:
+	endless_solo = true
+	persist_score_state()
+
+
+func _on_solo_take_victory() -> void:
+	endless_solo = false
+	var winners: Array = []
+	if players.has(my_pl_id) and GameScore.is_campaign_lord(players[my_pl_id]):
+		winners = [int(my_pl_id)]
+	else:
+		winners = GameScore.current_winners(self)
+	_finish_campaign("victory", winners, "No rival lords remained.")
+
+
+func evaluate_campaign_outcome() -> void:
+	if game_outcome_done:
+		return
+	update_players_population()
+	var newly_defeated: Array = []
+	for pid in players.keys():
+		var id := int(pid)
+		var p = players[id]
+		if not GameScore.is_playing_lord(p):
+			continue
+		if GameScore.is_landless(self, id):
+			landless_seasons[id] = int(landless_seasons.get(id, 0)) + 1
+		else:
+			landless_seasons[id] = 0
+		var landless_lose := int(landless_seasons.get(id, 0)) >= GameScore.LANDLESS_SEASONS_TO_LOSE
+		var wiped := GameScore.is_wipeout(self, id)
+		if landless_lose or wiped:
+			_defeat_player(id, wiped)
+			newly_defeated.append(id)
+	if not newly_defeated.is_empty():
+		update_player_data.rpc(players)
+		persist_score_state()
+		# Any local human eliminated → score screen for that lord.
+		for id in newly_defeated:
+			if not players.has(id):
+				continue
+			var hp = players[id]
+			if int(hp.type) != int(GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL):
+				continue
+			my_pl_id = id
+			var reason := "Your realm was destroyed."
+			if int(landless_seasons.get(id, 0)) >= GameScore.LANDLESS_SEASONS_TO_LOSE:
+				reason = "You held no province for 4 years."
+			_finish_campaign("defeat", [], reason)
+			return
+	_check_campaign_win()
+
+
+func _check_campaign_win() -> void:
+	if game_outcome_done or endless_solo:
+		return
+	var winners := GameScore.current_winners(self)
+	if winners.is_empty():
+		return
+	var local_wins := winners.has(int(my_pl_id))
+	if not local_wins:
+		for wid in winners:
+			if players.has(wid) \
+					and int(players[wid].type) == int(GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL):
+				my_pl_id = int(wid)
+				local_wins = true
+				break
+	if local_wins or not _has_playing_local_human():
+		var names: PackedStringArray = []
+		for wid in winners:
+			if players.has(wid):
+				names.append(str(players[wid].name_))
+		var sub := "The realm is yours."
+		if names.size() > 1:
+			sub = "Shared victory: %s." % ", ".join(names)
+		elif names.size() == 1:
+			sub = "%s stands unopposed." % names[0]
+		_finish_campaign("victory", winners, sub)
+
+
+func _has_playing_local_human() -> bool:
+	for pid in players.keys():
+		var p = players[pid]
+		if int(p.type) != int(GlobalStuff.PLAYER_TYPE.HUMAN_LOCAL):
+			continue
+		if int(p.status) != int(GlobalStuff.PLAYER_STATUS.PLAYING):
+			continue
+		return true
+	return false
+
+
+func _defeat_player(pid: int, _wiped: bool) -> void:
+	if not players.has(pid):
+		return
+	var p = players[pid]
+	if int(p.status) == int(GlobalStuff.PLAYER_STATUS.DEFEATED):
+		return
+	p.status = GlobalStuff.PLAYER_STATUS.DEFEATED
+	p.ended_turn = true
+	# Drop alliances involving the defeated lord.
+	if alliances.has(pid):
+		var allies: Array = alliances[pid].duplicate()
+		for aid in allies:
+			_remove_ally(int(aid), pid)
+			_remove_ally(pid, int(aid))
+
+
+func _finish_campaign(outcome: String, winner_pids: Array, subtitle: String) -> void:
+	if game_outcome_done:
+		return
+	game_outcome_done = true
+	# Final year sample so the graph includes the end state.
+	record_year_sample_if_needed(true)
+	persist_score_state()
+	_show_score_screen(outcome, winner_pids, subtitle)
+
+
+func _show_score_screen(outcome: String, winner_pids: Array, subtitle: String) -> void:
+	if _score_screen != null and is_instance_valid(_score_screen):
+		_score_screen.queue_free()
+	_score_screen = SCORE_SCREEN_SCRIPT.new()
+	add_child(_score_screen)
+	_score_screen.setup(
+		stats_history,
+		GameScore.player_meta(self),
+		outcome,
+		subtitle,
+		winner_pids
+	)
 
 
 func update_gui():

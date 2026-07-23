@@ -9,8 +9,13 @@ static func tick_all(base_map: Node) -> void:
 	if base_map == null or base_map.get("players") == null:
 		return
 	var players: Dictionary = base_map.players
-	for pid in players.keys():
+	var pids: Array = players.keys()
+	for pid in pids:
+		if not players.has(pid):
+			continue
 		var p = players[pid]
+		if p == null:
+			continue
 		if not GlobalStuff.is_local_council(p.type):
 			continue
 		var prov := _province_for_council(base_map, int(pid))

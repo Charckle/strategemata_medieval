@@ -10,9 +10,7 @@ func _on_continue_btn_pressed() -> void:
 	pass
 
 func _on_new_game_btn_pressed() -> void:
-	# TODO: start new game scene
-	# get_tree().change_scene_to_file("res://path/to/game_scene.tscn")
-	pass
+	main_menu._on_new_game_btn_pressed()
 
 func _on_load_game_btn_pressed() -> void:
 	# TODO: open load game UI or scene
