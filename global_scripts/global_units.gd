@@ -45,13 +45,29 @@ const CASTLE_INSIDE_BONUS := 3.0
 const CASTLE_OUTSIDE_BATTLE_BONUS := 1.2
 # Max siege-engine level an army can build while Sieging a castle.
 const SIEGE_MAX_LEVEL := 3
+# Minimum engines before a castle assault is allowed (blocks same-season takes).
+const SIEGE_ASSAULT_MIN_LEVEL := 1
 # Inside bonus by attacker siege-engine level (0 = none … 3 = complete).
 const SIEGE_INSIDE_BONUS := [5.0, 4.0, 3.0, 2.5]
+## Full-engines inside bonus while the defending castle is mid-upgrade (works penalty).
+## Whole ladder is scaled by this / SIEGE_INSIDE_BONUS[max].
+const SIEGE_INSIDE_BONUS_WORKS_MAX := 1.8
 
 
-func siege_inside_bonus(level: int) -> float:
+func siege_inside_bonus(level: int, works_penalty: bool = false) -> float:
 	var i := clampi(level, 0, SIEGE_MAX_LEVEL)
-	return float(SIEGE_INSIDE_BONUS[i])
+	var base := float(SIEGE_INSIDE_BONUS[i])
+	if not works_penalty:
+		return base
+	var full := float(SIEGE_INSIDE_BONUS[SIEGE_MAX_LEVEL])
+	if full <= 0.0:
+		return base
+	return base * (SIEGE_INSIDE_BONUS_WORKS_MAX / full)
+
+
+## Display / listing inside multiplier (siege level 2 equivalent), with works scale.
+func castle_inside_list_bonus(works_penalty: bool = false) -> float:
+	return siege_inside_bonus(2, works_penalty)
 
 # Minimum men that must remain in both the original and the split-off army.
 const MIN_SPLIT_MEN := 20
@@ -146,6 +162,9 @@ const UPKEEP_CLEAR_PAYS := GameBalance.UPKEEP_CLEAR_PAYS
 const UPKEEP_DESERT_FRACTION := GameBalance.UPKEEP_DESERT_FRACTION
 const WAGE_CAPTURE_MIN := GameBalance.WAGE_CAPTURE_MIN
 const WAGE_CAPTURE_MAX := GameBalance.WAGE_CAPTURE_MAX
+const AI_EARLY_HOLDINGS_MAX := GameBalance.AI_EARLY_HOLDINGS_MAX
+const AI_EARLY_UPKEEP_MULT := GameBalance.AI_EARLY_UPKEEP_MULT
+const AI_EARLY_WALLET_INCOME_MULT := GameBalance.AI_EARLY_WALLET_INCOME_MULT
 
 # Economy knobs live in GameBalance (global_scripts/game_balance.gd) — edit there.
 const FOOD_GRAIN_PER_MAN_MOBILE := GameBalance.FOOD_GRAIN_PER_MAN_MOBILE
@@ -253,10 +272,12 @@ const PROVINCE_START_MACES := GameBalance.PROVINCE_START_MACES
 const PROVINCE_START_PIKES := GameBalance.PROVINCE_START_PIKES
 const PROVINCE_START_BOWS := GameBalance.PROVINCE_START_BOWS
 
-# Local council AI targets (town garrison only).
+# Local council / lord AI town garrison targets (with iron mine).
 const COUNCIL_TARGET_MACEMEN := 100
 const COUNCIL_TARGET_PIKEMEN := 100
 const COUNCIL_TARGET_ARCHERS := 100
+## Council without a built iron mine: archers only (garrison + rebuild stock).
+const COUNCIL_TARGET_ARCHERS_NO_IRON := 300
 
 # Labor category keys shared by fields + economy + castle construction.
 # Order is the fixed tie-break when priorities match (and when manuals compete).
@@ -273,7 +294,6 @@ const ECONOMY_STONE_PER_WORKER := GameBalance.ECONOMY_STONE_PER_WORKER
 const ECONOMY_IRON_PER_WORKER := GameBalance.ECONOMY_IRON_PER_WORKER
 const ECONOMY_SILVER_MARKS_PER_WORKER := GameBalance.ECONOMY_SILVER_MARKS_PER_WORKER
 
-const SETTLEMENT_MARKS_POP_RATE := GameBalance.SETTLEMENT_MARKS_POP_RATE
 const SETTLEMENT_TIER_MARKS_BONUS := GameBalance.SETTLEMENT_TIER_MARKS_BONUS
 const TOWN_TIER_POP_MAX := GameBalance.TOWN_TIER_POP_MAX
 const VILLAGE_TIER_POP_MAX := GameBalance.VILLAGE_TIER_POP_MAX
@@ -305,10 +325,6 @@ func economy_workers_for(subtype: int, stage_index: int) -> int:
 	if stage_index < 0 or stage_index >= caps.size():
 		return int(caps[0]) if not caps.is_empty() else 50
 	return int(caps[stage_index])
-
-
-func settlement_base_marks(population: int) -> int:
-	return int(ceil(float(maxi(0, population)) * SETTLEMENT_MARKS_POP_RATE))
 
 
 ## Adjust a settlement's pop delta when over its soft cap.
@@ -360,13 +376,6 @@ func settlement_tier_marks_bonus(tier_index: int) -> float:
 	if tier_index < 0 or tier_index >= SETTLEMENT_TIER_MARKS_BONUS.size():
 		return 0.0
 	return float(SETTLEMENT_TIER_MARKS_BONUS[tier_index])
-
-
-## Base marks plus that settlement's tier bonus (bonus is % of base only).
-func settlement_marks_with_tier_bonus(base_marks: int, tier_index: int) -> int:
-	var base := maxi(0, base_marks)
-	var bonus := settlement_tier_marks_bonus(tier_index)
-	return base + int(floor(float(base) * bonus))
 
 
 func castle_holding_marks_bonus(castle_type: int) -> float:
@@ -1121,6 +1130,20 @@ func levy_happiness_penalty(levied_total: int, season_start_pop: int) -> float:
 	return maxf(0.0, (pct - free_pct) * LEVY_HAPPINESS_PER_PERCENT)
 
 
+## Seasons of draw until harvest lands (leaving autumn → winter).
+## Winter=4, Spring=3, Summer=2, Autumn=1.
+func seasons_until_next_harvest(season: int) -> int:
+	match clampi(season, 0, 3):
+		0:
+			return 4
+		1:
+			return 3
+		2:
+			return 2
+		_:
+			return 1
+
+
 func clamp_ration(level: int) -> int:
 	return clampi(level, RATION.NONE, RATION.QUADRUPLE)
 
@@ -1201,8 +1224,8 @@ func tax_name(level: int) -> String:
 	return "Normal"
 
 
-func tax_marks_per_person(level: int) -> int:
-	return int(TAX_MARKS_PER_PERSON.get(clamp_tax(level), 1))
+func tax_marks_per_person(level: int) -> float:
+	return float(TAX_MARKS_PER_PERSON.get(clamp_tax(level), 1.0))
 
 
 func tax_happiness_delta(level: int) -> float:
@@ -1216,9 +1239,9 @@ func tax_pop_fraction(level: int) -> float:
 ## Raw tax marks for one settlement this season at `level` (ceil), before tier %.
 func tax_marks_for_settlement(population: int, level: int) -> int:
 	var rate := tax_marks_per_person(level)
-	if rate <= 0 or population <= 0:
+	if rate <= 0.0 or population <= 0:
 		return 0
-	return int(ceili(float(population) * float(rate)))
+	return int(ceili(float(population) * rate))
 
 
 ## Raw tax base + floor(base × tier_bonus_fraction).

@@ -87,7 +87,7 @@ func _find_building_of_type(container: Node, btype: int) -> Node:
 
 
 func _is_seat_destroyed(building: Node) -> bool:
-	# Empty / under-construction castle plots are not a usable seat.
+	# Empty / empty-build / dismantle plots are not a usable seat (mid-upgrade still is).
 	if building == null:
 		return true
 	if bool(building.get_meta("seat_destroyed", false)):
@@ -1125,6 +1125,12 @@ func get_holding_summary(player_id: int, season: int) -> Dictionary:
 	var ration_info := preview_holding_rations(player_id)
 	var tax_prev := _preview_holding_tax(player_id)
 	var foals_prev := preview_foals_for_holding(player_id)
+	var harvest_forecast := preview_grain_until_harvest(player_id, season, ration_info)
+	var effective_ration := int(ration_info.get("effective", GlobalUnits.RATION_DEFAULT))
+	var happy_delta := (
+		GlobalUnits.ration_happiness_delta(effective_ration)
+		+ GlobalUnits.tax_happiness_delta(get_holding_tax(player_id))
+	)
 	return {
 		"population": owned_settlement_population(player_id),
 		"labor_assigned": total_labor_assigned(player_id),
@@ -1167,7 +1173,11 @@ func get_holding_summary(player_id: int, season: int) -> Dictionary:
 		"ration_grain_available": int(ration_info.get("available_for_people", 0)),
 		"seed_reserve": int(ration_info.get("seed_reserve", 0)),
 		"army_grain_need": int(ration_info.get("army_need", 0)),
+		"grain_need_until_harvest": int(harvest_forecast.get("need", 0)),
+		"grain_until_harvest_ok": bool(harvest_forecast.get("ok", true)),
+		"seasons_until_harvest": int(harvest_forecast.get("seasons", 1)),
 		"happiness": average_settlement_happiness(player_id),
+		"happiness_delta_next": happy_delta,
 		"tax": get_holding_tax(player_id),
 		"tax_marks_stored": holding_tax_marks_stored(player_id),
 		"tax_marks_next": int(tax_prev.get("total", 0)),
@@ -1250,6 +1260,31 @@ func transfer_remaining_holding_stock(from_pid: int, to_pid: int) -> void:
 		holdings[to_pid]["grain_potential"] = float(holdings[to_pid].get("grain_potential", 0.0)) + pot
 
 
+## Grain needed to hold requested rations + current army draw until harvest,
+## plus seed for currently planted grain fields (next sow). Compared to stock.
+func preview_grain_until_harvest(
+	player_id: int, season: int, ration_info: Dictionary = {}
+) -> Dictionary:
+	var info := ration_info
+	if info.is_empty():
+		info = preview_holding_rations(player_id)
+	var seasons := GlobalUnits.seasons_until_next_harvest(season)
+	var promised := int(info.get("promised_need", 0))
+	var army := int(info.get("army_need", 0))
+	var seed := count_planted_grain_fields(player_id) * GlobalUnits.GRAIN_SEED_PER_FIELD
+	var need := (promised + army) * seasons + seed
+	var stock := int(info.get("stock", get_player_grain(player_id)))
+	return {
+		"seasons": seasons,
+		"promised_per_season": promised,
+		"army_per_season": army,
+		"seed": seed,
+		"need": need,
+		"stock": stock,
+		"ok": need <= stock,
+	}
+
+
 ## Forecast grain split: seed reserve → local forces → civilians at requested ration.
 ## `army_need` comes from base_map when available (0 otherwise; cargo-first forces
 ## only count province shortfall).
@@ -1324,6 +1359,8 @@ func tick_holding_rations(player_id: int, rng: RandomNumberGenerator = null) -> 
 	var wallet_pay := 0
 	var raw_base_sum := 0
 	var new_pop := 0
+	# Ration/tax deltas before overflow pressure (inbox only for player-caused shrink).
+	var base_delta_sum := 0
 	for s in owned:
 		var can_grow = (
 			not s.has_method("can_receive_ration_growth") or s.can_receive_ration_growth()
@@ -1348,10 +1385,11 @@ func tick_holding_rations(player_id: int, rng: RandomNumberGenerator = null) -> 
 			new_pop += int(s.population)
 			continue
 		var pop_now := int(s.population)
-		var delta := GlobalUnits.population_delta_from_fraction(pop_now, pop_frac)
+		var base_delta := GlobalUnits.population_delta_from_fraction(pop_now, pop_frac)
+		base_delta_sum += base_delta
 		var cap_jit: Vector2i = GlobalUnits.settlement_pop_cap_and_jitter(s)
-		delta = GlobalUnits.settlement_overflow_adjusted_delta(
-			pop_now, delta, int(cap_jit.x), int(cap_jit.y), rng
+		var delta := GlobalUnits.settlement_overflow_adjusted_delta(
+			pop_now, base_delta, int(cap_jit.x), int(cap_jit.y), rng
 		)
 		s.predicted_growth = delta
 		s.population = maxi(0, pop_now + delta)
@@ -1359,7 +1397,13 @@ func tick_holding_rations(player_id: int, rng: RandomNumberGenerator = null) -> 
 
 	if auto_wallet:
 		wallet_pay += _castle_tax_bonus(player_id, raw_base_sum)
-		_add_player_marks(player_id, wallet_pay)
+		var paid := wallet_pay
+		if (
+			base_map != null
+			and base_map.has_method("get_player_wallet_income_paid")
+		):
+			paid = int(base_map.get_player_wallet_income_paid(player_id, wallet_pay))
+		_add_player_marks(player_id, paid)
 
 	update_population_in_resources()
 	# Pop grew or shrank — refill by labor priorities.
@@ -1369,7 +1413,8 @@ func tick_holding_rations(player_id: int, rng: RandomNumberGenerator = null) -> 
 	reallocate_labor_by_priority(player_id, season)
 
 	var dropped := old_pop - new_pop
-	if dropped <= 0:
+	# Overflow soft-cap flux is normal — only inbox when ration/tax alone would shrink.
+	if dropped <= 0 or base_delta_sum >= 0:
 		return {}
 	return {
 		"province_name": str(p_name),
@@ -2109,6 +2154,35 @@ func get_status_name_for_viewer(viewer_id: int = NO_DEFACTO) -> String:
 	return get_status_name()
 
 
+## Dev/admin: split `amount` evenly across all settlements (may exceed tier caps; floor at 0).
+func admin_add_population(amount: int) -> void:
+	if amount == 0 or settlements == null:
+		return
+	var list: Array = []
+	for s in settlements.get_children():
+		if s.get("population") != null:
+			list.append(s)
+	var n := list.size()
+	if n <= 0:
+		return
+	var remaining := amount
+	for i in n:
+		var s: Node = list[i]
+		var share := remaining / (n - i)
+		remaining -= share
+		s.population = maxi(0, int(s.population) + share)
+		if s.has_method("refresh_visual_stage"):
+			s.refresh_visual_stage()
+	update_population_in_resources()
+	season_start_population = int(resources["population"]["has"].get("all", 0))
+	var dej := int(dejure) if dejure != null else -1
+	if dej >= 0:
+		var season := 0
+		if base_map != null and base_map.get("season") != null:
+			season = int(base_map.season)
+		clamp_all_labor(dej, season)
+
+
 ## Dev/admin dump: rations, grain, labor, pop, garrison for every holding controller.
 func get_admin_report(players_dict: Dictionary = {}) -> String:
 	var season := 0
@@ -2177,14 +2251,40 @@ func get_admin_report(players_dict: Dictionary = {}) -> String:
 				int(ration_info.get("promised_need", 0)),
 			]
 		)
+		var tax_prev_admin := _preview_holding_tax(ipid)
+		var wallet_face := int(tax_prev_admin.get("wallet", 0))
+		var wallet_line := "tax next wallet=%d" % wallet_face
+		if (
+			wallet_face > 0
+			and base_map != null
+			and base_map.has_method("player_ai_early_boost_active")
+			and base_map.player_ai_early_boost_active(ipid)
+			and base_map.has_method("get_player_wallet_income_paid")
+		):
+			var wallet_real := int(base_map.get_player_wallet_income_paid(ipid, wallet_face))
+			wallet_line += " (cheat real: %d)" % wallet_real
 		lines.append(
-			"tax=%s  holding_pop=%d  marks_treasury=%s"
+			"tax=%s  holding_pop=%d  marks_treasury=%s  %s"
 			% [
 				GlobalUnits.tax_name(get_holding_tax(ipid)),
 				owned_settlement_population(ipid),
 				str(int(players_dict[ipid].game_data.get("marks", 0))) if players_dict.has(ipid) else "?",
+				wallet_line,
 			]
 		)
+		if (
+			base_map != null
+			and base_map.has_method("get_player_upkeep_preview")
+			and base_map.has_method("get_player_upkeep_owed")
+			and base_map.has_method("player_ai_early_boost_active")
+			and base_map.player_ai_early_boost_active(ipid)
+		):
+			var up_face := int(base_map.get_player_upkeep_preview(ipid).get("total", 0))
+			var up_real := int(base_map.get_player_upkeep_owed(ipid))
+			if up_face != up_real:
+				lines.append(
+					"army upkeep projected=%d (cheat real: %d)" % [up_face, up_real]
+				)
 		var labor_bits: PackedStringArray = []
 		for cat in GlobalUnits.LABOR_CATEGORIES:
 			var n := get_labor_category(ipid, cat)
@@ -2192,19 +2292,11 @@ func get_admin_report(players_dict: Dictionary = {}) -> String:
 				labor_bits.append("%s=%d" % [cat, n])
 		lines.append("labor: " + (", ".join(labor_bits) if not labor_bits.is_empty() else "(none)"))
 		lines.append(
-			"fields grain_planted=%d unsown=%d  wood=%d iron=%d"
-			% [
-				count_planted_grain_fields(ipid),
-				count_unsown_grain_fields(ipid),
-				get_player_material(ipid, "wood"),
-				get_player_material(ipid, "iron"),
-			]
+			"fields grain_planted=%d unsown=%d"
+			% [count_planted_grain_fields(ipid), count_unsown_grain_fields(ipid)]
 		)
-		var w := get_weapons_for(ipid)
-		lines.append(
-			"weapons maces=%d pikes=%d bows=%d swords=%d"
-			% [int(w.get("maces", 0)), int(w.get("pikes", 0)), int(w.get("bows", 0)), int(w.get("swords", 0))]
-		)
+		lines.append_array(admin_stock_lines(ipid))
+		lines.append_array(admin_building_lines(ipid))
 		# Per-settlement pop / happiness.
 		for s in get_owned_settlements(ipid):
 			var stype := "?"
@@ -2222,6 +2314,84 @@ func get_admin_report(players_dict: Dictionary = {}) -> String:
 			)
 		lines.append("")
 	return "\n".join(lines)
+
+
+## Full material + arms stock for one holding (admin / AI debug).
+func admin_stock_lines(player_id: int) -> PackedStringArray:
+	var lines: PackedStringArray = []
+	var mat_bits: PackedStringArray = []
+	for k in GlobalUnits.MATERIAL_KEYS:
+		mat_bits.append("%s=%d" % [k, get_player_material(player_id, k)])
+	lines.append("materials: " + ", ".join(mat_bits))
+	var w := get_weapons_for(player_id)
+	var arm_bits: PackedStringArray = []
+	for k in GlobalUnits.WEAPON_KEYS:
+		arm_bits.append("%s=%d" % [k, int(w.get(k, 0))])
+	lines.append("arms: " + ", ".join(arm_bits))
+	return lines
+
+
+## Castle works + economy pads + blacksmith craft preview for one holding.
+func admin_building_lines(player_id: int) -> PackedStringArray:
+	var lines: PackedStringArray = []
+	# Castle works are driven by de jure labor / materials.
+	if int(dejure) == player_id:
+		var castle = get_castle_plot()
+		if castle == null:
+			lines.append("castle: (no plot)")
+		elif castle.has_method("construction_summary"):
+			lines.append("castle: " + str(castle.construction_summary()))
+		elif castle.has_method("is_under_construction") and castle.is_under_construction():
+			lines.append("castle: under construction")
+		elif castle.has_method("get_castle_type_name"):
+			lines.append("castle: %s" % str(castle.get_castle_type_name()))
+
+	var econ_bits: PackedStringArray = []
+	if economy != null:
+		var pads: Array = economy.get_children()
+		pads.sort_custom(func(a, b): return String(a.name) < String(b.name))
+		for b in pads:
+			if b.get("type_") == null or int(b.type_) != GlobalStuff.BUILDING_TYPE.ECONOMY:
+				continue
+			if b.get("player_owner") == null or int(b.player_owner) != player_id:
+				continue
+			var label := str(b.name)
+			if b.has_method("is_built") and b.is_built():
+				if b.has_method("get_subtype_name"):
+					var stage_n = b.get_stage_name() if b.has_method("get_stage_name") else "?"
+					label = "%s (%s)" % [b.get_subtype_name(), stage_n]
+				if b.has_method("is_blacksmith") and b.is_blacksmith() and b.has_method("get_craft_weapon"):
+					var wkey := str(b.get_craft_weapon())
+					if wkey != "":
+						label += " → %s" % GlobalUnits.weapon_name(wkey)
+			elif b.has_method("get_slot_description"):
+				label = str(b.get_slot_description())
+			else:
+				label = "empty pad"
+			econ_bits.append(label)
+	if econ_bits.is_empty():
+		lines.append("economy: (none owned)")
+	else:
+		lines.append("economy: " + "; ".join(econ_bits))
+
+	var preview := preview_economy_output(player_id)
+	var craft_w: Dictionary = preview.get("weapons", {})
+	if GlobalUnits.weapon_stock_has_any(craft_w):
+		lines.append(
+			"crafting next season: %s (wood_cost=%d iron_cost=%d)"
+			% [
+				GlobalUnits.weapon_stock_summary(craft_w),
+				int(preview.get("wood_cost", 0)),
+				int(preview.get("iron_cost", 0)),
+			]
+		)
+	elif get_labor_category(player_id, "blacksmith") > 0:
+		var bottleneck := str(preview.get("blacksmith", {}).get("bottleneck", ""))
+		if bottleneck != "":
+			lines.append("crafting next season: (none) bottleneck=%s" % bottleneck)
+		else:
+			lines.append("crafting next season: (none)")
+	return lines
 
 
 func _admin_troops_lines(players_dict: Dictionary) -> PackedStringArray:

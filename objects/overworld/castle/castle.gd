@@ -27,7 +27,8 @@ const INSIDE_CAPACITY := {
 
 var base_map: Node = null
 
-# Construction project (offline worksite while active).
+# Construction project. Empty-build / dismantle = offline worksite.
+# Upgrade = still fightable at old level (weaker inside bonus, half marks).
 var project_active: bool = false
 ## Target CASTLE_TYPE, or GlobalUnits.CASTLE_TARGET_EMPTY for dismantle-to-empty.
 var project_target: int = GlobalUnits.CASTLE_TARGET_EMPTY
@@ -66,7 +67,7 @@ func _ensure_peak_watermark() -> void:
 func get_inside_capacity() -> int:
 	if not is_operational():
 		return 0
-	return INSIDE_CAPACITY.get(castle_type, 0)
+	return INSIDE_CAPACITY.get(effective_level() as CASTLE_TYPE, 0)
 
 func get_outside_capacity() -> int:
 	return get_inside_capacity() * 2
@@ -87,7 +88,15 @@ func is_under_construction() -> bool:
 	return project_active
 
 
+## Mid-project upgrade of a standing castle (not empty→build, not dismantle).
+func is_upgrade_project() -> bool:
+	return project_active and project_base_level >= 0 and project_target >= 0
+
+
+## Finished standing castle, or mid-upgrade of one (garrison / attack / seat).
 func is_operational() -> bool:
+	if is_upgrade_project():
+		return true
 	return has_castle and not project_active
 
 
@@ -95,11 +104,21 @@ func is_army_interactable() -> bool:
 	return is_operational()
 
 
-## Holding-wide marks bonus fraction on Σ settlement base. Mid-build / empty = 0.
+## Level used for capacity / marks / display while fightable.
+func effective_level() -> int:
+	if is_upgrade_project():
+		return project_base_level
+	return standing_level()
+
+
+## Holding-wide marks on Σ settlement base. Upgrade works = half old; empty/dismantle = 0.
 func holding_marks_bonus_fraction() -> float:
 	if not is_operational():
 		return 0.0
-	return GlobalUnits.castle_holding_marks_bonus(int(castle_type))
+	var frac := GlobalUnits.castle_holding_marks_bonus(effective_level())
+	if is_upgrade_project():
+		return frac * 0.5
+	return frac
 
 
 func standing_level() -> int:
@@ -393,7 +412,7 @@ func apply_retarget_state(new_target: int, preview: Dictionary) -> void:
 	project_work_needed = int(preview.get("work_needed", 0))
 	materials_on_site = (preview.get("materials_after", materials_on_site) as Dictionary).duplicate()
 	_pending_refund = (preview.get("refund_on_complete", {"wood": 0, "stone": 0}) as Dictionary).duplicate()
-	# Offline while project runs; keep standing type for display when upgrading/dismantling.
+	# Keep standing type for capacity/display while upgrading/dismantling mid-project.
 	if project_base_level >= 0:
 		castle_type = project_base_level as CASTLE_TYPE
 	refresh_visuals()
@@ -451,6 +470,30 @@ func _finish_as_level(level: int, preview: Dictionary) -> void:
 	set_flags()
 
 
+## Dev/admin: instant set standing level (−1 = clear plot). No cost, no peak archers, cancels project.
+func admin_set_level(level: int) -> void:
+	_ensure_peak_watermark()
+	project_active = false
+	project_progress = 0
+	project_work_needed = 0
+	project_target = GlobalUnits.CASTLE_TARGET_EMPTY
+	project_base_level = GlobalUnits.CASTLE_TARGET_EMPTY
+	_pending_peak_archers = false
+	_pending_refund = {"wood": 0, "stone": 0}
+	if level < 0:
+		has_castle = false
+		materials_on_site = {"wood": 0, "stone": 0}
+	else:
+		level = clampi(level, 0, int(CASTLE_TYPE.CONCENTRIC_CASTLE))
+		has_castle = true
+		castle_type = level as CASTLE_TYPE
+		materials_on_site = GlobalUnits.castle_material_cost(level).duplicate()
+		if level > peak_completed_level:
+			peak_completed_level = level
+	refresh_visuals()
+	set_flags()
+
+
 func take_completion_refund() -> Dictionary:
 	var r := _pending_refund.duplicate()
 	_pending_refund = {"wood": 0, "stone": 0}
@@ -476,6 +519,9 @@ func construction_summary() -> String:
 		return "%s (operational)" % get_castle_type_name()
 	var tgt := "dismantle (empty)" if project_target < 0 else castle_type_display_name(project_target)
 	var seasons := seasons_to_complete(dejure_castle_labor())
-	return "Constructing %s — %d / %d work · ~%d seasons" % [
+	var base := "Constructing %s — %d / %d work · ~%d seasons" % [
 		tgt, project_progress, project_work_needed, seasons
 	]
+	if is_upgrade_project():
+		return "%s (holding as %s)" % [base, castle_type_display_name(project_base_level)]
+	return base

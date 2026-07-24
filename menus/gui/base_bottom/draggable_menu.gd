@@ -47,6 +47,11 @@ func _notification(what: int) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		if visible:
+			var hovered := get_viewport().gui_get_hovered_control()
+			if hovered != null and (hovered == self or is_ancestor_of(hovered)):
+				_bring_self_to_front()
 	if not _dragging:
 		return
 	if event is InputEventMouseMotion:

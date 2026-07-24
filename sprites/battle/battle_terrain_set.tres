@@ -1,0 +1,28 @@
+[gd_resource type="TileSet" format=3 uid="uid://dupj6xlluq587"]
+
+[ext_resource type="Texture2D" uid="uid://c0r8ffqhac2j0" path="res://sprites/battle/battle_terrain_atlas.png" id="1_atlas"]
+
+[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_battle"]
+texture = ExtResource("1_atlas")
+texture_region_size = Vector2i(32, 32)
+0:0/0 = 0
+0:0/0/custom_data_0 = true
+0:0/0/custom_data_1 = &"grass"
+1:0/0 = 0
+1:0/0/custom_data_1 = &"water"
+2:0/0 = 0
+2:0/0/custom_data_0 = true
+2:0/0/custom_data_1 = &"forest"
+3:0/0 = 0
+3:0/0/custom_data_1 = &"rock"
+4:0/0 = 0
+4:0/0/custom_data_0 = true
+4:0/0/custom_data_1 = &"hill"
+
+[resource]
+tile_size = Vector2i(32, 32)
+custom_data_layer_0/name = "walkable"
+custom_data_layer_0/type = 1
+custom_data_layer_1/name = "terrain"
+custom_data_layer_1/type = 21
+sources/0 = SubResource("TileSetAtlasSource_battle")

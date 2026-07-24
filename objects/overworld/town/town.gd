@@ -122,12 +122,6 @@ func population_tier() -> int:
 		_: return STAGES.SMALL
 
 
-func get_base_marks() -> int:
-	if stage == STAGES.RAZED:
-		return 0
-	return GlobalUnits.settlement_base_marks(int(population))
-
-
 func settlement_marks_bonus_fraction() -> float:
 	var tier := population_tier()
 	if tier == STAGES.RAZED:

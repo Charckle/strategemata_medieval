@@ -199,6 +199,18 @@ func apply_demolish() -> void:
 	set_flags()
 
 
+## Dev/admin: set built stage to SMALL/MEDIUM/BIG (no cost). Returns false if not built.
+func admin_set_stage(new_stage: int) -> bool:
+	if not is_built():
+		return false
+	if new_stage < int(STAGES.SMALL) or new_stage > int(STAGES.BIG):
+		return false
+	stage = new_stage as STAGES
+	update_for_stage()
+	set_flags()
+	return true
+
+
 func is_blacksmith() -> bool:
 	return is_built() and int(subtype) == int(SUBTYPES.BLACKSMITH)
 

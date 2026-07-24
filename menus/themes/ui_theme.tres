@@ -1,5 +1,23 @@
 [gd_resource type="Theme" format=3 uid="uid://cvosq8j7s57rc"]
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_window"]
+content_margin_left = 12.0
+content_margin_top = 12.0
+content_margin_right = 12.0
+content_margin_bottom = 12.0
+bg_color = Color(0.18, 0.12, 0.07, 0.98)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.05, 0.03, 0.015, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+shadow_color = Color(0, 0, 0, 0.45)
+shadow_size = 4
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_btn_disabled"]
 content_margin_left = 8.0
 content_margin_top = 4.0
@@ -83,6 +101,9 @@ shadow_color = Color(0, 0, 0, 0.45)
 shadow_size = 4
 
 [resource]
+AcceptDialog/styles/embedded_border = SubResource("StyleBoxFlat_window")
+AcceptDialog/styles/embedded_unfocused_border = SubResource("StyleBoxFlat_window")
+AcceptDialog/styles/panel = SubResource("StyleBoxFlat_window")
 Button/colors/font_color = Color(0.92, 0.84, 0.68, 1)
 Button/colors/font_disabled_color = Color(0.5, 0.42, 0.32, 1)
 Button/colors/font_hover_color = Color(1, 0.93, 0.75, 1)
@@ -91,9 +112,14 @@ Button/styles/disabled = SubResource("StyleBoxFlat_btn_disabled")
 Button/styles/hover = SubResource("StyleBoxFlat_btn_hover")
 Button/styles/normal = SubResource("StyleBoxFlat_btn_normal")
 Button/styles/pressed = SubResource("StyleBoxFlat_btn_pressed")
+ConfirmationDialog/styles/embedded_border = SubResource("StyleBoxFlat_window")
+ConfirmationDialog/styles/embedded_unfocused_border = SubResource("StyleBoxFlat_window")
+ConfirmationDialog/styles/panel = SubResource("StyleBoxFlat_window")
 Label/colors/font_color = Color(0.92, 0.84, 0.68, 1)
 Panel/styles/panel = SubResource("StyleBoxFlat_panel")
 PanelContainer/styles/panel = SubResource("StyleBoxFlat_panel")
 PopupPanel/styles/panel = SubResource("StyleBoxFlat_panel")
 TabContainer/colors/font_selected_color = Color(0.95, 0.86, 0.65, 1)
 TabContainer/colors/font_unselected_color = Color(0.7, 0.58, 0.4, 1)
+Window/styles/embedded_border = SubResource("StyleBoxFlat_window")
+Window/styles/embedded_unfocused_border = SubResource("StyleBoxFlat_window")

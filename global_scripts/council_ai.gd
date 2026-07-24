@@ -41,11 +41,12 @@ static func tick_province(base_map: Node, prov: Node, pid: int) -> void:
 	if base_map.has_method("apply_populate_idle_fields"):
 		base_map.apply_populate_idle_fields(province_id, 1, pid) # CROP.GRAIN
 
-	# 3) Build woodcutter then blacksmith on open plots.
+	# 3) Build woodcutter, iron mine (if deposit), then blacksmith.
 	_try_build_open(base_map, prov, pid, 0) # WOODCUTTER
+	_try_build_open(base_map, prov, pid, 1) # IRONMINE
 	_try_build_open(base_map, prov, pid, 5) # BLACKSMITH
 
-	# 4) Labor amounts (manual priority): max grain, then wood, then blacksmith.
+	# 4) Labor: grain, then wood/iron capped to craft needs, then smith if short.
 	_assign_labor(base_map, prov, pid)
 
 	# 5) Point smith at the weapon we need most, then reinforce town garrison.
@@ -62,6 +63,80 @@ static func _province_for_council(base_map: Node, pid: int) -> Node:
 		if prov.has_method("has_dejure") and prov.has_dejure(pid):
 			return prov
 	return null
+
+
+static func has_iron_mine(prov: Node, pid: int) -> bool:
+	if prov == null or not prov.has_method("economy_worker_cap"):
+		return false
+	return int(prov.economy_worker_cap(pid, "iron")) > 0
+
+
+## Town garrison targets for this council (depends on built iron mine).
+static func garrison_targets(prov: Node, pid: int) -> Dictionary:
+	if has_iron_mine(prov, pid):
+		return {
+			GlobalUnits.UNIT_TYPE.MACEMEN: GlobalUnits.COUNCIL_TARGET_MACEMEN,
+			GlobalUnits.UNIT_TYPE.PIKEMEN: GlobalUnits.COUNCIL_TARGET_PIKEMEN,
+			GlobalUnits.UNIT_TYPE.ARCHER: GlobalUnits.COUNCIL_TARGET_ARCHERS,
+		}
+	return {
+		GlobalUnits.UNIT_TYPE.MACEMEN: 0,
+		GlobalUnits.UNIT_TYPE.PIKEMEN: 0,
+		GlobalUnits.UNIT_TYPE.ARCHER: GlobalUnits.COUNCIL_TARGET_ARCHERS_NO_IRON,
+	}
+
+
+## Rebuild weapon stock floor (same counts as garrison targets).
+static func weapon_stock_targets(prov: Node, pid: int) -> Dictionary:
+	if has_iron_mine(prov, pid):
+		return {
+			"maces": GlobalUnits.COUNCIL_TARGET_MACEMEN,
+			"pikes": GlobalUnits.COUNCIL_TARGET_PIKEMEN,
+			"bows": GlobalUnits.COUNCIL_TARGET_ARCHERS,
+		}
+	return {
+		"maces": 0,
+		"pikes": 0,
+		"bows": GlobalUnits.COUNCIL_TARGET_ARCHERS_NO_IRON,
+	}
+
+
+## Weapons still to forge: garrison gaps + stock floor (so wipe can be rebuilt).
+static func weapon_craft_deficits(base_map: Node, prov: Node, pid: int) -> Dictionary:
+	var out := {"maces": 0, "pikes": 0, "bows": 0}
+	if prov == null:
+		return out
+	var g_want := garrison_targets(prov, pid)
+	var s_want := weapon_stock_targets(prov, pid)
+	var town = prov.get_town() if prov.has_method("get_town") else null
+	var counts := _town_garrison_counts(base_map, town, pid)
+	var stock: Dictionary = (
+		prov.get_weapons_for(pid) if prov.has_method("get_weapons_for") else GlobalUnits.empty_weapon_stock()
+	)
+	var unit_to_wep := {
+		GlobalUnits.UNIT_TYPE.MACEMEN: "maces",
+		GlobalUnits.UNIT_TYPE.PIKEMEN: "pikes",
+		GlobalUnits.UNIT_TYPE.ARCHER: "bows",
+	}
+	for ut in unit_to_wep:
+		var wkey: String = unit_to_wep[ut]
+		var g_gap := maxi(0, int(g_want.get(ut, 0)) - int(counts.get(ut, 0)))
+		var s_gap := maxi(0, int(s_want.get(wkey, 0)) - int(stock.get(wkey, 0)))
+		# Craft enough that after recruiting the garrison gap, stock floor remains.
+		out[wkey] = g_gap + s_gap
+	return out
+
+
+static func _materials_for_weapon_deficits(deficits: Dictionary) -> Dictionary:
+	var need := {"wood": 0, "iron": 0}
+	for wkey in deficits:
+		var n := int(deficits[wkey])
+		if n <= 0:
+			continue
+		var recipe: Dictionary = GlobalUnits.blacksmith_recipe(str(wkey))
+		need["wood"] = int(need["wood"]) + n * int(recipe.get("wood", 0))
+		need["iron"] = int(need["iron"]) + n * int(recipe.get("iron", 0))
+	return need
 
 
 static func _try_build_open(base_map: Node, prov: Node, pid: int, subtype: int) -> bool:
@@ -103,20 +178,35 @@ static func _assign_labor(base_map: Node, prov: Node, pid: int) -> void:
 	var grain_n := mini(grain_need, pop)
 	var remaining := maxi(0, pop - grain_n)
 
+	var craft := weapon_craft_deficits(base_map, prov, pid)
+	var mat_need := _materials_for_weapon_deficits(craft)
+	var have_wood := int(prov.get_player_material(pid, "wood")) if prov.has_method("get_player_material") else 0
+	var have_iron := int(prov.get_player_material(pid, "iron")) if prov.has_method("get_player_material") else 0
+	var wood_short := maxi(0, int(mat_need.get("wood", 0)) - have_wood)
+	var iron_short := maxi(0, int(mat_need.get("iron", 0)) - have_iron)
+	# 1 material per worker per season.
+	var wood_want := int(ceil(float(wood_short) / float(maxi(1, GlobalUnits.ECONOMY_WOOD_PER_WORKER))))
+	var iron_want := int(ceil(float(iron_short) / float(maxi(1, GlobalUnits.ECONOMY_IRON_PER_WORKER))))
+
 	var wood_cap := int(prov.economy_worker_cap(pid, "wood")) if prov.has_method("economy_worker_cap") else 0
-	var wood_n := mini(wood_cap, remaining)
+	var wood_n := mini(wood_cap, mini(remaining, wood_want))
 	remaining = maxi(0, remaining - wood_n)
 
-	var smith_cap := int(prov.economy_worker_cap(pid, "blacksmith")) if prov.has_method("economy_worker_cap") else 0
-	var smith_n := mini(smith_cap, remaining)
+	var iron_cap := int(prov.economy_worker_cap(pid, "iron")) if prov.has_method("economy_worker_cap") else 0
+	var iron_n := mini(iron_cap, mini(remaining, iron_want))
+	remaining = maxi(0, remaining - iron_n)
 
-	# Clear all labor first so grain isn't squeezed by leftover wood/smith assignments.
+	var smith_cap := int(prov.economy_worker_cap(pid, "blacksmith")) if prov.has_method("economy_worker_cap") else 0
+	var craft_left := int(craft.get("maces", 0)) + int(craft.get("pikes", 0)) + int(craft.get("bows", 0))
+	var smith_n := mini(smith_cap, remaining) if craft_left > 0 else 0
+
+	# Clear all labor first so grain isn't squeezed by leftover assignments.
 	if base_map.has_method("apply_set_holding_labor_category"):
 		for cat in GlobalUnits.LABOR_CATEGORIES:
 			base_map.apply_set_holding_labor_category(province_id, cat, 0, pid)
-		# Grain first (max needed), then wood, then blacksmith with leftovers.
 		base_map.apply_set_holding_labor_category(province_id, "grain", grain_n, pid)
 		base_map.apply_set_holding_labor_category(province_id, "wood", wood_n, pid)
+		base_map.apply_set_holding_labor_category(province_id, "iron", iron_n, pid)
 		base_map.apply_set_holding_labor_category(province_id, "blacksmith", smith_n, pid)
 		return
 
@@ -126,25 +216,18 @@ static func _assign_labor(base_map: Node, prov: Node, pid: int) -> void:
 		prov.set_labor_category(pid, cat, 0, season)
 	prov.set_labor_category(pid, "grain", grain_n, season)
 	prov.set_labor_category(pid, "wood", wood_n, season)
+	prov.set_labor_category(pid, "iron", iron_n, season)
 	prov.set_labor_category(pid, "blacksmith", smith_n, season)
 
 
 static func _set_craft_for_deficit(base_map: Node, prov: Node, pid: int) -> void:
-	var town = prov.get_town() if prov.has_method("get_town") else null
-	if town == null:
-		return
-	var counts := _town_garrison_counts(base_map, town, pid)
-	var deficits := {
-		"maces": maxi(0, GlobalUnits.COUNCIL_TARGET_MACEMEN - int(counts.get(GlobalUnits.UNIT_TYPE.MACEMEN, 0))),
-		"pikes": maxi(0, GlobalUnits.COUNCIL_TARGET_PIKEMEN - int(counts.get(GlobalUnits.UNIT_TYPE.PIKEMEN, 0))),
-		"bows": maxi(0, GlobalUnits.COUNCIL_TARGET_ARCHERS - int(counts.get(GlobalUnits.UNIT_TYPE.ARCHER, 0))),
-	}
-	var best_key := "maces"
+	var deficits := weapon_craft_deficits(base_map, prov, pid)
+	var best_key := "bows"
 	var best_n := -1
 	for k in deficits:
 		if int(deficits[k]) > best_n:
 			best_n = int(deficits[k])
-			best_key = k
+			best_key = str(k)
 	if best_n <= 0:
 		return
 	if prov.get("economy") == null:
@@ -168,7 +251,7 @@ static func _town_garrison_counts(base_map: Node, town: Node, pid: int) -> Dicti
 		GlobalUnits.UNIT_TYPE.PIKEMEN: 0,
 		GlobalUnits.UNIT_TYPE.ARCHER: 0,
 	}
-	if base_map == null or not base_map.has_method("get_all_building_garrison"):
+	if town == null or base_map == null or not base_map.has_method("get_all_building_garrison"):
 		return out
 	for s in base_map.get_all_building_garrison(town):
 		if int(s.get("owner", -1)) != pid:
@@ -187,15 +270,16 @@ static func _reinforce_town_garrison(base_map: Node, prov: Node, pid: int) -> vo
 	if town == null or base_map == null:
 		return
 	var counts := _town_garrison_counts(base_map, town, pid)
+	var targets := garrison_targets(prov, pid)
 	var want := {
 		GlobalUnits.UNIT_TYPE.MACEMEN: maxi(
-			0, GlobalUnits.COUNCIL_TARGET_MACEMEN - int(counts.get(GlobalUnits.UNIT_TYPE.MACEMEN, 0))
+			0, int(targets.get(GlobalUnits.UNIT_TYPE.MACEMEN, 0)) - int(counts.get(GlobalUnits.UNIT_TYPE.MACEMEN, 0))
 		),
 		GlobalUnits.UNIT_TYPE.PIKEMEN: maxi(
-			0, GlobalUnits.COUNCIL_TARGET_PIKEMEN - int(counts.get(GlobalUnits.UNIT_TYPE.PIKEMEN, 0))
+			0, int(targets.get(GlobalUnits.UNIT_TYPE.PIKEMEN, 0)) - int(counts.get(GlobalUnits.UNIT_TYPE.PIKEMEN, 0))
 		),
 		GlobalUnits.UNIT_TYPE.ARCHER: maxi(
-			0, GlobalUnits.COUNCIL_TARGET_ARCHERS - int(counts.get(GlobalUnits.UNIT_TYPE.ARCHER, 0))
+			0, int(targets.get(GlobalUnits.UNIT_TYPE.ARCHER, 0)) - int(counts.get(GlobalUnits.UNIT_TYPE.ARCHER, 0))
 		),
 	}
 	var composition: Array = []

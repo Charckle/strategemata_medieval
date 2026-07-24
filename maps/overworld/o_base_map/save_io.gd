@@ -25,6 +25,11 @@ static func export_state(map: Node) -> Dictionary:
 		"year": year,
 		"my_pl_id": int(map.my_pl_id),
 		"alliances": _stringify_keys(map.alliances.duplicate(true)),
+		"opinions": _export_nested_int_dict(map.opinions),
+		"wars": _stringify_keys(map.wars.duplicate(true)),
+		"move_permits": _stringify_keys(map.move_permits.duplicate(true)),
+		"diplo_messages": _stringify_keys(map.diplo_messages.duplicate(true)),
+		"diplo_sent_turn": _stringify_keys(map.diplo_sent_turn.duplicate(true)),
 		"players": _export_players(map.players),
 		"counters": {
 			"next_runtime_force": int(map._next_runtime_force),
@@ -65,10 +70,17 @@ static func apply_state(map: Node, state: Dictionary) -> void:
 	map.turn = int(state.get("turn", 0))
 	map.my_pl_id = int(state.get("my_pl_id", 0))
 	map.alliances = _import_alliances(state.get("alliances", {}))
+	map.opinions = _import_opinions(state.get("opinions", {}))
+	map.wars = _import_string_dict(state.get("wars", {}))
+	map.move_permits = _import_string_dict(state.get("move_permits", {}))
+	map.diplo_messages = _import_string_dict(state.get("diplo_messages", {}))
+	map.diplo_sent_turn = _import_diplo_sent(state.get("diplo_sent_turn", {}))
 	map.players = _import_players(state.get("players", {}))
 	Heraldry.ensure_all(map.players)
 	if GlobalStuff.has_method("ensure_order_colors"):
 		GlobalStuff.ensure_order_colors(map.players)
+	if map.has_method("get") and map.get("opinions") != null:
+		Diplomacy.ensure_opinion_maps(map)
 
 	var counters: Dictionary = state.get("counters", {})
 	map._next_runtime_force = int(counters.get("next_runtime_force", 0))
@@ -174,6 +186,50 @@ static func _import_alliances(raw: Variant) -> Dictionary:
 			for v in src:
 				arr.append(int(v))
 		out[pid] = arr
+	return out
+
+
+static func _export_nested_int_dict(raw: Variant) -> Dictionary:
+	var out := {}
+	if not (raw is Dictionary):
+		return out
+	for k in raw.keys():
+		var inner: Dictionary = {}
+		var src = raw[k]
+		if src is Dictionary:
+			for ik in src.keys():
+				inner[str(ik)] = int(src[ik])
+		out[str(k)] = inner
+	return out
+
+
+static func _import_opinions(raw: Variant) -> Dictionary:
+	var out := {}
+	if not (raw is Dictionary):
+		return out
+	for k in raw.keys():
+		var viewer := int(k)
+		var inner := {}
+		var src = raw[k]
+		if src is Dictionary:
+			for ik in src.keys():
+				inner[int(ik)] = int(src[ik])
+		out[viewer] = inner
+	return out
+
+
+static func _import_string_dict(raw: Variant) -> Dictionary:
+	if raw is Dictionary:
+		return raw.duplicate(true)
+	return {}
+
+
+static func _import_diplo_sent(raw: Variant) -> Dictionary:
+	var out := {}
+	if not (raw is Dictionary):
+		return out
+	for k in raw.keys():
+		out[str(k)] = int(raw[k])
 	return out
 
 

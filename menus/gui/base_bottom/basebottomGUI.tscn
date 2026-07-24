@@ -279,42 +279,18 @@ layout_mode = 2
 size_flags_horizontal = 3
 text = "De jure: —"
 
-[node name="population_prov_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid" unique_id=1543648831]
+[node name="population_prov_lbl" type="RichTextLabel" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid" unique_id=1543648831]
 layout_mode = 2
 size_flags_horizontal = 3
+bbcode_enabled = true
+fit_content = true
+scroll_active = false
 text = "Population: —"
 
 [node name="income_prov_lbl" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid" unique_id=1543648832]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Predicted income: —"
-
-[node name="buildings_grid" type="GridContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content" unique_id=1543648834]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/h_separation = 24
-theme_override_constants/v_separation = 4
-columns = 4
-
-[node name="villages_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid" unique_id=1543648836]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Villages: — / —"
-
-[node name="towns_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid" unique_id=1543648838]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Towns: — / —"
-
-[node name="castles_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid" unique_id=1543648840]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Castles: — / —"
-
-[node name="economy_val" type="Label" parent="economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid" unique_id=1543648842]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Economy: — / —"
 
 [node name="farming" type="VBoxContainer" parent="economy_menu/margin/vbox/tabs/province/sub_tabs" unique_id=714432200]
 visible = false

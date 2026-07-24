@@ -40,10 +40,6 @@ var _heraldry_editor: Control = null
 @onready var province_tab_dejure := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid/dejure_lbl
 @onready var province_tab_population := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid/population_prov_lbl
 @onready var province_tab_income := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/info_grid/income_prov_lbl
-@onready var province_tab_villages := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid/villages_val
-@onready var province_tab_towns := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid/towns_val
-@onready var province_tab_castles := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid/castles_val
-@onready var province_tab_economy := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content/buildings_grid/economy_val
 @onready var province_tab_root := $economy_menu/margin/vbox/tabs/province/sub_tabs/overview/ScrollContainer/content
 @onready var province_farming_root := $economy_menu/margin/vbox/tabs/province/sub_tabs/farming/ScrollContainer/content
 @onready var province_army_root := $economy_menu/margin/vbox/tabs/province/sub_tabs/army/ScrollContainer/content
@@ -72,7 +68,14 @@ var _refreshing_alliances := false
 ## Ladder tab sort metric key (marks / fighting / grain / dejure / defacto).
 var _ladder_sort_metric: String = "fighting"
 
-# VIP trade UI (War → Diplomacy tab / runtime panels).
+# Diplomacy UI (War → Diplomacy → Relations / Trade).
+var _diplo_inner_tabs: TabContainer = null
+var _relations_list: VBoxContainer = null
+var _trade_list: VBoxContainer = null
+var _selected_diplo_pid: int = -1
+var _opinion_spin: SpinBox = null
+
+# VIP trade UI (War → Diplomacy → Trade / runtime panels).
 var _vt_panel: PanelContainer = null
 var _vt_body: VBoxContainer = null
 var _vt_base = null
@@ -83,8 +86,8 @@ var _vt_request_marks_spin: SpinBox = null
 var _incoming_trade_panel: PanelContainer = null
 
 # Province levy / weapons UI (built under province tab at runtime).
-var _prov_happiness_lbl: Label = null
-var _prov_ration_lbl: Label = null
+var _prov_happiness_lbl: RichTextLabel = null
+var _prov_ration_lbl: RichTextLabel = null
 var _prov_ration_btns: Dictionary = {} # RATION -> Button
 var _prov_ration_row: HBoxContainer = null
 var _prov_tax_lbl: Label = null
@@ -92,6 +95,8 @@ var _prov_tax_btns: Dictionary = {} # TAX -> Button
 var _prov_tax_row: HBoxContainer = null
 var _prov_levy_lbl: Label = null
 var _prov_weapons_lbl: Label = null
+var _prov_weapons_grid: GridContainer = null
+var _prov_weapon_qty_lbls: Dictionary = {} # weapon key -> Label
 var _prov_recruit_btn: Button = null
 var _prov_shipyard_info: Label = null
 var _prov_shipyard_stock: Label = null
@@ -141,12 +146,15 @@ var _cv_caravan: Node2D = null
 var _cv_dest: OptionButton = null
 var _cv_dest_ids: Array = []
 
-# Enemy caravan capture panel.
+# Army ↔ caravan interact panel (own / ally / enemy).
 var _cv_cap_panel: PanelContainer = null
-var _cv_cap_info: Label = null
+var _cv_cap_title: Label = null
+var _cv_cap_body: VBoxContainer = null
 var _cv_cap_base = null
 var _cv_cap_caravan: Node2D = null
 var _cv_cap_force_id: String = ""
+var _cv_cap_spinboxes: Dictionary = {}  # cargo key -> SpinBox
+var _cv_cap_absorb_mode: bool = false
 
 # Transport fleet menus / prompts.
 var _fl_panel: PanelContainer = null
@@ -221,6 +229,10 @@ var _am_people_tab: Control = null
 var _am_tab_idx: int = 0
 var _am_base = null
 var _am_army: Node2D = null
+var _am_force_id: String = ""
+var _am_is_garrison: bool = false
+var _am_building: Node = null
+var _am_spot: int = GlobalUnits.SPOT.FLAT
 
 # Rename army dialog.
 var _rn_panel: PanelContainer = null
@@ -235,6 +247,7 @@ var _db_info_lbl: Label = null
 var _db_confirm_btn: Button = null
 var _db_base = null
 var _db_army: Node2D = null
+var _db_force_id: String = ""
 var _db_loot_send_btn: Button = null
 var _db_discard_btn: Button = null
 
@@ -287,6 +300,7 @@ var _building_popup_shield: TextureRect = null
 var _building_popup_body: RichTextLabel = null
 var _building_popup_close: Button = null
 var _building_popup_deploy: Button = null
+var _building_popup_manage: Button = null
 var _building_popup_economy: Button = null
 var _building_popup_node: Node = null
 var _building_popup_pinned := false
@@ -302,6 +316,9 @@ var _field_popup_base = null
 
 # Province fields / labor UI.
 var _prov_manage_root: VBoxContainer = null
+var _prov_people_card_body: VBoxContainer = null
+var _prov_people_manage_box: VBoxContainer = null
+var _prov_tax_manage_box: VBoxContainer = null
 var _prov_farming_manage_root: VBoxContainer = null
 var _prov_fields_lbl: Label = null
 var _prov_populate_idle_btn: Button = null
@@ -332,7 +349,7 @@ var _econ_demolish_base = null
 const _PROV_SURPLUS_COLOR := "#6dce6d"
 const _PROV_DEFICIT_COLOR := "#e85a4f"
 
-# Populate idle fields popup.
+# Field population helper popup.
 var _populate_idle_popup: PanelContainer = null
 var _populate_idle_body: Label = null
 
@@ -352,12 +369,17 @@ var _smith_recipe_building: Node = null
 var _smith_recipe_base = null
 
 # Castle construction popup (build / upgrade / dismantle; no downgrade or mid-project cancel).
+# Mid-upgrade stays garrisonable/attackable at the old level.
 var _castle_popup: PanelContainer = null
 var _castle_popup_title: Label = null
-var _castle_popup_body: Label = null
-var _castle_popup_btns: VBoxContainer = null
+var _castle_tabs: TabContainer = null
+var _castle_overview_body: VBoxContainer = null
+var _castle_inside_body: VBoxContainer = null
+var _castle_outside_body: VBoxContainer = null
+var _castle_construction_body: VBoxContainer = null
 var _castle_popup_building: Node = null
 var _castle_popup_base = null
+var _castle_tab_idx: int = 0
 
 # Battle preview / result UI (built at runtime).
 var _bt_panel: PanelContainer = null
@@ -392,15 +414,22 @@ var _ba_body: VBoxContainer = null
 var _ba_base = null
 var _ba_force_id: String = ""
 var _ba_building: Node = null
+## True only for the post-battle Capture/Raid/Raze follow-up (capture costs 0 MP).
+var _ba_free_capture: bool = false
 
 # Event report card (populated from game event id).
 var _er_panel: PanelContainer = null
 var _er_title: Label = null
+var _er_outcome: Label = null
 var _er_body: Label = null
 var _er_roster: VBoxContainer = null
 var _er_goto: Button = null
 var _er_base = null
 var _er_event_id: String = ""
+# After report closes: optional settlement actions (hostages → report → building).
+var _er_pending_base = null
+var _er_pending_force_id: String = ""
+var _er_pending_building: Node = null
 
 func _ready() -> void:
 	$Panel.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -439,70 +468,531 @@ func _ready() -> void:
 		var wars_node = war_tabs.get_node_or_null("Wars")
 		if wars_node != null:
 			war_tabs.set_tab_title(wars_node.get_index(), "AI")
+		var alliances_node = war_tabs.get_node_or_null("Alliances")
+		if alliances_node != null:
+			war_tabs.set_tab_hidden(alliances_node.get_index(), true)
+	_ensure_diplomacy_structure()
 	refresh_msg_button()
 
 
 var _admin_prov_opt: OptionButton = null
 var _admin_report: TextEdit = null
 var _admin_prov_ids: Array = []
+var _admin_inner_tabs: TabContainer = null
+var _admin_edit_scroll: ScrollContainer = null
+var _admin_edit_box: VBoxContainer = null
+var _admin_edit_status: Label = null
+var _admin_mat_spins: Dictionary = {} # key -> {cur: Label, delta: SpinBox}
+var _admin_wep_spins: Dictionary = {}
+var _admin_marks_cur: Label = null
+var _admin_marks_spin: SpinBox = null
+var _admin_pop_cur: Label = null
+var _admin_pop_spin: SpinBox = null
+var _admin_castle_opt: OptionButton = null
+var _admin_castle_cur: Label = null
+var _admin_buildings_box: VBoxContainer = null
 
 
 func _ensure_admin_tab() -> void:
 	var tabs: TabContainer = settings_menu.get_node_or_null("margin/vbox/tabs")
 	if tabs == null:
 		return
-	if tabs.get_node_or_null("Admin") != null:
-		_ensure_victory_debug_tab()
-		return
-	var root := VBoxContainer.new()
-	root.name = "Admin"
-	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	tabs.add_child(root)
+	var root: VBoxContainer = tabs.get_node_or_null("Admin")
+	if root == null:
+		root = VBoxContainer.new()
+		root.name = "Admin"
+		root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		root.add_theme_constant_override("separation", 8)
+		tabs.add_child(root)
 
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	root.add_child(row)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		root.add_child(row)
 
-	var lbl := Label.new()
-	lbl.text = "Province"
-	row.add_child(lbl)
+		var lbl := Label.new()
+		lbl.text = "Province"
+		row.add_child(lbl)
 
-	_admin_prov_opt = OptionButton.new()
-	_admin_prov_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_admin_prov_opt.item_selected.connect(_on_admin_province_selected)
-	row.add_child(_admin_prov_opt)
+		_admin_prov_opt = OptionButton.new()
+		_admin_prov_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_admin_prov_opt.item_selected.connect(_on_admin_province_selected)
+		row.add_child(_admin_prov_opt)
 
-	var focus_btn := Button.new()
-	focus_btn.text = "Focused"
-	focus_btn.pressed.connect(_on_admin_use_focused)
-	row.add_child(focus_btn)
+		var focus_btn := Button.new()
+		focus_btn.text = "Focused"
+		focus_btn.pressed.connect(_on_admin_use_focused)
+		row.add_child(focus_btn)
 
-	var refresh_btn := Button.new()
-	refresh_btn.text = "Refresh"
-	refresh_btn.pressed.connect(_refresh_admin_report)
-	row.add_child(refresh_btn)
+		var refresh_btn := Button.new()
+		refresh_btn.text = "Refresh"
+		refresh_btn.pressed.connect(_on_admin_refresh_pressed)
+		row.add_child(refresh_btn)
 
-	var spawn_row := HBoxContainer.new()
-	spawn_row.add_theme_constant_override("separation", 8)
-	root.add_child(spawn_row)
+		var spawn_row := HBoxContainer.new()
+		spawn_row.add_theme_constant_override("separation", 8)
+		root.add_child(spawn_row)
 
-	var spawn_btn := Button.new()
-	spawn_btn.text = "Spawn 10k swordsmen + 100k grain"
-	spawn_btn.pressed.connect(_on_admin_spawn_debug_army)
-	spawn_row.add_child(spawn_btn)
+		var spawn_btn := Button.new()
+		spawn_btn.text = "Spawn 10k swordsmen + 100k grain"
+		spawn_btn.pressed.connect(_on_admin_spawn_debug_army)
+		spawn_row.add_child(spawn_btn)
+	else:
+		if _admin_prov_opt == null:
+			_admin_prov_opt = _find_admin_province_option(root)
 
-	_admin_report = TextEdit.new()
-	_admin_report.editable = false
-	_admin_report.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	_admin_report.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_admin_report.custom_minimum_size = Vector2(0, 280)
-	root.add_child(_admin_report)
+	_ensure_admin_inner_tabs(root)
 
 	# Give settings room for admin dump tabs.
 	settings_menu.custom_minimum_size = Vector2(780, 800)
 	settings_menu.size = Vector2(780, 800)
 
 	_ensure_victory_debug_tab()
+
+
+func _find_admin_province_option(root: Node) -> OptionButton:
+	for child in root.get_children():
+		if child is HBoxContainer:
+			for c in child.get_children():
+				if c is OptionButton:
+					return c
+	return null
+
+
+func _ensure_admin_inner_tabs(root: VBoxContainer) -> void:
+	_admin_inner_tabs = root.get_node_or_null("AdminInner") as TabContainer
+	if _admin_inner_tabs == null:
+		# Migrate legacy layout: report was a direct child TextEdit.
+		var legacy_report: TextEdit = null
+		for child in root.get_children():
+			if child is TextEdit:
+				legacy_report = child
+				break
+		_admin_inner_tabs = TabContainer.new()
+		_admin_inner_tabs.name = "AdminInner"
+		_admin_inner_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		root.add_child(_admin_inner_tabs)
+
+		var report_page := VBoxContainer.new()
+		report_page.name = "Report"
+		report_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_admin_inner_tabs.add_child(report_page)
+
+		if legacy_report != null:
+			legacy_report.reparent(report_page)
+			_admin_report = legacy_report
+		else:
+			_admin_report = TextEdit.new()
+			_admin_report.editable = false
+			_admin_report.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+			_admin_report.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			_admin_report.custom_minimum_size = Vector2(0, 280)
+			report_page.add_child(_admin_report)
+
+		var edit_page := VBoxContainer.new()
+		edit_page.name = "Edit"
+		edit_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		edit_page.add_theme_constant_override("separation", 6)
+		_admin_inner_tabs.add_child(edit_page)
+
+		_admin_edit_status = Label.new()
+		_admin_edit_status.name = "EditStatus"
+		_admin_edit_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		edit_page.add_child(_admin_edit_status)
+
+		_admin_edit_scroll = ScrollContainer.new()
+		_admin_edit_scroll.name = "EditScroll"
+		_admin_edit_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_admin_edit_scroll.custom_minimum_size = Vector2(0, 320)
+		edit_page.add_child(_admin_edit_scroll)
+
+		_admin_edit_box = VBoxContainer.new()
+		_admin_edit_box.name = "EditBox"
+		_admin_edit_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_admin_edit_box.add_theme_constant_override("separation", 8)
+		_admin_edit_scroll.add_child(_admin_edit_box)
+
+		_build_admin_edit_form()
+	else:
+		if _admin_report == null:
+			var report_page2 := _admin_inner_tabs.get_node_or_null("Report")
+			if report_page2 != null:
+				for c in report_page2.get_children():
+					if c is TextEdit:
+						_admin_report = c
+						break
+		if _admin_edit_box == null:
+			var edit_page2 := _admin_inner_tabs.get_node_or_null("Edit")
+			if edit_page2 != null:
+				_admin_edit_status = edit_page2.get_node_or_null("EditStatus") as Label
+				if _admin_edit_status == null and edit_page2.get_child_count() > 0:
+					_admin_edit_status = edit_page2.get_child(0) as Label
+				_admin_edit_scroll = edit_page2.get_node_or_null("EditScroll") as ScrollContainer
+				if _admin_edit_scroll != null:
+					_admin_edit_box = _admin_edit_scroll.get_node_or_null("EditBox") as VBoxContainer
+					if _admin_edit_box == null and _admin_edit_scroll.get_child_count() > 0:
+						_admin_edit_box = _admin_edit_scroll.get_child(0) as VBoxContainer
+				if _admin_edit_box != null and _admin_mat_spins.is_empty():
+					_build_admin_edit_form()
+
+
+func _admin_make_section(title: String) -> VBoxContainer:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	var hdr := Label.new()
+	hdr.text = title
+	hdr.add_theme_font_size_override("font_size", 16)
+	box.add_child(hdr)
+	_admin_edit_box.add_child(box)
+	return box
+
+
+func _admin_make_delta_row(parent: Node, label_text: String) -> Dictionary:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	parent.add_child(row)
+	var name_lbl := Label.new()
+	name_lbl.text = label_text
+	name_lbl.custom_minimum_size = Vector2(100, 0)
+	row.add_child(name_lbl)
+	var cur := Label.new()
+	cur.text = "0"
+	cur.custom_minimum_size = Vector2(80, 0)
+	row.add_child(cur)
+	var spin := SpinBox.new()
+	spin.min_value = -1000000
+	spin.max_value = 1000000
+	spin.step = 1
+	spin.allow_greater = true
+	spin.allow_lesser = true
+	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spin.custom_minimum_size = Vector2(120, 0)
+	row.add_child(spin)
+	return {"cur": cur, "delta": spin}
+
+
+func _build_admin_edit_form() -> void:
+	if _admin_edit_box == null:
+		return
+	while _admin_edit_box.get_child_count() > 0:
+		var old: Node = _admin_edit_box.get_child(0)
+		_admin_edit_box.remove_child(old)
+		old.free()
+	_admin_mat_spins.clear()
+	_admin_wep_spins.clear()
+	_admin_buildings_box = null
+
+	var quick := _admin_make_section("AI testing")
+	var def_btn := Button.new()
+	def_btn.text = "Make defense-complete (attack ready)"
+	def_btn.tooltip_text = "Concentric, max econ, full garrisons, grain, knight kit for dejure owner"
+	def_btn.pressed.connect(_on_admin_make_defense_complete)
+	quick.add_child(def_btn)
+
+	var stock := _admin_make_section("Stock (dejure owner) — delta add/subtract")
+	for k in GlobalUnits.MATERIAL_KEYS:
+		_admin_mat_spins[k] = _admin_make_delta_row(stock, str(k).capitalize())
+	for k in GlobalUnits.WEAPON_STOCK_KEYS:
+		_admin_wep_spins[k] = _admin_make_delta_row(stock, str(k).capitalize())
+	_admin_wep_spins["horses"] = _admin_make_delta_row(stock, "Horses")
+
+	var marks_row_data := _admin_make_delta_row(stock, "Marks")
+	_admin_marks_cur = marks_row_data["cur"]
+	_admin_marks_spin = marks_row_data["delta"]
+
+	var apply_stock := Button.new()
+	apply_stock.text = "Apply stock deltas"
+	apply_stock.pressed.connect(_on_admin_apply_stock)
+	stock.add_child(apply_stock)
+
+	var pop_sec := _admin_make_section("Population — split across all settlements")
+	var pop_data := _admin_make_delta_row(pop_sec, "Population")
+	_admin_pop_cur = pop_data["cur"]
+	_admin_pop_spin = pop_data["delta"]
+	var apply_pop := Button.new()
+	apply_pop.text = "Apply population"
+	apply_pop.pressed.connect(_on_admin_apply_population)
+	pop_sec.add_child(apply_pop)
+
+	var castle_sec := _admin_make_section("Castle")
+	_admin_castle_cur = Label.new()
+	_admin_castle_cur.text = "—"
+	castle_sec.add_child(_admin_castle_cur)
+	var crow := HBoxContainer.new()
+	crow.add_theme_constant_override("separation", 8)
+	castle_sec.add_child(crow)
+	_admin_castle_opt = OptionButton.new()
+	_admin_castle_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_admin_castle_opt.clear()
+	# OptionButton treats id -1 as "use index", so empty uses 100.
+	_admin_castle_opt.add_item("Empty (clear)", 100)
+	_admin_castle_opt.add_item("0 Wooden Fort", 0)
+	_admin_castle_opt.add_item("1 Motte-and-Bailey", 1)
+	_admin_castle_opt.add_item("2 Norman Keep", 2)
+	_admin_castle_opt.add_item("3 Enclosed Castle", 3)
+	_admin_castle_opt.add_item("4 Poliwarded Castle", 4)
+	_admin_castle_opt.add_item("5 Concentric Castle", 5)
+	crow.add_child(_admin_castle_opt)
+	var apply_castle := Button.new()
+	apply_castle.text = "Set castle"
+	apply_castle.pressed.connect(_on_admin_apply_castle)
+	crow.add_child(apply_castle)
+
+	var bsec := _admin_make_section("Economy buildings")
+	_admin_buildings_box = VBoxContainer.new()
+	_admin_buildings_box.name = "BuildingsBox"
+	_admin_buildings_box.add_theme_constant_override("separation", 6)
+	bsec.add_child(_admin_buildings_box)
+
+
+func _admin_selected_province_id() -> String:
+	if _admin_prov_opt == null or _admin_prov_opt.selected < 0 or _admin_prov_opt.selected >= _admin_prov_ids.size():
+		return ""
+	return str(_admin_prov_ids[_admin_prov_opt.selected])
+
+
+func _on_admin_refresh_pressed() -> void:
+	_refresh_admin_report()
+	_refresh_admin_edit()
+
+
+func _refresh_admin_edit() -> void:
+	if _admin_edit_status == null:
+		return
+	if _admin_buildings_box == null and _admin_edit_box != null:
+		_admin_buildings_box = _admin_edit_box.find_child("BuildingsBox", true, false) as VBoxContainer
+	if not is_instance_valid(parent_n) or not parent_n.has_method("get_admin_province_edit_data"):
+		_admin_edit_status.text = "No map / admin edit available."
+		return
+	var pid := _admin_selected_province_id()
+	if pid == "":
+		_admin_edit_status.text = "Select a province."
+		return
+	var data: Dictionary = parent_n.get_admin_province_edit_data(pid)
+	if data.is_empty():
+		_admin_edit_status.text = "Province not found."
+		return
+	_admin_edit_status.text = "%s — dejure: %s (id %s)" % [
+		str(data.get("province_name", pid)),
+		str(data.get("dejure_name", "?")),
+		str(data.get("dejure", -1)),
+	]
+	var mats: Dictionary = data.get("materials", {})
+	for k in _admin_mat_spins:
+		var row: Dictionary = _admin_mat_spins[k]
+		row["cur"].text = str(int(mats.get(k, 0)))
+	var weps: Dictionary = data.get("weapons", {})
+	for k in _admin_wep_spins:
+		var wrow: Dictionary = _admin_wep_spins[k]
+		if k == "horses":
+			wrow["cur"].text = str(int(data.get("horses", weps.get("horses", 0))))
+		else:
+			wrow["cur"].text = str(int(weps.get(k, 0)))
+	if _admin_marks_cur != null:
+		_admin_marks_cur.text = str(int(data.get("marks", 0)))
+	if _admin_pop_cur != null:
+		_admin_pop_cur.text = str(int(data.get("population", 0)))
+	if _admin_castle_cur != null:
+		_admin_castle_cur.text = str(data.get("castle_label", "—"))
+	if _admin_castle_opt != null:
+		var cl := int(data.get("castle_level", GlobalUnits.CASTLE_TARGET_EMPTY))
+		var want_id := 100 if cl < 0 else cl
+		for i in _admin_castle_opt.item_count:
+			if int(_admin_castle_opt.get_item_id(i)) == want_id:
+				_admin_castle_opt.select(i)
+				break
+	_rebuild_admin_buildings_list(data.get("buildings", []))
+
+
+func _rebuild_admin_buildings_list(buildings: Array) -> void:
+	if _admin_buildings_box == null:
+		return
+	while _admin_buildings_box.get_child_count() > 0:
+		var old: Node = _admin_buildings_box.get_child(0)
+		_admin_buildings_box.remove_child(old)
+		old.free()
+	if buildings.is_empty():
+		var empty := Label.new()
+		empty.text = "(no economy plots)"
+		_admin_buildings_box.add_child(empty)
+		return
+	for binfo in buildings:
+		if not (binfo is Dictionary):
+			continue
+		var key := str(binfo.get("key", ""))
+		var row := VBoxContainer.new()
+		row.add_theme_constant_override("separation", 2)
+		_admin_buildings_box.add_child(row)
+		var title := Label.new()
+		title.text = str(binfo.get("name", key))
+		row.add_child(title)
+		var actions := HBoxContainer.new()
+		actions.add_theme_constant_override("separation", 4)
+		row.add_child(actions)
+		var built := bool(binfo.get("built", false))
+		if not built:
+			for sub in binfo.get("allowed_subtypes", []):
+				var sub_i := int(sub)
+				var btn := Button.new()
+				btn.text = "Build %s" % _admin_economy_subtype_name(sub_i)
+				btn.pressed.connect(_on_admin_build_economy.bind(key, sub_i))
+				actions.add_child(btn)
+			if actions.get_child_count() == 0:
+				var none := Label.new()
+				none.text = "(cannot build)"
+				actions.add_child(none)
+		else:
+			var cur_stage := int(binfo.get("stage", 0))
+			for stage_pair in [[1, "Small"], [2, "Medium"], [3, "Big"]]:
+				var st: int = stage_pair[0]
+				var sn: String = stage_pair[1]
+				var sbtn := Button.new()
+				sbtn.text = sn
+				sbtn.disabled = cur_stage == st
+				sbtn.pressed.connect(_on_admin_set_economy_stage.bind(key, st))
+				actions.add_child(sbtn)
+			var raze := Button.new()
+			raze.text = "Raze"
+			raze.pressed.connect(_on_admin_raze_economy.bind(key))
+			actions.add_child(raze)
+
+
+func _admin_economy_subtype_name(sub: int) -> String:
+	match sub:
+		0: return "Woodcutter"
+		1: return "Iron Mine"
+		2: return "Gold Mine"
+		3: return "Silver Mine"
+		4: return "Stone Quarry"
+		5: return "Blacksmith"
+		_: return "Type %d" % sub
+
+
+func _on_admin_apply_stock() -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("admin_adjust_province_stock"):
+		show_info_popup("Admin stock edit not available.")
+		return
+	var pid := _admin_selected_province_id()
+	if pid == "":
+		show_info_popup("Select a province first.")
+		return
+	var mats := {}
+	for k in _admin_mat_spins:
+		mats[k] = int(_admin_mat_spins[k]["delta"].value)
+	var weps := {}
+	for k in _admin_wep_spins:
+		weps[k] = int(_admin_wep_spins[k]["delta"].value)
+	var marks_d := int(_admin_marks_spin.value) if _admin_marks_spin != null else 0
+	var err := str(parent_n.admin_adjust_province_stock(pid, mats, weps, marks_d))
+	if err != "":
+		show_info_popup(err)
+		return
+	for k in _admin_mat_spins:
+		_admin_mat_spins[k]["delta"].value = 0
+	for k in _admin_wep_spins:
+		_admin_wep_spins[k]["delta"].value = 0
+	if _admin_marks_spin != null:
+		_admin_marks_spin.value = 0
+	_refresh_admin_report()
+	_refresh_admin_edit()
+
+
+func _on_admin_apply_population() -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("admin_adjust_province_population"):
+		show_info_popup("Admin population edit not available.")
+		return
+	var pid := _admin_selected_province_id()
+	if pid == "":
+		show_info_popup("Select a province first.")
+		return
+	var amount := int(_admin_pop_spin.value) if _admin_pop_spin != null else 0
+	var err := str(parent_n.admin_adjust_province_population(pid, amount))
+	if err != "":
+		show_info_popup(err)
+		return
+	if _admin_pop_spin != null:
+		_admin_pop_spin.value = 0
+	_refresh_admin_report()
+	_refresh_admin_edit()
+
+
+func _on_admin_apply_castle() -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("admin_set_province_castle"):
+		show_info_popup("Admin castle edit not available.")
+		return
+	var pid := _admin_selected_province_id()
+	if pid == "":
+		show_info_popup("Select a province first.")
+		return
+	if _admin_castle_opt == null or _admin_castle_opt.selected < 0:
+		return
+	var level := int(_admin_castle_opt.get_item_id(_admin_castle_opt.selected))
+	if level >= 100:
+		level = GlobalUnits.CASTLE_TARGET_EMPTY
+	var err := str(parent_n.admin_set_province_castle(pid, level))
+	if err != "":
+		show_info_popup(err)
+		return
+	_refresh_admin_report()
+	_refresh_admin_edit()
+
+
+func _on_admin_make_defense_complete() -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("admin_make_defense_complete"):
+		show_info_popup("Admin defense-complete not available.")
+		return
+	var pid := _admin_selected_province_id()
+	if pid == "":
+		show_info_popup("Select a province first.")
+		return
+	var err := str(parent_n.admin_make_defense_complete(pid))
+	if err != "":
+		show_info_popup(err)
+		return
+	_refresh_admin_report()
+	_refresh_admin_edit()
+	show_info_popup("Defense-complete applied.")
+
+
+func _on_admin_build_economy(building_key: String, subtype: int) -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("admin_build_economy_free"):
+		return
+	var pid := _admin_selected_province_id()
+	if pid == "":
+		return
+	var err := str(parent_n.admin_build_economy_free(pid, building_key, subtype))
+	if err != "":
+		show_info_popup(err)
+		return
+	_refresh_admin_report()
+	_refresh_admin_edit()
+
+
+func _on_admin_set_economy_stage(building_key: String, stage: int) -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("admin_set_economy_stage_free"):
+		return
+	var pid := _admin_selected_province_id()
+	if pid == "":
+		return
+	var err := str(parent_n.admin_set_economy_stage_free(pid, building_key, stage))
+	if err != "":
+		show_info_popup(err)
+		return
+	_refresh_admin_report()
+	_refresh_admin_edit()
+
+
+func _on_admin_raze_economy(building_key: String) -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("admin_raze_economy_free"):
+		return
+	var pid := _admin_selected_province_id()
+	if pid == "":
+		return
+	var err := str(parent_n.admin_raze_economy_free(pid, building_key))
+	if err != "":
+		show_info_popup(err)
+		return
+	_refresh_admin_report()
+	_refresh_admin_edit()
 
 
 var _victory_debug_report: TextEdit = null
@@ -559,6 +1049,7 @@ func _on_settings_btn_pressed() -> void:
 	if settings_menu.visible:
 		_refresh_admin_province_list()
 		_refresh_admin_report()
+		_refresh_admin_edit()
 		_refresh_victory_debug_report()
 		_refresh_heraldry_preview()
 		_refresh_order_color_swatch()
@@ -674,6 +1165,7 @@ func _refresh_admin_province_list() -> void:
 
 func _on_admin_province_selected(_idx: int) -> void:
 	_refresh_admin_report()
+	_refresh_admin_edit()
 
 
 func _on_admin_use_focused() -> void:
@@ -690,6 +1182,7 @@ func _on_admin_use_focused() -> void:
 		if str(_admin_prov_ids[i]) == pid:
 			_admin_prov_opt.select(i)
 			_refresh_admin_report()
+			_refresh_admin_edit()
 			return
 
 
@@ -719,6 +1212,7 @@ func _on_admin_spawn_debug_army() -> void:
 		show_info_popup(err)
 		return
 	_refresh_admin_report()
+	_refresh_admin_edit()
 
 func _populate_gameplay_settings() -> void:
 	var enabled = GlobalSet.settings.get("show_province_names", 1) != 0
@@ -831,6 +1325,7 @@ func _ensure_save_as_dialog() -> void:
 	_save_as_edit.placeholder_text = "My campaign"
 	box.add_child(_save_as_edit)
 	_save_as_dialog.add_child(box)
+	_style_dialog_panel(_save_as_dialog)
 	add_child(_save_as_dialog)
 	_save_as_dialog.confirmed.connect(_on_save_as_confirmed)
 
@@ -898,6 +1393,7 @@ func _ensure_load_dialog() -> void:
 	_load_empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(_load_empty_lbl)
 	_load_dialog.add_child(root)
+	_style_dialog_panel(_load_dialog)
 	add_child(_load_dialog)
 
 	_load_rename_dialog = AcceptDialog.new()
@@ -907,14 +1403,31 @@ func _ensure_load_dialog() -> void:
 	_load_rename_edit = LineEdit.new()
 	rbox.add_child(_load_rename_edit)
 	_load_rename_dialog.add_child(rbox)
+	_style_dialog_panel(_load_rename_dialog)
 	add_child(_load_rename_dialog)
 	_load_rename_dialog.confirmed.connect(_on_in_game_rename_confirmed)
 
 	_load_delete_dialog = ConfirmationDialog.new()
 	_load_delete_dialog.title = "Delete save"
 	_load_delete_dialog.dialog_text = "Delete this save permanently?"
+	_style_dialog_panel(_load_delete_dialog)
 	add_child(_load_delete_dialog)
 	_load_delete_dialog.confirmed.connect(_on_in_game_delete_confirmed)
+
+
+func _style_dialog_panel(dialog: Window) -> void:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.18, 0.12, 0.07, 0.98)
+	sb.set_border_width_all(3)
+	sb.border_color = Color(0.05, 0.03, 0.015, 1)
+	sb.set_corner_radius_all(4)
+	sb.set_content_margin_all(12)
+	sb.shadow_color = Color(0, 0, 0, 0.45)
+	sb.shadow_size = 4
+	dialog.add_theme_stylebox_override("panel", sb)
+	dialog.add_theme_stylebox_override("embedded_border", sb)
+	dialog.add_theme_stylebox_override("embedded_unfocused_border", sb)
+	dialog.transparent = false
 
 
 func _refresh_load_list() -> void:
@@ -1091,12 +1604,16 @@ func open_economy_for_province(province_id: String, sticky: bool = true) -> void
 	update_economy_menu(parent_n)
 
 
-## Open province economy Overview focused on labor (optionally one category).
+## Open province economy focused on labor (optionally one category).
 func open_economy_labor_for_province(province_id: String, labor_category: String = "") -> void:
 	_labor_focus_category = labor_category
 	open_economy_for_province(province_id, true)
 	if province_sub_tabs != null:
-		province_sub_tabs.current_tab = 0 # overview (labor sliders)
+		# Grain / horses live on Farming; other categories on Overview.
+		if labor_category in ["grain", "horses"]:
+			province_sub_tabs.current_tab = _prov_farming_tab_index
+		else:
+			province_sub_tabs.current_tab = 0
 	_apply_labor_focus()
 
 
@@ -1228,8 +1745,7 @@ func _on_war_btn_pressed() -> void:
 	if war_menu.visible:
 		refresh_military_tab()
 		refresh_production_tab()
-		refresh_alliances_list()
-		refresh_vip_trade_ui()
+		refresh_diplomacy_ui()
 		refresh_ladder_tab()
 		refresh_ai_debug_tab()
 
@@ -1270,11 +1786,25 @@ func refresh_msg_list() -> void:
 		var event: Dictionary = parent_n.get_event(event_id) if parent_n.has_method("get_event") else {}
 		if event.is_empty():
 			continue
+		var unread := bool(entry.get("unread", false))
 		var btn := Button.new()
-		btn.text = GameEvents.inbox_label(event, reader_id)
+		btn.text = GameEvents.inbox_label(event, reader_id, unread)
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		btn.pressed.connect(_on_msg_entry_pressed.bind(event_id))
 		msg_list.add_child(btn)
+		if unread:
+			_style_unread_msg_btn(btn)
+
+
+func _style_unread_msg_btn(btn: Button) -> void:
+	var base: Font = btn.get_theme_font("font")
+	if base == null:
+		base = ThemeDB.fallback_font
+	if base != null:
+		var bold := FontVariation.new()
+		bold.base_font = base
+		bold.variation_embolden = 0.7
+		btn.add_theme_font_override("font", bold)
 
 
 func refresh_msg_list_if_open() -> void:
@@ -1355,6 +1885,7 @@ func _ensure_building_popup() -> void:
 	header.add_child(_building_popup_shield)
 	header.add_child(_building_popup_title)
 	header.add_child(_building_popup_close)
+	PanelDragController.attach(_building_popup, header, _building_popup_close)
 	_building_popup_body = RichTextLabel.new()
 	_building_popup_body.bbcode_enabled = true
 	_building_popup_body.fit_content = true
@@ -1369,17 +1900,28 @@ func _ensure_building_popup() -> void:
 	_building_popup_deploy = Button.new()
 	_building_popup_deploy.text = "Ungarrison your troops"
 	_building_popup_deploy.visible = false
+	_building_popup_manage = Button.new()
+	_building_popup_manage.text = "Manage garrison"
+	_building_popup_manage.visible = false
 	vbox.add_child(header)
 	vbox.add_child(HSeparator.new())
 	vbox.add_child(_building_popup_body)
 	vbox.add_child(_building_popup_economy)
+	vbox.add_child(_building_popup_manage)
 	vbox.add_child(_building_popup_deploy)
 	margin.add_child(vbox)
 	_building_popup.add_child(margin)
 	add_child(_building_popup)
 
 
-func show_building_popup(building: Node, title: String, body: String, pinned: bool, deploy_cb: Callable = Callable()) -> void:
+func show_building_popup(
+	building: Node,
+	title: String,
+	body: String,
+	pinned: bool,
+	deploy_cb: Callable = Callable(),
+	manage_cb: Callable = Callable()
+) -> void:
 	_ensure_building_popup()
 	_building_popup_node = building
 	_building_popup_pinned = pinned
@@ -1398,7 +1940,15 @@ func show_building_popup(building: Node, title: String, body: String, pinned: bo
 		_building_popup_deploy.pressed.connect(_on_building_popup_deploy_pressed.bind(deploy_cb))
 	else:
 		_building_popup_deploy.visible = false
+	if _building_popup_manage.pressed.is_connected(_on_building_popup_manage_pressed):
+		_building_popup_manage.pressed.disconnect(_on_building_popup_manage_pressed)
+	if manage_cb.is_valid():
+		_building_popup_manage.visible = true
+		_building_popup_manage.pressed.connect(_on_building_popup_manage_pressed.bind(manage_cb))
+	else:
+		_building_popup_manage.visible = false
 	_building_popup.visible = true
+	_bring_to_front(_building_popup)
 	_place_anchored_popup(_building_popup, get_viewport().get_mouse_position() + Vector2(14, 0), 320.0)
 
 
@@ -1445,6 +1995,11 @@ func _on_building_popup_economy_pressed() -> void:
 func _on_building_popup_deploy_pressed(deploy_cb: Callable) -> void:
 	hide_building_popup()
 	deploy_cb.call()
+
+
+func _on_building_popup_manage_pressed(manage_cb: Callable) -> void:
+	hide_building_popup()
+	manage_cb.call()
 
 
 ## Fixed-width map popup: keep full size, flip/clamp so the whole panel stays on-screen.
@@ -1517,6 +2072,7 @@ func _ensure_field_popup() -> void:
 	close_btn.pressed.connect(hide_field_popup)
 	header.add_child(_field_popup_title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_field_popup, header, close_btn)
 	_field_popup_body = Label.new()
 	_field_popup_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_field_popup_body.custom_minimum_size = Vector2(300, 0)
@@ -1546,6 +2102,7 @@ func show_field_popup(base_map: Node, field: Node) -> void:
 	_field_popup_field = field
 	_rebuild_field_popup()
 	_field_popup.visible = true
+	_bring_to_front(_field_popup)
 	_place_anchored_popup(_field_popup, get_viewport().get_mouse_position() + Vector2(14, 0), 320.0)
 
 
@@ -1605,12 +2162,13 @@ func _ensure_populate_idle_popup() -> void:
 	var title := Label.new()
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 16)
-	title.text = "Populate idle fields"
+	title.text = "Field population helper"
 	var close_btn := Button.new()
 	close_btn.text = "X"
 	close_btn.pressed.connect(hide_populate_idle_popup)
 	header.add_child(title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_populate_idle_popup, header, close_btn)
 	_populate_idle_body = Label.new()
 	_populate_idle_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	var btns := HBoxContainer.new()
@@ -1640,6 +2198,7 @@ func show_populate_idle_popup() -> void:
 	_ensure_populate_idle_popup()
 	_populate_idle_body.text = "Convert %d idle fields" % _prov_idle_field_count
 	_populate_idle_popup.visible = true
+	_bring_to_front(_populate_idle_popup)
 	_place_anchored_popup(_populate_idle_popup, get_viewport().get_mouse_position() + Vector2(14, 0), 360.0)
 
 
@@ -1684,6 +2243,7 @@ func _ensure_economy_building_popup() -> void:
 	close_btn.pressed.connect(hide_economy_building_popup)
 	header.add_child(_econ_popup_title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_econ_popup, header, close_btn)
 	_econ_popup_body = RichTextLabel.new()
 	_econ_popup_body.bbcode_enabled = true
 	_econ_popup_body.fit_content = true
@@ -1711,6 +2271,7 @@ func show_economy_building_popup(base_map: Node, building: Node) -> void:
 	_econ_popup_building = building
 	_rebuild_economy_building_popup()
 	_econ_popup.visible = true
+	_bring_to_front(_econ_popup)
 	_place_anchored_popup(_econ_popup, get_viewport().get_mouse_position() + Vector2(14, 0), 320.0)
 
 
@@ -1872,6 +2433,7 @@ func _ensure_smith_recipe_popup() -> void:
 	close_btn.pressed.connect(hide_smith_recipe_popup)
 	header.add_child(_smith_recipe_title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_smith_recipe_popup, header, close_btn)
 	_smith_recipe_btns = VBoxContainer.new()
 	_smith_recipe_btns.add_theme_constant_override("separation", 6)
 	vbox.add_child(header)
@@ -2059,6 +2621,7 @@ func _open_econ_demolish_prompt(base_map: Node, building: Node) -> void:
 		+ "and any craft recipe is cleared. This cannot be undone."
 	) % bname
 	_econ_demolish_prompt.visible = true
+	_bring_to_front(_econ_demolish_prompt)
 	_econ_demolish_prompt.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_econ_demolish_prompt.size = Vector2(minf(380, vp.x * 0.9), _econ_demolish_prompt.get_combined_minimum_size().y)
@@ -2083,6 +2646,20 @@ func _on_econ_demolish_confirm() -> void:
 
 # --- Castle construction popup ----------------------------------------------
 
+func _castle_make_scroll_tab(tab_name: String) -> ScrollContainer:
+	var scroll := ScrollContainer.new()
+	scroll.name = tab_name
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 6)
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(body)
+	scroll.set_meta("body", body)
+	return scroll
+
+
 func _ensure_castle_popup() -> void:
 	if _castle_popup != null:
 		return
@@ -2091,6 +2668,7 @@ func _ensure_castle_popup() -> void:
 	_castle_popup.z_index = 130
 	_castle_popup.mouse_filter = Control.MOUSE_FILTER_STOP
 	_castle_popup.visible = false
+	_castle_popup.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		margin.add_theme_constant_override(side, 12)
@@ -2105,23 +2683,51 @@ func _ensure_castle_popup() -> void:
 	close_btn.pressed.connect(hide_castle_popup)
 	header.add_child(_castle_popup_title)
 	header.add_child(close_btn)
-	_castle_popup_body = Label.new()
-	_castle_popup_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_castle_popup_body.custom_minimum_size = Vector2(280, 0)
-	_castle_popup_btns = VBoxContainer.new()
-	_castle_popup_btns.add_theme_constant_override("separation", 6)
+	PanelDragController.attach(_castle_popup, header, close_btn)
+	_castle_tabs = TabContainer.new()
+	_castle_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_castle_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_castle_tabs.tab_changed.connect(_on_castle_tab_changed)
+	var overview := _castle_make_scroll_tab("Overview")
+	_castle_overview_body = overview.get_meta("body")
+	_castle_tabs.add_child(overview)
+	var inside := _castle_make_scroll_tab("Inside")
+	_castle_inside_body = inside.get_meta("body")
+	_castle_tabs.add_child(inside)
+	var outside := _castle_make_scroll_tab("Outside")
+	_castle_outside_body = outside.get_meta("body")
+	_castle_tabs.add_child(outside)
+	var construction := _castle_make_scroll_tab("Construction")
+	_castle_construction_body = construction.get_meta("body")
+	_castle_tabs.add_child(construction)
 	vbox.add_child(header)
 	vbox.add_child(HSeparator.new())
-	vbox.add_child(_castle_popup_body)
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(280, 220)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_castle_popup_btns.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(_castle_popup_btns)
-	vbox.add_child(scroll)
+	vbox.add_child(_castle_tabs)
 	margin.add_child(vbox)
 	_castle_popup.add_child(margin)
 	add_child(_castle_popup)
+
+
+func _on_castle_tab_changed(tab: int) -> void:
+	_castle_tab_idx = tab
+
+
+func _fit_castle_popup() -> void:
+	if _castle_popup == null:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	var max_w := minf(560.0, vp.x * 0.92)
+	var max_h := vp.y * 0.85
+	if _castle_tabs != null:
+		_castle_tabs.custom_minimum_size = Vector2(max_w - 48.0, minf(420.0, max_h - 80.0))
+	_castle_popup.reset_size()
+	var sz := _castle_popup.get_combined_minimum_size()
+	sz.x = max_w
+	sz.y = minf(maxf(sz.y, 480.0), max_h)
+	_castle_popup.size = sz
+	_castle_popup.position = (vp - _castle_popup.size) * 0.5
+	_castle_popup.position.x = clampf(_castle_popup.position.x, 0.0, maxf(0.0, vp.x - _castle_popup.size.x))
+	_castle_popup.position.y = clampf(_castle_popup.position.y, 0.0, maxf(0.0, vp.y - _castle_popup.size.y))
 
 
 func show_castle_popup(base_map: Node, building: Node) -> void:
@@ -2133,7 +2739,8 @@ func show_castle_popup(base_map: Node, building: Node) -> void:
 	_castle_popup_building = building
 	_rebuild_castle_popup()
 	_castle_popup.visible = true
-	_place_anchored_popup(_castle_popup, get_viewport().get_mouse_position() + Vector2(14, 0), 320.0)
+	_bring_to_front(_castle_popup)
+	_fit_castle_popup()
 
 
 func hide_castle_popup() -> void:
@@ -2152,6 +2759,14 @@ func refresh_castle_popup_if(base_map: Node, building: Node) -> void:
 	_rebuild_castle_popup()
 
 
+func _castle_clear_body(body: VBoxContainer) -> void:
+	if body == null:
+		return
+	for c in body.get_children():
+		body.remove_child(c)
+		c.queue_free()
+
+
 func _rebuild_castle_popup() -> void:
 	if _castle_popup_base == null or _castle_popup_building == null:
 		return
@@ -2160,20 +2775,29 @@ func _rebuild_castle_popup() -> void:
 	_castle_popup_title.text = (
 		base._building_display_name(b) if base.has_method("_building_display_name") else "Castle"
 	)
-	_castle_popup_body.text = (
-		base._building_display_body(b) if base.has_method("_building_display_body") else ""
-	)
-	for c in _castle_popup_btns.get_children():
-		_castle_popup_btns.remove_child(c)
-		c.queue_free()
+	_castle_clear_body(_castle_overview_body)
+	_castle_clear_body(_castle_inside_body)
+	_castle_clear_body(_castle_outside_body)
+	_castle_clear_body(_castle_construction_body)
+
 	var pid := int(base.my_pl_id)
 	var prov = base.find_province_for_building(b) if base.has_method("find_province_for_building") else null
 	var is_dejure = prov != null and prov.has_method("has_dejure") and prov.has_dejure(pid)
+	var body_txt: String = (
+		str(base._building_display_body(b)) if base.has_method("_building_display_body") else ""
+	)
+
+	# --- Overview ---
+	var stats := Label.new()
+	stats.text = body_txt
+	stats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	stats.custom_minimum_size = Vector2(480, 0)
+	_castle_overview_body.add_child(stats)
 	if prov != null:
 		var econ_btn := Button.new()
 		econ_btn.text = "Open province economy"
 		econ_btn.pressed.connect(_on_castle_popup_economy_pressed)
-		_castle_popup_btns.add_child(econ_btn)
+		_castle_overview_body.add_child(econ_btn)
 	var wood := 0
 	var stone := 0
 	if prov != null and prov.has_method("get_player_material"):
@@ -2181,7 +2805,7 @@ func _rebuild_castle_popup() -> void:
 		stone = int(prov.get_player_material(pid, "stone"))
 	var stock_lbl := Label.new()
 	stock_lbl.text = "Your stock: %d wood · %d stone" % [wood, stone]
-	_castle_popup_btns.add_child(stock_lbl)
+	_castle_overview_body.add_child(stock_lbl)
 	if b.has_method("is_operational") and b.is_operational():
 		var has_own := false
 		if base.has_method("get_player_garrison"):
@@ -2190,25 +2814,105 @@ func _rebuild_castle_popup() -> void:
 			var ung := Button.new()
 			ung.text = "Ungarrison your troops"
 			ung.pressed.connect(_on_castle_ungarrison_pressed)
-			_castle_popup_btns.add_child(ung)
+			_castle_overview_body.add_child(ung)
+
+	# --- Inside / Outside ---
+	_fill_castle_garrison_tab(_castle_inside_body, GlobalUnits.SPOT.INSIDE, "Inside")
+	_fill_castle_garrison_tab(_castle_outside_body, GlobalUnits.SPOT.OUTSIDE, "Outside")
+
+	# --- Construction ---
 	if not is_dejure:
 		var hint := Label.new()
 		hint.text = "Only de jure can change construction here"
-		_castle_popup_btns.add_child(hint)
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hint.custom_minimum_size = Vector2(480, 0)
+		_castle_construction_body.add_child(hint)
+	else:
+		var hdr := Label.new()
+		hdr.text = "Construction target:"
+		_castle_construction_body.add_child(hdr)
+		_add_castle_target_button(GlobalUnits.CASTLE_TARGET_EMPTY, "Dismantle to empty plot", wood, stone)
+		for lvl in range(6):
+			var name_ := str(b.castle_type_display_name(lvl)) if b.has_method("castle_type_display_name") else "Level %d" % (lvl + 1)
+			_add_castle_target_button(lvl, name_, wood, stone)
+
+	if _castle_tabs != null:
+		var count := _castle_tabs.get_tab_count()
+		_castle_tabs.current_tab = clampi(_castle_tab_idx, 0, maxi(0, count - 1))
+	_fit_castle_popup()
+
+
+func _fill_castle_garrison_tab(body: VBoxContainer, spot: int, label: String) -> void:
+	var base = _castle_popup_base
+	var b := _castle_popup_building
+	if base == null or b == null or body == null:
 		return
+	var units: Array = base.get_building_garrison(b, spot) if base.has_method("get_building_garrison") else []
+	var cap := 0
+	if spot == GlobalUnits.SPOT.INSIDE and b.has_method("get_inside_capacity"):
+		cap = int(b.get_inside_capacity())
+	elif spot == GlobalUnits.SPOT.OUTSIDE and b.has_method("get_outside_capacity"):
+		cap = int(b.get_outside_capacity())
+	elif b.has_method("get_garrison_capacity"):
+		cap = int(b.get_garrison_capacity(spot))
+	var works := b.has_method("is_upgrade_project") and bool(b.is_upgrade_project())
+	var bonus := (
+		GlobalUnits.castle_inside_list_bonus(works) if spot == GlobalUnits.SPOT.INSIDE else 1.0
+	)
+	var men := GlobalUnits.total_men(units)
+	var str_ := GlobalUnits.fighting_strength(units, bonus)
 	var hdr := Label.new()
-	hdr.text = "Construction target:"
-	_castle_popup_btns.add_child(hdr)
-	# Dismantle only from a standing castle (blocked mid-project by preview_retarget).
-	_add_castle_target_button(GlobalUnits.CASTLE_TARGET_EMPTY, "Dismantle to empty plot", wood, stone)
-	for lvl in range(6):
-		var name_ := str(b.castle_type_display_name(lvl)) if b.has_method("castle_type_display_name") else "Level %d" % (lvl + 1)
-		_add_castle_target_button(lvl, name_, wood, stone)
+	hdr.add_theme_font_size_override("font_size", 14)
+	if men <= 0:
+		hdr.text = "%s garrison: empty (cap %d)" % [label, cap]
+	else:
+		hdr.text = "%s garrison: %d men · fight str %d (cap %d)" % [label, men, str_, cap]
+	body.add_child(hdr)
+	if men <= 0:
+		var empty_lbl := Label.new()
+		empty_lbl.text = "empty"
+		body.add_child(empty_lbl)
+	else:
+		for pid in GlobalUnits.owners_in(units):
+			var owner_name := str(base.players[pid].name_) if base.players.has(pid) else "?"
+			var owner_units: Array = []
+			for s in units:
+				if int(s["owner"]) == pid:
+					owner_units.append(s)
+			var row_lbl := Label.new()
+			row_lbl.text = "[%s] %d men" % [owner_name, GlobalUnits.total_men(owner_units)]
+			body.add_child(row_lbl)
+			for s in owner_units:
+				var stack_lbl := Label.new()
+				stack_lbl.text = "  %d × %s (%s)" % [
+					int(s["count"]), GlobalUnits.unit_name(s["type"]), GlobalUnits.source_name(s["source"])
+				]
+				body.add_child(stack_lbl)
+	body.add_child(HSeparator.new())
+	var can_manage = base.has_method("can_manage_building_garrison") \
+		and base.can_manage_building_garrison(b, spot)
+	var manage := Button.new()
+	manage.text = "Manage garrison"
+	manage.disabled = not can_manage
+	if can_manage:
+		manage.pressed.connect(_on_castle_manage_garrison_pressed.bind(spot))
+	body.add_child(manage)
+	var pid := int(base.my_pl_id)
+	var has_own := false
+	for s in units:
+		if int(s["owner"]) == pid and int(s["count"]) > 0:
+			has_own = true
+			break
+	if has_own:
+		var ung := Button.new()
+		ung.text = "Ungarrison your troops"
+		ung.pressed.connect(_on_castle_ungarrison_spot_pressed.bind(spot))
+		body.add_child(ung)
 
 
 func _add_castle_target_button(target: int, label: String, wood: int, stone: int) -> void:
 	var b := _castle_popup_building
-	if b == null or not b.has_method("preview_retarget"):
+	if b == null or not b.has_method("preview_retarget") or _castle_construction_body == null:
 		return
 	var preview: Dictionary = b.preview_retarget(target)
 	if preview.is_empty():
@@ -2217,12 +2921,16 @@ func _add_castle_target_button(target: int, label: String, wood: int, stone: int
 			var cur := Button.new()
 			cur.text = "%s (current project)" % label
 			cur.disabled = true
-			_castle_popup_btns.add_child(cur)
-		elif b.has_method("is_operational") and b.is_operational() and int(b.get("castle_type")) == target:
+			_castle_construction_body.add_child(cur)
+		elif (
+			b.has_method("is_operational") and b.is_operational()
+			and not bool(b.get("project_active"))
+			and int(b.get("castle_type")) == target
+		):
 			var cur2 := Button.new()
 			cur2.text = "%s (standing)" % label
 			cur2.disabled = true
-			_castle_popup_btns.add_child(cur2)
+			_castle_construction_body.add_child(cur2)
 		return
 	var pay: Dictionary = preview.get("pay", {})
 	var pay_w := int(pay.get("wood", 0))
@@ -2255,7 +2963,7 @@ func _add_castle_target_button(target: int, label: String, wood: int, stone: int
 	btn.text = label if parts.is_empty() else "%s (%s)" % [label, " · ".join(parts)]
 	btn.disabled = wood < pay_w or stone < pay_s
 	btn.pressed.connect(_on_castle_target_pressed.bind(target))
-	_castle_popup_btns.add_child(btn)
+	_castle_construction_body.add_child(btn)
 
 
 func _on_castle_target_pressed(target: int) -> void:
@@ -2274,6 +2982,24 @@ func _on_castle_ungarrison_pressed() -> void:
 	open_deploy_menu(base, building, int(base.my_pl_id))
 
 
+func _on_castle_ungarrison_spot_pressed(spot: int) -> void:
+	if _castle_popup_base == null or _castle_popup_building == null:
+		return
+	var building := _castle_popup_building
+	var base = _castle_popup_base
+	hide_castle_popup()
+	open_deploy_menu(base, building, int(base.my_pl_id), spot)
+
+
+func _on_castle_manage_garrison_pressed(spot: int) -> void:
+	if _castle_popup_base == null or _castle_popup_building == null:
+		return
+	var building := _castle_popup_building
+	var base = _castle_popup_base
+	hide_castle_popup()
+	open_garrison_army_menu(base, building, spot)
+
+
 func _on_castle_popup_economy_pressed() -> void:
 	var pid := _province_id_for_building(_castle_popup_building)
 	hide_castle_popup()
@@ -2287,8 +3013,46 @@ func _on_castle_popup_economy_pressed() -> void:
 func close_all_popups() -> void:
 	hide_building_popup()
 	hide_field_popup()
+	hide_populate_idle_popup()
 	hide_economy_building_popup()
+	hide_smith_recipe_popup()
 	_close_econ_demolish_prompt()
+	hide_castle_popup()
+	if _info_popup != null:
+		_info_popup.hide()
+	_close_army_menu()
+	_close_force_menu()
+	_close_force_cargo_panel()
+	_close_deploy_panel()
+	_close_disband_panel()
+	_close_battle_menu()
+	_close_hostage_menu()
+	_close_building_actions_menu()
+	_close_event_report(false)
+	_close_recruit_menu()
+	_close_arm_peasants_menu()
+	close_caravan_menus()
+	_close_merchant_shop()
+	_close_merchant_raid_menu()
+	_close_field_raid_menu()
+	_close_sellswords_hire()
+	_close_fleet_menu()
+	_close_rename_army_dialog()
+	if _vt_panel != null:
+		_vt_panel.visible = false
+	for menu in [map_menu, economy_menu, war_menu, msg_menu, settings_menu]:
+		if menu != null:
+			menu.visible = false
+
+
+## Escape: close X-dismissible menus (and hostages → sword if undecided).
+## Does not close loot/cargo or no-X confirm prompts (raid/siege/militia/demolish/…).
+func close_menus_on_escape() -> void:
+	hide_building_popup()
+	hide_field_popup()
+	hide_populate_idle_popup()
+	hide_economy_building_popup()
+	hide_smith_recipe_popup()
 	hide_castle_popup()
 	if _info_popup != null:
 		_info_popup.hide()
@@ -2297,19 +3061,37 @@ func close_all_popups() -> void:
 	_close_deploy_panel()
 	_close_disband_panel()
 	_close_battle_menu()
-	_close_hostage_menu()
 	_close_building_actions_menu()
-	_close_event_report()
+	_close_event_report(false)
 	_close_recruit_menu()
 	_close_arm_peasants_menu()
 	close_caravan_menus()
 	_close_merchant_shop()
-	_close_merchant_raid_menu()
-	_close_field_raid_menu()
 	_close_sellswords_hire()
+	_close_fleet_menu()
+	if _vt_panel != null:
+		_vt_panel.visible = false
 	for menu in [map_menu, economy_menu, war_menu, msg_menu, settings_menu]:
 		if menu != null:
 			menu.visible = false
+	# Last: undecided hostages → sword (no settlement follow-up; Escape clears UI).
+	_close_hostage_menu(false)
+
+
+func _deselect_army_on_escape() -> void:
+	if not is_instance_valid(parent_n):
+		return
+	var pf = parent_n.get("pathfinding")
+	if pf != null and pf.has_method("deselect_army"):
+		pf.deselect_army()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not event.is_action_pressed("ui_cancel"):
+		return
+	close_menus_on_escape()
+	_deselect_army_on_escape()
+	get_viewport().set_input_as_handled()
 
 
 # --- Army action menu -------------------------------------------------------
@@ -2355,6 +3137,7 @@ func _ensure_army_menu() -> void:
 	close_btn.pressed.connect(_close_army_menu)
 	header.add_child(title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_am_panel, header, close_btn)
 	_am_tabs = TabContainer.new()
 	_am_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_am_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2383,6 +3166,29 @@ func open_army_menu(base_map, army: Node2D) -> void:
 	_ensure_army_menu()
 	_am_base = base_map
 	_am_army = army
+	_am_force_id = str(army.force_id) if army != null else ""
+	_am_is_garrison = false
+	_am_building = null
+	_am_spot = GlobalUnits.SPOT.FLAT
+	_rebuild_army_menu()
+
+
+func open_garrison_army_menu(base_map, building: Node, spot: int) -> void:
+	if base_map == null or building == null:
+		return
+	if not base_map.has_method("can_manage_building_garrison") \
+			or not base_map.can_manage_building_garrison(building, spot):
+		show_info_popup("You do not command this garrison")
+		return
+	_ensure_army_menu()
+	_am_base = base_map
+	_am_army = null
+	_am_is_garrison = true
+	_am_building = building
+	_am_spot = spot
+	_am_force_id = str(base_map.ensure_garrison_force(building, spot)) \
+		if base_map.has_method("ensure_garrison_force") \
+		else str(base_map.garrison_force_id_for(building, spot))
 	_rebuild_army_menu()
 
 
@@ -2391,7 +3197,39 @@ func _close_army_menu() -> void:
 		_am_panel.visible = false
 	_am_base = null
 	_am_army = null
+	_am_force_id = ""
+	_am_is_garrison = false
+	_am_building = null
+	_am_spot = GlobalUnits.SPOT.FLAT
 	_close_rename_army_dialog()
+
+
+func _am_active_force_id() -> String:
+	if _am_force_id != "":
+		return _am_force_id
+	if _am_army != null:
+		return str(_am_army.force_id)
+	return ""
+
+
+func _am_units() -> Array:
+	if _am_base == null:
+		return []
+	var fid := _am_active_force_id()
+	if fid == "" or not _am_base.forces.has(fid):
+		return []
+	return _am_base.forces[fid]["units"]
+
+
+func _am_controller() -> int:
+	if _am_base == null:
+		return -1
+	var fid := _am_active_force_id()
+	if fid != "" and _am_base.has_method("get_force_controller"):
+		return int(_am_base.get_force_controller(fid))
+	if _am_army != null:
+		return int(_am_army.get_controller())
+	return -1
 
 
 func _on_am_tab_changed(tab: int) -> void:
@@ -2437,14 +3275,15 @@ func _am_restore_tab() -> void:
 
 func _fit_army_menu_panel() -> void:
 	var vp := get_viewport().get_visible_rect().size
-	var max_w := minf(560.0, vp.x * 0.92)
-	var max_h := vp.y * 0.8
+	# ~30% larger than the previous 560×420 / 360-tab baseline.
+	var max_w := minf(728.0, vp.x * 0.92)
+	var max_h := vp.y * 0.85
 	if _am_tabs != null:
-		_am_tabs.custom_minimum_size = Vector2(max_w - 48.0, minf(360.0, max_h - 80.0))
+		_am_tabs.custom_minimum_size = Vector2(max_w - 48.0, minf(468.0, max_h - 80.0))
 	_am_panel.reset_size()
 	var sz := _am_panel.get_combined_minimum_size()
 	sz.x = max_w
-	sz.y = minf(maxf(sz.y, 420.0), max_h)
+	sz.y = minf(maxf(sz.y, 546.0), max_h)
 	_am_panel.size = sz
 	_am_panel.position = (vp - _am_panel.size) * 0.5
 	_am_panel.position.x = clampf(_am_panel.position.x, 0.0, maxf(0.0, vp.x - _am_panel.size.x))
@@ -2452,89 +3291,128 @@ func _fit_army_menu_panel() -> void:
 
 
 func _rebuild_army_menu() -> void:
-	if _am_base == null or _am_army == null:
+	if _am_base == null:
+		return
+	var fid := _am_active_force_id()
+	if fid == "" and not _am_is_garrison:
 		return
 	_clear_army_menu_body()
 
-	var units: Array = _am_army.get_units()
-	var fid := str(_am_army.force_id)
+	var units: Array = _am_units()
 	var nick := ""
-	if _am_base.has_method("force_display_name"):
+	if _am_is_garrison and _am_building != null and _am_base.has_method("_building_display_name"):
+		var spot_name := "Garrison"
+		if _am_spot == GlobalUnits.SPOT.INSIDE:
+			spot_name = "Inside"
+		elif _am_spot == GlobalUnits.SPOT.OUTSIDE:
+			spot_name = "Outside"
+		nick = "%s (%s)" % [_am_base._building_display_name(_am_building), spot_name]
+	elif _am_base.has_method("force_display_name"):
 		nick = str(_am_base.force_display_name(fid))
 	if nick == "":
-		nick = "Army"
+		nick = "Garrison" if _am_is_garrison else "Army"
 
 	# Title: nickname + total men
 	var title_lbl: Label = _am_panel.get_node_or_null("MarginContainer/VBoxContainer/HBoxContainer/Title")
 	if title_lbl != null:
-		title_lbl.text = "%s  (%d men)" % [nick, GlobalUnits.total_men(units)]
+		var men := GlobalUnits.total_men(units)
+		if _am_is_garrison and men <= 0:
+			title_lbl.text = "%s  (empty)" % nick
+		else:
+			title_lbl.text = "%s  (%d men)" % [nick, men]
 
 	var label_w := 480.0
 
 	# --- Roster ---
-	var ctrl = _am_army.get_controller()
-	if ctrl == _am_base.my_pl_id:
+	var ctrl := _am_controller()
+	if ctrl == _am_base.my_pl_id and not _am_is_garrison:
 		var rename_btn := Button.new()
 		rename_btn.text = "Rename"
 		rename_btn.pressed.connect(_on_am_rename_pressed)
 		_am_roster_body.add_child(rename_btn)
 		_am_roster_body.add_child(HSeparator.new())
 
-	for pid in GlobalUnits.owners_in(units):
-		var owner_name := str(_am_base.players[pid].name_) if _am_base.players.has(pid) else "?"
-		var owner_units: Array = []
-		for s in units:
-			if int(s["owner"]) == pid:
-				owner_units.append(s)
-		var row_lbl := Label.new()
-		row_lbl.text = "[%s] %d men · fight str %d" % [
-			owner_name,
-			GlobalUnits.total_men(owner_units),
-			GlobalUnits.fighting_strength(owner_units)
-		]
-		_am_roster_body.add_child(row_lbl)
-		for s in owner_units:
-			var stack_lbl := Label.new()
-			stack_lbl.text = "  %d × %s (%s)" % [int(s["count"]), GlobalUnits.unit_name(s["type"]), GlobalUnits.source_name(s["source"])]
-			var st := GlobalUnits.stack_status(s)
-			if st != GlobalUnits.STATUS.FIGHTING:
-				stack_lbl.text += " [%s]" % GlobalUnits.status_name(st)
-				var rec := int(s.get("recover_in", 0))
-				if rec > 0:
-					stack_lbl.text += " %ds" % rec
-			if bool(s.get("join_pending", false)):
-				stack_lbl.text += " (join pending)"
-			_am_roster_body.add_child(stack_lbl)
+	if units.is_empty():
+		var empty_lbl := Label.new()
+		empty_lbl.text = "empty"
+		_am_roster_body.add_child(empty_lbl)
+	else:
+		for pid in GlobalUnits.owners_in(units):
+			var owner_name := str(_am_base.players[pid].name_) if _am_base.players.has(pid) else "?"
+			var owner_units: Array = []
+			for s in units:
+				if int(s["owner"]) == pid:
+					owner_units.append(s)
+			var row_lbl := Label.new()
+			row_lbl.text = "[%s] %d men · fight str %d" % [
+				owner_name,
+				GlobalUnits.total_men(owner_units),
+				GlobalUnits.fighting_strength(owner_units)
+			]
+			_am_roster_body.add_child(row_lbl)
+			for s in owner_units:
+				var stack_lbl := Label.new()
+				stack_lbl.text = "  %d × %s (%s)" % [int(s["count"]), GlobalUnits.unit_name(s["type"]), GlobalUnits.source_name(s["source"])]
+				var st := GlobalUnits.stack_status(s)
+				if st != GlobalUnits.STATUS.FIGHTING:
+					stack_lbl.text += " [%s]" % GlobalUnits.status_name(st)
+					var rec := int(s.get("recover_in", 0))
+					if rec > 0:
+						stack_lbl.text += " %ds" % rec
+				if bool(s.get("join_pending", false)):
+					stack_lbl.text += " (join pending)"
+				_am_roster_body.add_child(stack_lbl)
 
 	# --- Orders ---
-	var move_points = _am_army.movement_left
-	var max_mp = _am_army.effective_max_mp() if _am_army.has_method("effective_max_mp") else move_points
-	var pts_lbl := Label.new()
-	pts_lbl.text = "Movement points: %d / %d" % [move_points, max_mp]
-	if GlobalUnits.is_knights_only(units):
-		pts_lbl.text += "  (knights +50%)"
-	var wound_pen := GlobalUnits.wound_mp_penalty(units)
-	if wound_pen > 0.0:
-		pts_lbl.text += "  (wounded −%.0f%%)" % (wound_pen * 100.0)
-	_am_orders_body.add_child(pts_lbl)
-	_am_orders_body.add_child(HSeparator.new())
+	if _am_is_garrison:
+		var g_lbl := Label.new()
+		g_lbl.text = "Stationed in garrison (no field movement)."
+		g_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		g_lbl.custom_minimum_size = Vector2(label_w, 0)
+		_am_orders_body.add_child(g_lbl)
+		_am_orders_body.add_child(HSeparator.new())
 
-	var move_btn := Button.new()
-	move_btn.text = "Move  (MP: %d)" % move_points
-	move_btn.disabled = move_points <= 0
-	move_btn.pressed.connect(_on_am_move_pressed)
-	_am_orders_body.add_child(move_btn)
+		var my_men := GlobalUnits.men_of_owner(units, _am_base.my_pl_id)
+		var ung_btn := Button.new()
+		ung_btn.text = "Ungarrison (select / ALL)"
+		ung_btn.disabled = my_men <= 0 or ctrl != _am_base.my_pl_id
+		ung_btn.pressed.connect(_on_am_ungarrison_pressed)
+		_am_orders_body.add_child(ung_btn)
 
-	var split_btn := Button.new()
-	split_btn.text = "Split army (min %d + %d men)" % [GlobalUnits.MIN_SPLIT_MEN, GlobalUnits.MIN_SPLIT_MEN]
-	split_btn.disabled = GlobalUnits.total_men(units) < GlobalUnits.MIN_SPLIT_MEN * 2 or move_points <= 0
-	split_btn.pressed.connect(_on_am_split_pressed)
-	_am_orders_body.add_child(split_btn)
+		var disband_btn := Button.new()
+		disband_btn.text = "Disband garrison"
+		disband_btn.disabled = units.is_empty() or ctrl != _am_base.my_pl_id
+		disband_btn.pressed.connect(_on_am_disband_pressed)
+		_am_orders_body.add_child(disband_btn)
+	else:
+		var move_points = _am_army.movement_left if _am_army != null else 0
+		var max_mp = _am_army.effective_max_mp() if _am_army != null and _am_army.has_method("effective_max_mp") else move_points
+		var pts_lbl := Label.new()
+		pts_lbl.text = "Movement points: %d / %d" % [move_points, max_mp]
+		if GlobalUnits.is_knights_only(units):
+			pts_lbl.text += "  (knights +50%)"
+		var wound_pen := GlobalUnits.wound_mp_penalty(units)
+		if wound_pen > 0.0:
+			pts_lbl.text += "  (wounded −%.0f%%)" % (wound_pen * 100.0)
+		_am_orders_body.add_child(pts_lbl)
+		_am_orders_body.add_child(HSeparator.new())
 
-	var disband_btn := Button.new()
-	disband_btn.text = "Disband army"
-	disband_btn.pressed.connect(_on_am_disband_pressed)
-	_am_orders_body.add_child(disband_btn)
+		var move_btn := Button.new()
+		move_btn.text = "Move  (MP: %d)" % move_points
+		move_btn.disabled = move_points <= 0
+		move_btn.pressed.connect(_on_am_move_pressed)
+		_am_orders_body.add_child(move_btn)
+
+		var split_btn := Button.new()
+		split_btn.text = "Split army (min %d + %d men)" % [GlobalUnits.MIN_SPLIT_MEN, GlobalUnits.MIN_SPLIT_MEN]
+		split_btn.disabled = GlobalUnits.total_men(units) < GlobalUnits.MIN_SPLIT_MEN * 2 or move_points <= 0
+		split_btn.pressed.connect(_on_am_split_pressed)
+		_am_orders_body.add_child(split_btn)
+
+		var disband_btn := Button.new()
+		disband_btn.text = "Disband army"
+		disband_btn.pressed.connect(_on_am_disband_pressed)
+		_am_orders_body.add_child(disband_btn)
 
 	var peasants := 0
 	if _am_base.has_method("count_force_armable_peasants"):
@@ -2546,16 +3424,16 @@ func _rebuild_army_menu() -> void:
 	_am_orders_body.add_child(arm_btn)
 
 	# --- Supply ---
-	var cargo: Dictionary = _am_base.get_force_cargo(_am_army.force_id) if _am_base.has_method("get_force_cargo") else {}
+	var cargo: Dictionary = _am_base.get_force_cargo(fid) if _am_base.has_method("get_force_cargo") else {}
 	if _am_base.has_method("force_food_status_text"):
 		var food_lbl := Label.new()
-		food_lbl.text = _am_base.force_food_status_text(str(_am_army.force_id))
+		food_lbl.text = _am_base.force_food_status_text(fid)
 		food_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		food_lbl.custom_minimum_size = Vector2(label_w, 0)
 		_am_supply_body.add_child(food_lbl)
-	_am_add_feed_toggle(str(_am_army.force_id))
+	_am_add_feed_toggle(fid)
 	if _am_base.has_method("force_siege_status_text"):
-		var siege_txt := str(_am_base.force_siege_status_text(str(_am_army.force_id)))
+		var siege_txt := str(_am_base.force_siege_status_text(fid))
 		if siege_txt != "":
 			var siege_lbl := Label.new()
 			siege_lbl.text = siege_txt
@@ -2571,10 +3449,10 @@ func _rebuild_army_menu() -> void:
 	var deposit_btn := Button.new()
 	deposit_btn.text = "Deposit"
 	deposit_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var prov_under = _am_base.province_under_force(_am_army.force_id) if _am_base.has_method("province_under_force") else null
+	var prov_under = _am_base.province_under_force(fid) if _am_base.has_method("province_under_force") else null
 	var can_deposit := false
 	if _am_base.has_method("can_force_deposit_cargo"):
-		can_deposit = _am_base.can_force_deposit_cargo(_am_army.force_id, _am_base.my_pl_id)
+		can_deposit = _am_base.can_force_deposit_cargo(fid, _am_base.my_pl_id)
 	else:
 		can_deposit = prov_under != null
 	deposit_btn.disabled = not can_deposit or not GlobalUnits.caravan_cargo_has_any(cargo)
@@ -2599,7 +3477,7 @@ func _rebuild_army_menu() -> void:
 	# --- People (VIPs + prisoners); hide tab when empty ---
 	var has_people := false
 	if _am_base.has_method("get_vips_on_force"):
-		var vip_ids: Array = _am_base.get_vips_on_force(_am_army.force_id)
+		var vip_ids: Array = _am_base.get_vips_on_force(fid)
 		if not vip_ids.is_empty():
 			has_people = true
 			var vip_hdr := Label.new()
@@ -2662,17 +3540,19 @@ func _rebuild_army_menu() -> void:
 
 	_am_restore_tab()
 	_am_panel.visible = true
+	_bring_to_front(_am_panel)
 	_fit_army_menu_panel()
 
 
 func _on_am_put_vip_to_sword(vip_id: String) -> void:
-	if _am_base == null or _am_army == null:
+	var fid := _am_active_force_id()
+	if _am_base == null or fid == "":
 		return
-	_am_base.do_put_vip_to_sword(_am_army.force_id, vip_id)
+	_am_base.do_put_vip_to_sword(fid, vip_id)
 
 
 func refresh_army_menu_if_force(force_id: String) -> void:
-	if _am_panel != null and _am_panel.visible and _am_army != null and _am_army.force_id == force_id:
+	if _am_panel != null and _am_panel.visible and _am_active_force_id() == force_id:
 		_rebuild_army_menu()
 
 
@@ -2701,9 +3581,10 @@ func _on_am_feed_from_province_toggled(pressed: bool, force_id: String) -> void:
 
 
 func _on_am_rename_pressed() -> void:
-	if _am_base == null or _am_army == null:
+	var fid := _am_active_force_id()
+	if _am_base == null or fid == "":
 		return
-	_open_rename_army_dialog(_am_base, str(_am_army.force_id))
+	_open_rename_army_dialog(_am_base, fid)
 
 
 func _ensure_rename_army_dialog() -> void:
@@ -2767,6 +3648,7 @@ func _open_rename_army_dialog(base_map, force_id: String) -> void:
 	_rn_edit.text = current
 	_rn_edit.grab_focus()
 	_rn_panel.visible = true
+	_bring_to_front(_rn_panel)
 	_rn_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	var sz := _rn_panel.get_combined_minimum_size()
@@ -2805,15 +3687,17 @@ func _on_rn_confirm() -> void:
 
 
 func _on_am_offer_join(stack_spec: Dictionary) -> void:
-	if _am_base == null or _am_army == null:
+	var fid := _am_active_force_id()
+	if _am_base == null or fid == "":
 		return
-	_am_base.do_offer_join(_am_army.force_id, stack_spec)
+	_am_base.do_offer_join(fid, stack_spec)
 
 
 func _on_am_put_to_sword(stack_spec: Dictionary) -> void:
-	if _am_base == null or _am_army == null:
+	var fid := _am_active_force_id()
+	if _am_base == null or fid == "":
 		return
-	_am_base.do_put_stack_to_sword(_am_army.force_id, stack_spec)
+	_am_base.do_put_stack_to_sword(fid, stack_spec)
 
 
 func _on_am_move_pressed() -> void:
@@ -2835,47 +3719,59 @@ func _on_am_split_pressed() -> void:
 	_open_split_panel(base, army)
 
 
+func _on_am_ungarrison_pressed() -> void:
+	if _am_base == null or _am_building == null:
+		return
+	var base = _am_base
+	var building := _am_building
+	var spot := _am_spot
+	var pid := int(base.my_pl_id)
+	_close_army_menu()
+	open_deploy_menu(base, building, pid, spot)
+
+
 func _on_am_disband_pressed() -> void:
-	if _am_base == null or _am_army == null:
+	var fid := _am_active_force_id()
+	if _am_base == null or fid == "":
 		return
 	var base = _am_base
 	var army := _am_army
 	_close_army_menu()
-	_open_disband_confirm(base, army)
+	_open_disband_confirm(base, army, fid)
 
 
 func _on_am_arm_peasants_pressed() -> void:
-	if _am_base == null or _am_army == null:
+	var fid := _am_active_force_id()
+	if _am_base == null or fid == "":
 		return
 	var base = _am_base
-	var fid := str(_am_army.force_id)
 	_close_army_menu()
 	open_arm_peasants_menu(base, fid)
 
 
 func _on_am_deposit_loot() -> void:
-	if _am_base == null or _am_army == null:
+	var fid := _am_active_force_id()
+	if _am_base == null or fid == "":
 		return
 	var base = _am_base
-	var fid = _am_army.force_id
 	_close_army_menu()
 	_open_force_cargo_panel(base, fid, "deposit")
 
 
 func _on_am_withdraw_loot() -> void:
-	if _am_base == null or _am_army == null:
+	var fid := _am_active_force_id()
+	if _am_base == null or fid == "":
 		return
 	var base = _am_base
-	var fid = _am_army.force_id
 	_close_army_menu()
 	_open_force_cargo_panel(base, fid, "withdraw")
 
 
 func _on_am_send_loot() -> void:
-	if _am_base == null or _am_army == null:
+	var fid := _am_active_force_id()
+	if _am_base == null or fid == "":
 		return
 	var base = _am_base
-	var fid = _am_army.force_id
 	_close_army_menu()
 	_open_force_cargo_panel(base, fid, "send")
 
@@ -2901,9 +3797,10 @@ func _ensure_force_cargo_panel() -> void:
 	_fc_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hbox.add_child(_fc_title)
 	var close_btn := Button.new()
-	close_btn.text = "✕"
+	close_btn.text = "X"
 	close_btn.pressed.connect(_close_force_cargo_panel)
 	hbox.add_child(close_btn)
+	PanelDragController.attach(_fc_panel, hbox, close_btn)
 	vbox.add_child(hbox)
 	_fc_info_lbl = Label.new()
 	_fc_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -3036,6 +3933,7 @@ func _open_force_cargo_panel(base_map, force_id: String, mode: String, after_dis
 		_fc_body.add_child(row_m)
 		_fc_spinboxes[k] = spin_m
 	_fc_panel.visible = true
+	_bring_to_front(_fc_panel)
 	_fc_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_fc_panel.size = Vector2(minf(400, vp.x * 0.9), minf(480, vp.y * 0.85))
@@ -3097,8 +3995,11 @@ func _on_fc_confirm_pressed() -> void:
 				show_info_popup("Pick a destination province")
 				return
 			base.do_force_send_caravan(force_id, dest_id, cargo)
+			var disband_id := force_id
 			if disband_army != null:
-				base.request_disband_force.rpc_id(1, disband_army.force_id)
+				disband_id = str(disband_army.force_id)
+			if disband_id != "":
+				base.request_disband_force.rpc_id(1, disband_id)
 
 
 # --- Disband confirmation panel ---------------------------------------------
@@ -3125,9 +4026,10 @@ func _ensure_disband_panel() -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hbox.add_child(title)
 	var close_btn := Button.new()
-	close_btn.text = "✕"
+	close_btn.text = "X"
 	close_btn.pressed.connect(_close_disband_panel)
 	hbox.add_child(close_btn)
+	PanelDragController.attach(_db_panel, hbox, close_btn)
 	vbox.add_child(hbox)
 
 	_db_info_lbl = Label.new()
@@ -3166,12 +4068,17 @@ func _ensure_disband_panel() -> void:
 	add_child(_db_panel)
 
 
-func _open_disband_confirm(base_map, army: Node2D) -> void:
+func _open_disband_confirm(base_map, army: Node2D = null, force_id: String = "") -> void:
 	_ensure_disband_panel()
 	_db_base = base_map
 	_db_army = army
+	_db_force_id = force_id
+	if _db_force_id == "" and army != null:
+		_db_force_id = str(army.force_id)
+	if _db_force_id == "" or base_map == null or not base_map.forces.has(_db_force_id):
+		return
 
-	var units: Array = army.get_units()
+	var units: Array = base_map.forces[_db_force_id]["units"]
 	var own_levy := 0
 	var own_sell := 0
 	var foreign_men := 0
@@ -3201,7 +4108,7 @@ func _open_disband_confirm(base_map, army: Node2D) -> void:
 			refund_parts.append("%d %s" % [amt, GlobalUnits.weapon_name(k)])
 	var can_refund := true
 	if base_map.has_method("disband_refunds_weapons"):
-		can_refund = base_map.disband_refunds_weapons(army.force_id, my_id)
+		can_refund = base_map.disband_refunds_weapons(_db_force_id, my_id)
 	if not refund_parts.is_empty():
 		if can_refund:
 			lines.append("Weapons refunded: %s" % ", ".join(refund_parts))
@@ -3212,7 +4119,7 @@ func _open_disband_confirm(base_map, army: Node2D) -> void:
 	else:
 		_db_confirm_btn.text = "Disband"
 
-	var cargo: Dictionary = base_map.get_force_cargo(army.force_id) if base_map.has_method("get_force_cargo") else {}
+	var cargo: Dictionary = base_map.get_force_cargo(_db_force_id) if base_map.has_method("get_force_cargo") else {}
 	var has_loot := GlobalUnits.caravan_cargo_has_any(cargo)
 	var has_dests := false
 	if has_loot and base_map.has_method("list_dejure_province_ids"):
@@ -3227,9 +4134,10 @@ func _open_disband_confirm(base_map, army: Node2D) -> void:
 	_db_discard_btn.visible = has_loot
 	_db_confirm_btn.visible = not has_loot
 
-	_db_info_lbl.text = "\n".join(lines) if lines.size() > 0 else "Army will be removed."
+	_db_info_lbl.text = "\n".join(lines) if lines.size() > 0 else "Force will be removed."
 
 	_db_panel.visible = true
+	_bring_to_front(_db_panel)
 	_db_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_db_panel.position = (vp - _db_panel.size) * 0.5
@@ -3240,24 +4148,26 @@ func _close_disband_panel() -> void:
 		_db_panel.visible = false
 	_db_base = null
 	_db_army = null
+	_db_force_id = ""
 
 
 func _on_disband_send_loot_pressed() -> void:
 	var base = _db_base
 	var army := _db_army
+	var fid := _db_force_id
 	_close_disband_panel()
-	if base == null or army == null:
+	if base == null or fid == "":
 		return
-	_open_force_cargo_panel(base, army.force_id, "disband_send", army)
+	_open_force_cargo_panel(base, fid, "disband_send", army)
 
 
 func _on_disband_confirm_pressed() -> void:
 	var base = _db_base
-	var army := _db_army
+	var fid := _db_force_id
 	_close_disband_panel()
-	if base == null or army == null:
+	if base == null or fid == "":
 		return
-	base.request_disband_force.rpc_id(1, army.force_id)
+	base.request_disband_force.rpc_id(1, fid)
 
 
 
@@ -3313,6 +4223,7 @@ func _ensure_deploy_panel() -> void:
 	close_btn.pressed.connect(_close_deploy_panel)
 	header.add_child(title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_dp_panel, header, close_btn)
 	_dp_body = VBoxContainer.new()
 	_dp_body.add_theme_constant_override("separation", 6)
 	vbox.add_child(header)
@@ -3323,13 +4234,18 @@ func _ensure_deploy_panel() -> void:
 	add_child(_dp_panel)
 
 
-func open_deploy_menu(base_map, building: Node, player_id: int) -> void:
+func open_deploy_menu(base_map, building: Node, player_id: int, spot: int = -1) -> void:
 	_ensure_deploy_panel()
 	_dp_base = base_map
 	_dp_building = building
 	_dp_player_id = player_id
 	var is_castle = building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.CASTLE
-	_dp_spot = GlobalUnits.SPOT.INSIDE if is_castle else GlobalUnits.SPOT.FLAT
+	if spot >= 0:
+		_dp_spot = spot
+	elif is_castle:
+		_dp_spot = GlobalUnits.SPOT.INSIDE
+	else:
+		_dp_spot = GlobalUnits.SPOT.FLAT
 	_rebuild_deploy_panel()
 
 
@@ -3383,6 +4299,10 @@ func _rebuild_deploy_panel() -> void:
 		var head := Label.new()
 		head.text = "Choose how many to ungarrison (new army → 0 MP this turn):"
 		_dp_body.add_child(head)
+		var all_btn := Button.new()
+		all_btn.text = "Select ALL"
+		all_btn.pressed.connect(_on_dp_select_all)
+		_dp_body.add_child(all_btn)
 		_dp_body.add_child(HSeparator.new())
 		for stack in own_units:
 			var row := HBoxContainer.new()
@@ -3408,6 +4328,7 @@ func _rebuild_deploy_panel() -> void:
 	_dp_body.add_child(confirm_btn)
 
 	_dp_panel.visible = true
+	_bring_to_front(_dp_panel)
 	_dp_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_dp_panel.position = (vp - _dp_panel.size) * 0.5
@@ -3416,6 +4337,13 @@ func _rebuild_deploy_panel() -> void:
 func _on_dp_spot_selected(_index: int, opt: OptionButton) -> void:
 	_dp_spot = opt.get_selected_id()
 	_rebuild_deploy_panel()
+
+
+func _on_dp_select_all() -> void:
+	for entry in _dp_spinboxes:
+		var spin: SpinBox = entry.get("spin")
+		if spin != null:
+			spin.value = spin.max_value
 
 
 func _on_dp_confirm() -> void:
@@ -3498,6 +4426,7 @@ func _ensure_force_menu() -> void:
 	close_btn.pressed.connect(_close_force_menu)
 	header.add_child(_fm_title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_fm_panel, header, close_btn)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -3836,6 +4765,7 @@ func _rebuild_force_menu() -> void:
 				_fm_body.add_child(g_manage)
 
 	_fm_panel.visible = true
+	_bring_to_front(_fm_panel)
 	_fit_force_menu_panel()
 
 
@@ -4099,6 +5029,7 @@ func _open_militia_enable_prompt(pending: Dictionary) -> void:
 	_ensure_militia_enable_prompt()
 	_mil_pending_transfer = pending
 	_mil_prompt.visible = true
+	_bring_to_front(_mil_prompt)
 	_mil_prompt.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_mil_prompt.position = (vp - _mil_prompt.size) * 0.5
@@ -4364,7 +5295,14 @@ func _build_force_column(is_left: bool) -> VBoxContainer:
 		var cap_txt := ""
 		if _fm_right_is_garrison:
 			var cap: int = _fm_building.get_garrison_capacity(_fm_spot)
-			var mult := GlobalUnits.CASTLE_INSIDE_BONUS if _fm_spot == GlobalUnits.SPOT.INSIDE else 1.0
+			var works := (
+				_fm_building.has_method("is_upgrade_project")
+				and bool(_fm_building.is_upgrade_project())
+			)
+			var mult := (
+				GlobalUnits.castle_inside_list_bonus(works)
+				if _fm_spot == GlobalUnits.SPOT.INSIDE else 1.0
+			)
 			cap_txt = "%d/%d men · str %d" % [GlobalUnits.total_men(units), cap, GlobalUnits.total_strength(units, mult)]
 		else:
 			cap_txt = "%d men · str %d" % [GlobalUnits.total_men(units), GlobalUnits.total_strength(units)]
@@ -4910,58 +5848,249 @@ func _on_military_fleet_pressed(fleet_id: String) -> void:
 		open_fleet_menu(parent_n, fleet)
 
 
+func _ensure_diplomacy_structure() -> void:
+	if war_menu == null:
+		return
+	var diplo_root: VBoxContainer = war_menu.get_node_or_null("margin/vbox/tabs/Diplomacy")
+	if diplo_root == null:
+		return
+	if diplo_root.get_node_or_null("diplo_tabs") != null:
+		_diplo_inner_tabs = diplo_root.get_node("diplo_tabs")
+		_relations_list = _diplo_inner_tabs.get_node_or_null("Relations/Scroll/relations_list")
+		_trade_list = _diplo_inner_tabs.get_node_or_null("Trade/Scroll/trade_list")
+		return
+	var old_scroll = diplo_root.get_node_or_null("ScrollContainer")
+	if old_scroll != null:
+		old_scroll.visible = false
+	_diplo_inner_tabs = TabContainer.new()
+	_diplo_inner_tabs.name = "diplo_tabs"
+	_diplo_inner_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_diplo_inner_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var rel_root := VBoxContainer.new()
+	rel_root.name = "Relations"
+	rel_root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var rel_scroll := ScrollContainer.new()
+	rel_scroll.name = "Scroll"
+	rel_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_relations_list = VBoxContainer.new()
+	_relations_list.name = "relations_list"
+	_relations_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_relations_list.add_theme_constant_override("separation", 8)
+	rel_scroll.add_child(_relations_list)
+	rel_root.add_child(rel_scroll)
+
+	var trade_root := VBoxContainer.new()
+	trade_root.name = "Trade"
+	trade_root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var trade_scroll := ScrollContainer.new()
+	trade_scroll.name = "Scroll"
+	trade_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_trade_list = VBoxContainer.new()
+	_trade_list.name = "trade_list"
+	_trade_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_trade_list.add_theme_constant_override("separation", 6)
+	trade_scroll.add_child(_trade_list)
+	trade_root.add_child(trade_scroll)
+
+	_diplo_inner_tabs.add_child(rel_root)
+	_diplo_inner_tabs.add_child(trade_root)
+	diplo_root.add_child(_diplo_inner_tabs)
+
+
+func refresh_diplomacy_ui() -> void:
+	_ensure_diplomacy_structure()
+	refresh_relations_ui()
+	refresh_vip_trade_ui()
+
+
 func refresh_alliances_list() -> void:
-	if alliances_list == null:
+	## Legacy hook — alliances live under Diplomacy → Relations now.
+	refresh_diplomacy_ui()
+
+
+func refresh_relations_ui() -> void:
+	if _relations_list == null:
 		return
-	var base_map = parent_n
-	if not is_instance_valid(base_map) or not base_map.has_method("get_playing_players_except"):
-		return
-	_refreshing_alliances = true
-	for child in alliances_list.get_children():
-		alliances_list.remove_child(child)
+	for child in _relations_list.get_children():
+		_relations_list.remove_child(child)
 		child.queue_free()
-	var my_id: int = int(base_map.my_pl_id)
-	var others: Array = base_map.get_playing_players_except(my_id)
+	var base = parent_n
+	if not is_instance_valid(base) or not base.has_method("get_diplomable_lords_except"):
+		return
+	var my_id: int = int(base.my_pl_id)
+	var others: Array = base.get_diplomable_lords_except(my_id)
 	if others.is_empty():
-		var empty_lbl := Label.new()
-		empty_lbl.text = "No other players"
-		alliances_list.add_child(empty_lbl)
-		_refreshing_alliances = false
+		var empty := Label.new()
+		empty.text = "No other lords"
+		_relations_list.add_child(empty)
 		return
+
+	var hint := Label.new()
+	hint.text = "One diplomatic message per lord per season. Pending asks replace older ones."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(360, 0)
+	_relations_list.add_child(hint)
+
+	# Incoming pending
+	var incoming: Array = Diplomacy.pending_to(base, my_id)
+	if not incoming.is_empty():
+		var in_lbl := Label.new()
+		in_lbl.text = "Incoming messages"
+		in_lbl.add_theme_font_size_override("font_size", 15)
+		_relations_list.add_child(in_lbl)
+		for m in incoming:
+			var from_id := int(m.get("from", -1))
+			var kind := str(m.get("kind", ""))
+			var row := HBoxContainer.new()
+			var lbl := Label.new()
+			lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			lbl.text = "%s — %s" % [base.player_display_name(from_id), Diplomacy.msg_label(kind)]
+			row.add_child(lbl)
+			var acc := Button.new()
+			acc.text = "Accept"
+			acc.pressed.connect(_on_diplo_respond.bind(from_id, true))
+			var rej := Button.new()
+			rej.text = "Refuse"
+			rej.pressed.connect(_on_diplo_respond.bind(from_id, false))
+			row.add_child(acc)
+			row.add_child(rej)
+			_relations_list.add_child(row)
+		_relations_list.add_child(HSeparator.new())
+
+	var list_lbl := Label.new()
+	list_lbl.text = "Lords"
+	list_lbl.add_theme_font_size_override("font_size", 15)
+	_relations_list.add_child(list_lbl)
+
 	for pid in others:
+		var pid_i := int(pid)
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 12)
-		var name_lbl := Label.new()
-		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var pname := "?"
-		if base_map.players.has(pid):
-			pname = str(base_map.players[pid].name_)
-		name_lbl.text = pname
-		var chk := CheckButton.new()
-		chk.text = "Allied"
-		chk.button_pressed = base_map.are_allied(my_id, int(pid))
-		chk.toggled.connect(_on_alliance_toggled.bind(int(pid)))
-		row.add_child(name_lbl)
-		row.add_child(chk)
-		alliances_list.add_child(row)
-	_refreshing_alliances = false
+		row.add_theme_constant_override("separation", 8)
+		var name_btn := Button.new()
+		name_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		var their_op := Diplomacy.get_opinion(base, pid_i, my_id)
+		var my_op := Diplomacy.get_opinion(base, my_id, pid_i)
+		var stance := Diplomacy.stance_text(base, my_id, pid_i)
+		name_btn.text = "%s  [%s]  their opinion %d  yours %d" % [
+			base.player_display_name(pid_i), stance, their_op, my_op
+		]
+		name_btn.pressed.connect(_on_diplo_select_lord.bind(pid_i))
+		row.add_child(name_btn)
+		_relations_list.add_child(row)
+
+	if _selected_diplo_pid >= 0 and _selected_diplo_pid in others:
+		_relations_list.add_child(HSeparator.new())
+		_build_diplo_actions_panel(base, my_id, _selected_diplo_pid)
+	elif not others.is_empty():
+		_selected_diplo_pid = int(others[0])
+		_relations_list.add_child(HSeparator.new())
+		_build_diplo_actions_panel(base, my_id, _selected_diplo_pid)
 
 
-func _on_alliance_toggled(pressed: bool, other_id: int) -> void:
-	if _refreshing_alliances:
+func _on_diplo_select_lord(pid: int) -> void:
+	_selected_diplo_pid = pid
+	refresh_relations_ui()
+
+
+func _build_diplo_actions_panel(base, my_id: int, other_id: int) -> void:
+	var title := Label.new()
+	title.text = "Actions — %s" % base.player_display_name(other_id)
+	title.add_theme_font_size_override("font_size", 14)
+	_relations_list.add_child(title)
+
+	var can_send := Diplomacy.can_send_message(base, my_id, other_id)
+	if not can_send:
+		var used := Label.new()
+		used.text = "Already sent a message to this lord this season."
+		_relations_list.add_child(used)
+
+	var at_war := Diplomacy.are_at_war(base, my_id, other_id)
+	var allied = base.are_allied(my_id, other_id)
+	var has_permit := Diplomacy.has_move_permit(base, my_id, other_id)
+
+	var op_row := HBoxContainer.new()
+	var op_lbl := Label.new()
+	op_lbl.text = "Your opinion of them:"
+	_opinion_spin = SpinBox.new()
+	_opinion_spin.min_value = GameBalance.DIPLO_OPINION_MIN
+	_opinion_spin.max_value = GameBalance.DIPLO_OPINION_MAX
+	_opinion_spin.set_value_no_signal(Diplomacy.get_opinion(base, my_id, other_id))
+	_opinion_spin.value_changed.connect(_on_set_my_opinion.bind(other_id))
+	op_row.add_child(op_lbl)
+	op_row.add_child(_opinion_spin)
+	_relations_list.add_child(op_row)
+
+	var grid := HBoxContainer.new()
+	grid.add_theme_constant_override("separation", 6)
+	_add_diplo_btn(grid, "Praise", Diplomacy.MSG_PRAISE, other_id, can_send and not at_war)
+	_add_diplo_btn(grid, "Insult", Diplomacy.MSG_INSULT, other_id, can_send)
+	_relations_list.add_child(grid)
+
+	var grid2 := HBoxContainer.new()
+	grid2.add_theme_constant_override("separation", 6)
+	if allied:
+		_add_diplo_btn(grid2, "Break alliance", Diplomacy.MSG_ALLIANCE_BREAK, other_id, can_send)
+	else:
+		_add_diplo_btn(grid2, "Ask alliance", Diplomacy.MSG_ALLIANCE_ASK, other_id, can_send and not at_war)
+	if at_war:
+		_add_diplo_btn(grid2, "Ask peace", Diplomacy.MSG_PEACE_ASK, other_id, can_send)
+	else:
+		_add_diplo_btn(grid2, "Declare war", Diplomacy.MSG_WAR_DECLARE, other_id, can_send)
+	_relations_list.add_child(grid2)
+
+	var grid3 := HBoxContainer.new()
+	grid3.add_theme_constant_override("separation", 6)
+	_add_diplo_btn(grid3, "Ask permit (4 seasons)", Diplomacy.MSG_PERMIT_ASK_TEMP, other_id, can_send and not at_war)
+	_add_diplo_btn(grid3, "Ask permit (permanent)", Diplomacy.MSG_PERMIT_ASK_PERM, other_id, can_send and not at_war)
+	if Diplomacy.has_move_permit(base, other_id, my_id):
+		_add_diplo_btn(grid3, "Revoke their permit", Diplomacy.MSG_PERMIT_REVOKE, other_id, can_send)
+	_relations_list.add_child(grid3)
+
+	if has_permit:
+		var pl := Label.new()
+		pl.text = "You have passage through their lands."
+		_relations_list.add_child(pl)
+
+
+func _add_diplo_btn(parent_row: HBoxContainer, text: String, kind: String, other_id: int, enabled: bool) -> void:
+	var btn := Button.new()
+	btn.text = text
+	btn.disabled = not enabled
+	btn.pressed.connect(_on_diplo_action.bind(other_id, kind))
+	parent_row.add_child(btn)
+
+
+func _on_diplo_action(other_id: int, kind: String) -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("do_diplo_action"):
 		return
-	if not is_instance_valid(parent_n) or not parent_n.has_method("do_set_alliance"):
+	parent_n.do_diplo_action(other_id, kind)
+	refresh_diplomacy_ui()
+
+
+func _on_diplo_respond(from_id: int, accept: bool) -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("do_diplo_respond"):
 		return
-	parent_n.do_set_alliance(other_id, pressed)
+	parent_n.do_diplo_respond(from_id, accept)
+	refresh_diplomacy_ui()
 
 
-# --- VIP trade (War → Diplomacy tab) ----------------------------------------
+func _on_set_my_opinion(value: float, other_id: int) -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("do_set_opinion"):
+		return
+	parent_n.do_set_opinion(other_id, int(value))
+
+
+# --- VIP trade (War → Diplomacy → Trade) ------------------------------------
 
 func refresh_vip_trade_ui() -> void:
-	if diplomacy_list == null:
+	_ensure_diplomacy_structure()
+	var list: VBoxContainer = _trade_list if _trade_list != null else diplomacy_list
+	if list == null:
 		return
-	for child in diplomacy_list.get_children():
-		diplomacy_list.remove_child(child)
+	for child in list.get_children():
+		list.remove_child(child)
 		child.queue_free()
 	var base = parent_n
 	if not is_instance_valid(base) or not base.has_method("get_pending_vip_trades_for"):
@@ -4970,15 +6099,19 @@ func refresh_vip_trade_ui() -> void:
 	var title := Label.new()
 	title.text = "VIP Trade"
 	title.add_theme_font_size_override("font_size", 16)
-	diplomacy_list.add_child(title)
+	list.add_child(title)
 
 	var hint := Label.new()
 	hint.text = "Offer VIPs you hold and/or marks. Request marks in return. Offers last until the receiver ends their turn."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(360, 0)
-	diplomacy_list.add_child(hint)
+	list.add_child(hint)
 
-	var others: Array = base.get_playing_players_except(base.my_pl_id) if base.has_method("get_playing_players_except") else []
+	var others: Array = []
+	if base.has_method("get_diplomable_lords_except"):
+		others = base.get_diplomable_lords_except(base.my_pl_id)
+	elif base.has_method("get_playing_players_except"):
+		others = base.get_playing_players_except(base.my_pl_id)
 	for pid in others:
 		var row := HBoxContainer.new()
 		var pname = base.player_display_name(int(pid))
@@ -4990,18 +6123,18 @@ func refresh_vip_trade_ui() -> void:
 		btn.pressed.connect(_open_vip_trade_composer.bind(int(pid)))
 		row.add_child(lbl)
 		row.add_child(btn)
-		diplomacy_list.add_child(row)
+		list.add_child(row)
 
-	diplomacy_list.add_child(HSeparator.new())
+	list.add_child(HSeparator.new())
 	var pend_lbl := Label.new()
 	pend_lbl.text = "Pending offers"
-	diplomacy_list.add_child(pend_lbl)
+	list.add_child(pend_lbl)
 
 	var trades: Array = base.get_pending_vip_trades_for(base.my_pl_id)
 	if trades.is_empty():
 		var empty := Label.new()
 		empty.text = "(none)"
-		diplomacy_list.add_child(empty)
+		list.add_child(empty)
 	else:
 		for t in trades:
 			var from_pid := int(t.get("from", -1))
@@ -5024,7 +6157,7 @@ func refresh_vip_trade_ui() -> void:
 			]
 			line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			line.custom_minimum_size = Vector2(360, 0)
-			diplomacy_list.add_child(line)
+			list.add_child(line)
 			if to_pid == base.my_pl_id:
 				var brow := HBoxContainer.new()
 				var accept := Button.new()
@@ -5044,7 +6177,7 @@ func refresh_vip_trade_ui() -> void:
 				reject.pressed.connect(_on_vip_trade_respond.bind(tid, false))
 				brow.add_child(accept)
 				brow.add_child(reject)
-				diplomacy_list.add_child(brow)
+				list.add_child(brow)
 
 
 func _open_vip_trade_composer(to_pid: int) -> void:
@@ -5053,6 +6186,7 @@ func _open_vip_trade_composer(to_pid: int) -> void:
 	_vt_to_pid = to_pid
 	_rebuild_vip_trade_composer()
 	_vt_panel.visible = true
+	_bring_to_front(_vt_panel)
 
 
 func _ensure_vip_trade_panel() -> void:
@@ -5077,6 +6211,7 @@ func _ensure_vip_trade_panel() -> void:
 	close_btn.pressed.connect(func(): _vt_panel.visible = false)
 	header.add_child(title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_vt_panel, header, close_btn)
 	_vt_body = VBoxContainer.new()
 	vbox.add_child(header)
 	vbox.add_child(_vt_body)
@@ -5288,6 +6423,84 @@ func _make_prov_rich_label(initial: String) -> RichTextLabel:
 	return lbl
 
 
+func _prov_context_card_style() -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.28, 0.19, 0.10, 0.92)
+	sb.border_color = Color(0.78, 0.58, 0.28, 0.95)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(4)
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 10
+	return sb
+
+
+## Returns {"panel": PanelContainer, "body": VBoxContainer}.
+func _make_prov_context_card(title: String) -> Dictionary:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	panel.add_theme_stylebox_override("panel", _prov_context_card_style())
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 6)
+	outer.mouse_filter = Control.MOUSE_FILTER_STOP
+	outer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var title_lbl := Label.new()
+	title_lbl.text = title
+	title_lbl.add_theme_font_size_override("font_size", 15)
+	title_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	outer.add_child(title_lbl)
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 4)
+	body.mouse_filter = Control.MOUSE_FILTER_STOP
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	outer.add_child(body)
+	panel.add_child(outer)
+	return {"panel": panel, "body": body}
+
+
+func _reparent_to(node: Node, new_parent: Node) -> void:
+	if node == null or new_parent == null:
+		return
+	var old := node.get_parent()
+	if old == new_parent:
+		return
+	if old != null:
+		old.remove_child(node)
+	new_parent.add_child(node)
+
+
+func _style_field_population_helper_btn(btn: Button) -> void:
+	btn.text = "Field population helper"
+	btn.custom_minimum_size = Vector2(240, 42)
+	btn.add_theme_font_size_override("font_size", 15)
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.58, 0.40, 0.12, 1.0)
+	normal.border_color = Color(0.98, 0.82, 0.38, 1.0)
+	normal.set_border_width_all(2)
+	normal.set_corner_radius_all(4)
+	normal.content_margin_left = 16
+	normal.content_margin_right = 16
+	normal.content_margin_top = 10
+	normal.content_margin_bottom = 10
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(0.72, 0.52, 0.16, 1.0)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color(0.44, 0.30, 0.08, 1.0)
+	var disabled := normal.duplicate() as StyleBoxFlat
+	disabled.bg_color = Color(0.28, 0.22, 0.14, 0.72)
+	disabled.border_color = Color(0.48, 0.38, 0.24, 0.75)
+	btn.add_theme_stylebox_override("normal", normal)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", pressed)
+	btn.add_theme_stylebox_override("disabled", disabled)
+	btn.add_theme_color_override("font_color", Color(1.0, 0.96, 0.82, 1.0))
+	btn.add_theme_color_override("font_hover_color", Color(1.0, 1.0, 0.94, 1.0))
+	btn.add_theme_color_override("font_pressed_color", Color(0.95, 0.90, 0.75, 1.0))
+	btn.add_theme_color_override("font_disabled_color", Color(0.68, 0.60, 0.48, 0.85))
+
+
 func _bb_escape(s: String) -> String:
 	return s.replace("[", "[lb]")
 
@@ -5318,58 +6531,153 @@ func _bb_coverage_pct(cov_pct: float) -> String:
 	return _bb_emphasis("%.0f%%" % cov_pct, delta)
 
 
+func _ensure_province_overview_context_cards() -> void:
+	if province_tab_root == null:
+		return
+	if province_tab_root.has_meta("_prov_context_cards_built"):
+		return
+	province_tab_root.set_meta("_prov_context_cards_built", true)
+
+	var info_grid: Node = province_tab_root.get_node_or_null("info_grid")
+
+	var holding := _make_prov_context_card("Holding")
+	var holding_body: VBoxContainer = holding["body"]
+	var holding_grid := GridContainer.new()
+	holding_grid.columns = 2
+	holding_grid.add_theme_constant_override("h_separation", 24)
+	holding_grid.add_theme_constant_override("v_separation", 4)
+	holding_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	holding_grid.mouse_filter = Control.MOUSE_FILTER_STOP
+	holding_body.add_child(holding_grid)
+	for n in [province_tab_status, province_tab_owner, province_tab_defacto, province_tab_dejure]:
+		_reparent_to(n, holding_grid)
+
+	var people := _make_prov_context_card("People & money")
+	_prov_people_card_body = people["body"]
+	# Two columns: people (left) · money / tax (right).
+	var people_cols := HBoxContainer.new()
+	people_cols.add_theme_constant_override("separation", 20)
+	people_cols.mouse_filter = Control.MOUSE_FILTER_STOP
+	people_cols.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_prov_people_card_body.add_child(people_cols)
+
+	var people_left := VBoxContainer.new()
+	people_left.add_theme_constant_override("separation", 4)
+	people_left.mouse_filter = Control.MOUSE_FILTER_STOP
+	people_left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	people_cols.add_child(people_left)
+	_reparent_to(province_tab_population, people_left)
+
+	var people_right := VBoxContainer.new()
+	people_right.add_theme_constant_override("separation", 4)
+	people_right.mouse_filter = Control.MOUSE_FILTER_STOP
+	people_right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	people_cols.add_child(people_right)
+	_reparent_to(province_tab_income, people_right)
+
+	# Manage-only widgets (happiness / tax) are added into these columns later.
+	_prov_people_card_body.set_meta("people_left", people_left)
+	_prov_people_card_body.set_meta("people_right", people_right)
+
+	if info_grid != null and is_instance_valid(info_grid):
+		info_grid.queue_free()
+
+	# Insert identity cards at the top (before manage root).
+	province_tab_root.add_child(holding["panel"])
+	province_tab_root.move_child(holding["panel"], 0)
+	province_tab_root.add_child(people["panel"])
+	province_tab_root.move_child(people["panel"], 1)
+
+
 func _ensure_province_levy_widgets() -> void:
 	if _prov_happiness_lbl != null or province_tab_root == null:
 		return
 	province_tab_root.mouse_filter = Control.MOUSE_FILTER_STOP
 	# Content lives inside a ScrollContainer — size to children, don't expand-fill.
 	province_tab_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	province_tab_root.add_theme_constant_override("separation", 8)
+
+	_ensure_province_overview_context_cards()
 
 	_prov_manage_root = VBoxContainer.new()
-	_prov_manage_root.add_theme_constant_override("separation", 6)
+	_prov_manage_root.add_theme_constant_override("separation", 8)
 	_prov_manage_root.mouse_filter = Control.MOUSE_FILTER_STOP
 	_prov_manage_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	province_tab_root.add_child(_prov_manage_root)
-	_prov_manage_root.add_child(HSeparator.new())
 
 	var columns := HBoxContainer.new()
-	columns.add_theme_constant_override("separation", 20)
+	columns.add_theme_constant_override("separation", 12)
 	columns.mouse_filter = Control.MOUSE_FILTER_STOP
 	columns.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_prov_manage_root.add_child(columns)
 
-	# Left: holding status (overview — no farming).
+	# Happiness (left) + tax (right) under People & money.
+	if _prov_people_card_body != null:
+		var people_left: VBoxContainer = _prov_people_card_body.get_meta("people_left", null)
+		var people_right: VBoxContainer = _prov_people_card_body.get_meta("people_right", null)
+		if people_left != null and people_right != null:
+			_prov_people_manage_box = VBoxContainer.new()
+			_prov_people_manage_box.visible = false
+			_prov_people_manage_box.add_theme_constant_override("separation", 4)
+			_prov_people_manage_box.mouse_filter = Control.MOUSE_FILTER_STOP
+			_prov_people_manage_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			people_left.add_child(_prov_people_manage_box)
+			_prov_happiness_lbl = _make_prov_rich_label("Happiness: —")
+			_prov_people_manage_box.add_child(_prov_happiness_lbl)
+
+			_prov_tax_manage_box = VBoxContainer.new()
+			_prov_tax_manage_box.visible = false
+			_prov_tax_manage_box.add_theme_constant_override("separation", 4)
+			_prov_tax_manage_box.mouse_filter = Control.MOUSE_FILTER_STOP
+			_prov_tax_manage_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			people_right.add_child(_prov_tax_manage_box)
+
+			_prov_tax_lbl = Label.new()
+			_prov_tax_lbl.text = "Tax: —"
+			_prov_tax_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			_prov_tax_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+			_prov_tax_manage_box.add_child(_prov_tax_lbl)
+			_prov_tax_row = HBoxContainer.new()
+			_prov_tax_row.add_theme_constant_override("separation", 4)
+			_prov_tax_row.mouse_filter = Control.MOUSE_FILTER_STOP
+			_prov_tax_manage_box.add_child(_prov_tax_row)
+			_prov_tax_btns.clear()
+			var tax_group := ButtonGroup.new()
+			for level in GlobalUnits.TAX_LEVELS:
+				var tbtn := Button.new()
+				tbtn.text = GlobalUnits.tax_name(level)
+				tbtn.toggle_mode = true
+				tbtn.button_group = tax_group
+				tbtn.mouse_filter = Control.MOUSE_FILTER_STOP
+				_connect_tax_button(tbtn, level)
+				_prov_tax_row.add_child(tbtn)
+				_prov_tax_btns[level] = tbtn
+
+	# Left: stock / production + rations.
 	var left := VBoxContainer.new()
-	left.add_theme_constant_override("separation", 6)
+	left.add_theme_constant_override("separation", 8)
 	left.mouse_filter = Control.MOUSE_FILTER_STOP
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	left.size_flags_stretch_ratio = 1.0
 	columns.add_child(left)
 
+	var stock_card := _make_prov_context_card("Stock & production")
+	left.add_child(stock_card["panel"])
+	var stock_body: VBoxContainer = stock_card["body"]
 	_prov_stock_lbl = _make_prov_section_label("Stock: —")
-	left.add_child(_prov_stock_lbl)
+	stock_body.add_child(_prov_stock_lbl)
 	_prov_prod_lbl = _make_prov_rich_label("Next season production: —")
-	left.add_child(_prov_prod_lbl)
-	_prov_smith_lbl = _make_prov_rich_label("Blacksmith: —")
-	left.add_child(_prov_smith_lbl)
-	_prov_smith_rows = VBoxContainer.new()
-	_prov_smith_rows.add_theme_constant_override("separation", 4)
-	_prov_smith_rows.mouse_filter = Control.MOUSE_FILTER_STOP
-	left.add_child(_prov_smith_rows)
-	left.add_child(HSeparator.new())
-	_prov_happiness_lbl = Label.new()
-	_prov_happiness_lbl.text = "Happiness: —"
-	_prov_happiness_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
-	left.add_child(_prov_happiness_lbl)
-	_prov_ration_lbl = Label.new()
-	_prov_ration_lbl.text = "Rations: —"
-	_prov_ration_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_prov_ration_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
-	left.add_child(_prov_ration_lbl)
+	stock_body.add_child(_prov_prod_lbl)
+
+	var policy_card := _make_prov_context_card("Policy")
+	left.add_child(policy_card["panel"])
+	var policy_body: VBoxContainer = policy_card["body"]
+	_prov_ration_lbl = _make_prov_rich_label("Rations: —")
+	policy_body.add_child(_prov_ration_lbl)
 	_prov_ration_row = HBoxContainer.new()
 	_prov_ration_row.add_theme_constant_override("separation", 4)
 	_prov_ration_row.mouse_filter = Control.MOUSE_FILTER_STOP
-	left.add_child(_prov_ration_row)
+	policy_body.add_child(_prov_ration_row)
 	_prov_ration_btns.clear()
 	var ration_group := ButtonGroup.new()
 	for level in [
@@ -5388,28 +6696,8 @@ func _ensure_province_levy_widgets() -> void:
 		_connect_ration_button(btn, level)
 		_prov_ration_row.add_child(btn)
 		_prov_ration_btns[level] = btn
-	_prov_tax_lbl = Label.new()
-	_prov_tax_lbl.text = "Tax: —"
-	_prov_tax_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_prov_tax_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
-	left.add_child(_prov_tax_lbl)
-	_prov_tax_row = HBoxContainer.new()
-	_prov_tax_row.add_theme_constant_override("separation", 4)
-	_prov_tax_row.mouse_filter = Control.MOUSE_FILTER_STOP
-	left.add_child(_prov_tax_row)
-	_prov_tax_btns.clear()
-	var tax_group := ButtonGroup.new()
-	for level in GlobalUnits.TAX_LEVELS:
-		var tbtn := Button.new()
-		tbtn.text = GlobalUnits.tax_name(level)
-		tbtn.toggle_mode = true
-		tbtn.button_group = tax_group
-		tbtn.mouse_filter = Control.MOUSE_FILTER_STOP
-		_connect_tax_button(tbtn, level)
-		_prov_tax_row.add_child(tbtn)
-		_prov_tax_btns[level] = tbtn
 
-	# Right: economy labor pool + sliders (not grain/horses).
+	# Right: blacksmith above labor.
 	var right := VBoxContainer.new()
 	right.add_theme_constant_override("separation", 8)
 	right.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -5417,13 +6705,26 @@ func _ensure_province_levy_widgets() -> void:
 	right.size_flags_stretch_ratio = 1.35
 	columns.add_child(right)
 
+	var smith_card := _make_prov_context_card("Blacksmith")
+	right.add_child(smith_card["panel"])
+	var smith_body: VBoxContainer = smith_card["body"]
+	_prov_smith_lbl = _make_prov_rich_label("Blacksmith: —")
+	smith_body.add_child(_prov_smith_lbl)
+	_prov_smith_rows = VBoxContainer.new()
+	_prov_smith_rows.add_theme_constant_override("separation", 4)
+	_prov_smith_rows.mouse_filter = Control.MOUSE_FILTER_STOP
+	smith_body.add_child(_prov_smith_rows)
+
+	var labor_card := _make_prov_context_card("Labor")
+	right.add_child(labor_card["panel"])
+	var labor_body: VBoxContainer = labor_card["body"]
 	_prov_labor_lbl = _make_prov_rich_label("Labor pool: —")
-	right.add_child(_prov_labor_lbl)
+	labor_body.add_child(_prov_labor_lbl)
 	_prov_labor_box = VBoxContainer.new()
 	_prov_labor_box.add_theme_constant_override("separation", 6)
 	_prov_labor_box.mouse_filter = Control.MOUSE_FILTER_STOP
 	_prov_labor_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right.add_child(_prov_labor_box)
+	labor_body.add_child(_prov_labor_box)
 
 	_ensure_province_farming_widgets()
 	_ensure_province_army_widgets()
@@ -5453,18 +6754,16 @@ func _ensure_province_farming_widgets() -> void:
 	title.mouse_filter = Control.MOUSE_FILTER_STOP
 	_prov_farming_manage_root.add_child(title)
 
-	var fields_row := HBoxContainer.new()
-	fields_row.add_theme_constant_override("separation", 8)
-	fields_row.mouse_filter = Control.MOUSE_FILTER_STOP
 	_prov_fields_lbl = _make_prov_section_label("Fields: —")
 	_prov_fields_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	fields_row.add_child(_prov_fields_lbl)
+	_prov_farming_manage_root.add_child(_prov_fields_lbl)
+
 	_prov_populate_idle_btn = Button.new()
-	_prov_populate_idle_btn.text = "Populate idle fields"
+	_style_field_population_helper_btn(_prov_populate_idle_btn)
 	_prov_populate_idle_btn.disabled = true
+	_prov_populate_idle_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_prov_populate_idle_btn.pressed.connect(_on_populate_idle_fields_pressed)
-	fields_row.add_child(_prov_populate_idle_btn)
-	_prov_farming_manage_root.add_child(fields_row)
+	_prov_farming_manage_root.add_child(_prov_populate_idle_btn)
 
 	_prov_farm_stock_lbl = _make_prov_section_label("Stock: —")
 	_prov_farming_manage_root.add_child(_prov_farm_stock_lbl)
@@ -5473,19 +6772,18 @@ func _ensure_province_farming_widgets() -> void:
 
 	_prov_farming_manage_root.add_child(HSeparator.new())
 
-	var labor_title := Label.new()
-	labor_title.text = "Farm labor"
-	labor_title.add_theme_font_size_override("font_size", 16)
-	labor_title.mouse_filter = Control.MOUSE_FILTER_STOP
-	_prov_farming_manage_root.add_child(labor_title)
+	# Match overview Labor card + per-category slider panels.
+	var labor_card := _make_prov_context_card("Farm labor")
+	_prov_farming_manage_root.add_child(labor_card["panel"])
+	var labor_body: VBoxContainer = labor_card["body"]
 
 	_prov_farm_labor_lbl = _make_prov_rich_label("Workers: —")
-	_prov_farming_manage_root.add_child(_prov_farm_labor_lbl)
+	labor_body.add_child(_prov_farm_labor_lbl)
 	_prov_farm_labor_box = VBoxContainer.new()
 	_prov_farm_labor_box.add_theme_constant_override("separation", 6)
 	_prov_farm_labor_box.mouse_filter = Control.MOUSE_FILTER_STOP
 	_prov_farm_labor_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_prov_farming_manage_root.add_child(_prov_farm_labor_box)
+	labor_body.add_child(_prov_farm_labor_box)
 
 
 func _ensure_province_army_widgets() -> void:
@@ -5507,10 +6805,44 @@ func _ensure_province_army_widgets() -> void:
 	province_army_root.add_child(_prov_levy_lbl)
 
 	_prov_weapons_lbl = Label.new()
-	_prov_weapons_lbl.text = "Weapons: —"
-	_prov_weapons_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_prov_weapons_lbl.text = "Weapons stock"
 	_prov_weapons_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
 	province_army_root.add_child(_prov_weapons_lbl)
+
+	_prov_weapons_grid = GridContainer.new()
+	_prov_weapons_grid.columns = 2
+	_prov_weapons_grid.add_theme_constant_override("h_separation", 16)
+	_prov_weapons_grid.add_theme_constant_override("v_separation", 2)
+	_prov_weapons_grid.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_prov_weapons_grid.mouse_filter = Control.MOUSE_FILTER_STOP
+	var hdr_weapon := Label.new()
+	hdr_weapon.text = "Weapon"
+	hdr_weapon.add_theme_font_size_override("font_size", 14)
+	hdr_weapon.custom_minimum_size = Vector2(100, 0)
+	hdr_weapon.mouse_filter = Control.MOUSE_FILTER_STOP
+	_prov_weapons_grid.add_child(hdr_weapon)
+	var hdr_qty := Label.new()
+	hdr_qty.text = "In stock"
+	hdr_qty.add_theme_font_size_override("font_size", 14)
+	hdr_qty.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	hdr_qty.custom_minimum_size = Vector2(56, 0)
+	hdr_qty.mouse_filter = Control.MOUSE_FILTER_STOP
+	_prov_weapons_grid.add_child(hdr_qty)
+	_prov_weapon_qty_lbls.clear()
+	for k in GlobalUnits.WEAPON_KEYS:
+		var name_lbl := Label.new()
+		name_lbl.text = GlobalUnits.weapon_name(k)
+		name_lbl.custom_minimum_size = Vector2(100, 0)
+		name_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+		_prov_weapons_grid.add_child(name_lbl)
+		var qty_lbl := Label.new()
+		qty_lbl.text = "0"
+		qty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		qty_lbl.custom_minimum_size = Vector2(56, 0)
+		qty_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+		_prov_weapons_grid.add_child(qty_lbl)
+		_prov_weapon_qty_lbls[k] = qty_lbl
+	province_army_root.add_child(_prov_weapons_grid)
 
 	_prov_recruit_btn = Button.new()
 	_prov_recruit_btn.text = "Recruit army"
@@ -5684,17 +7016,21 @@ func _update_prov_tax_buttons(holding: Dictionary, has_holding: bool) -> void:
 	var castle_b := int(holding.get("tax_castle_bonus_next", 0))
 	var auto_w := bool(holding.get("tax_auto_wallet", false))
 	var rate := GlobalUnits.tax_marks_per_person(level)
+	var rate_txt := (
+		str(int(rate)) if rate == floor(rate)
+		else ("%.2f" % rate).rstrip("0").rstrip(".")
+	)
 	if _prov_tax_lbl != null:
 		if auto_w:
 			var castle_txt := (" · castle +%d" % castle_b) if castle_b > 0 else ""
 			_prov_tax_lbl.text = (
-				"Tax: %s (%d/person) · next +%d to wallet%s · stored %d in coffers"
-				% [GlobalUnits.tax_name(level), rate, next_wallet, castle_txt, stored]
+				"Tax: %s (%s/person) · next +%d to wallet%s · stored %d in coffers"
+				% [GlobalUnits.tax_name(level), rate_txt, next_wallet, castle_txt, stored]
 			)
 		else:
 			_prov_tax_lbl.text = (
-				"Tax: %s (%d/person) · next +%d to coffers (no de jure) · stored %d (collect with army)"
-				% [GlobalUnits.tax_name(level), rate, next_coffer if next_coffer > 0 else next_m, stored]
+				"Tax: %s (%s/person) · next +%d to coffers (no de jure) · stored %d (collect with army)"
+				% [GlobalUnits.tax_name(level), rate_txt, next_coffer if next_coffer > 0 else next_m, stored]
 			)
 	for lv in _prov_tax_btns:
 		var btn: Button = _prov_tax_btns[lv]
@@ -5716,29 +7052,38 @@ func _update_prov_ration_buttons(holding: Dictionary, has_holding: bool) -> void
 	var promised := GlobalUnits.ration_grain_need(
 		int(holding.get("population", 0)), requested
 	)
+	var until_ok := bool(holding.get("grain_until_harvest_ok", true))
+	var until_need := int(holding.get("grain_need_until_harvest", 0))
+	var stock := int(holding.get("grain_stock", 0))
 	if _prov_ration_lbl != null:
+		var main := ""
 		if affordable:
-			_prov_ration_lbl.text = (
+			main = (
 				"Rations: %s · need %d grain / %d available after seed+armies"
 				% [GlobalUnits.ration_name(requested), promised, avail]
 			)
-			_prov_ration_lbl.remove_theme_color_override("font_color")
 		else:
-			_prov_ration_lbl.text = (
-				"Rations: %s promised, will feed as %s · need %d / have %d (seed+armies first)"
+			main = (
+				"[color=%s]Rations: %s promised, will feed as %s · need %d / have %d (seed+armies first)[/color]"
 				% [
+					_PROV_DEFICIT_COLOR,
 					GlobalUnits.ration_name(requested),
 					GlobalUnits.ration_name(effective),
 					promised,
 					avail,
 				]
 			)
-			_prov_ration_lbl.add_theme_color_override("font_color", Color(1.0, 0.35, 0.3))
+		if not until_ok:
+			main += (
+				"\n[color=%s]Warning: not enough grain until next harvest (need %d, have %d)[/color]"
+				% [_PROV_DEFICIT_COLOR, until_need, stock]
+			)
+		_prov_ration_lbl.text = main
 	var red := Color(1.0, 0.35, 0.3)
 	for level in _prov_ration_btns:
 		var btn: Button = _prov_ration_btns[level]
 		btn.set_pressed_no_signal(int(level) == requested)
-		if int(level) == requested and not affordable:
+		if int(level) == requested and (not affordable or not until_ok):
 			btn.add_theme_color_override("font_color", red)
 			btn.add_theme_color_override("font_pressed_color", red)
 			btn.add_theme_color_override("font_hover_color", red)
@@ -5897,14 +7242,19 @@ func _apply_labor_focus() -> void:
 
 
 func _scroll_to_labor_panel(panel: Control) -> void:
-	if panel == null or not is_instance_valid(panel) or province_tab_root == null:
+	if panel == null or not is_instance_valid(panel):
 		return
-	var scroll = province_tab_root.get_parent()
-	if not (scroll is ScrollContainer):
+	var scroll: ScrollContainer = null
+	var walk: Node = panel.get_parent()
+	while walk != null:
+		if walk is ScrollContainer:
+			scroll = walk as ScrollContainer
+			break
+		walk = walk.get_parent()
+	if scroll == null:
 		return
-	var sc := scroll as ScrollContainer
-	var target_y := panel.global_position.y - sc.global_position.y + sc.scroll_vertical
-	sc.scroll_vertical = maxi(0, int(target_y) - 24)
+	var target_y := panel.global_position.y - scroll.global_position.y + scroll.scroll_vertical
+	scroll.scroll_vertical = maxi(0, int(target_y) - 24)
 
 
 func _add_labor_slider_row(
@@ -5985,10 +7335,10 @@ func _add_labor_slider_row(
 	var pri_opt := OptionButton.new()
 	pri_opt.focus_mode = Control.FOCUS_NONE
 	pri_opt.mouse_filter = Control.MOUSE_FILTER_STOP
-	pri_opt.custom_minimum_size.x = 88
+	pri_opt.custom_minimum_size.x = 110
 	pri_opt.add_item("Manual", GlobalUnits.LABOR_PRIORITY_MANUAL)
 	for p in range(1, GlobalUnits.LABOR_PRIORITY_MAX + 1):
-		pri_opt.add_item("P%d" % p, p)
+		pri_opt.add_item("Priority %d" % p, p)
 	var sel_idx := pri_opt.get_item_index(priority)
 	if sel_idx < 0:
 		sel_idx = 0
@@ -6103,14 +7453,14 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 		province_tab_dejure.text = "De jure: —"
 		province_tab_population.text = "Population: —"
 		province_tab_income.text = "Income: —"
-		province_tab_villages.text = "Villages: — / —"
-		province_tab_towns.text = "Towns: — / —"
-		province_tab_castles.text = "Castles: — / —"
-		province_tab_economy.text = "Economy: — / —"
 		_set_prov_owner_shield(base_map, -1)
 		_prov_idle_field_count = 0
 		if _prov_manage_root != null:
 			_prov_manage_root.visible = false
+		if _prov_people_manage_box != null:
+			_prov_people_manage_box.visible = false
+		if _prov_tax_manage_box != null:
+			_prov_tax_manage_box.visible = false
 		if _prov_farming_manage_root != null:
 			_prov_farming_manage_root.visible = false
 		_set_province_sub_tab_hidden(_prov_farming_tab_index, true)
@@ -6126,7 +7476,10 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	province_tab_defacto.text = "De facto: %s" % data.get("defacto_name", "—")
 	province_tab_dejure.text = "De jure: %s" % data.get("dejure_name", "—")
 	_set_prov_owner_shield(base_map, int(data.get("owner_id", -1)))
-	province_tab_population.text = "Population: %s (next: %s)" % [data.get("population_has", 0), data.get("population_will", 0)]
+	var pop_has := int(data.get("population_has", 0))
+	var pop_will := int(data.get("population_will", 0))
+	var next_bb := _bb_emphasis(str(pop_will), pop_will - pop_has)
+	province_tab_population.text = "Population: %d (next: %s)" % [pop_has, next_bb]
 	if data.get("viewer_has_holding", false):
 		if bool(data.get("tax_auto_wallet", false)):
 			var castle_b := int(data.get("tax_castle_bonus_next", 0))
@@ -6146,21 +7499,16 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	else:
 		province_tab_income.text = "Tax: — (no holding)"
 
-	var v = data.get("villages", {"control": 0, "all": 0})
-	province_tab_villages.text = "Villages: %d / %d" % [v.get("control", 0), v.get("all", 0)]
-	var t = data.get("towns", {"control": 0, "all": 0})
-	province_tab_towns.text = "Towns: %d / %d" % [t.get("control", 0), t.get("all", 0)]
-	var c = data.get("castles", {"control": 0, "all": 0})
-	province_tab_castles.text = "Castles: %d / %d" % [c.get("control", 0), c.get("all", 0)]
-	var e = data.get("economy", {"control": 0, "all": 0})
-	province_tab_economy.text = "Economy: %d / %d" % [e.get("control", 0), e.get("all", 0)]
-
 	# Only your holdings / de jure provinces expose management UI.
 	var has_holding := bool(data.get("viewer_has_holding", false))
 	var has_dejure := bool(data.get("viewer_has_dejure", false))
 	var can_manage := has_holding or has_dejure
 	if _prov_manage_root != null:
 		_prov_manage_root.visible = can_manage
+	if _prov_people_manage_box != null:
+		_prov_people_manage_box.visible = can_manage
+	if _prov_tax_manage_box != null:
+		_prov_tax_manage_box.visible = can_manage
 	if _prov_farming_manage_root != null:
 		_prov_farming_manage_root.visible = can_manage
 	_set_province_sub_tab_hidden(_prov_farming_tab_index, not can_manage)
@@ -6311,7 +7659,13 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 
 	_rebuild_prov_smith_change_rows(base_map, province_id, has_dejure)
 
-	_prov_happiness_lbl.text = "Happiness: %.0f (avg of your settlements)" % float(data.get("happiness", 100))
+	var happy := float(data.get("happiness", 100))
+	var happy_txt := "Happiness: %.0f" % happy
+	if holding.has("happiness_delta_next"):
+		var happy_delta := float(holding.get("happiness_delta_next", 0.0))
+		if happy_delta != 0.0:
+			happy_txt += " %s" % _bb_emphasis("%+.0f" % happy_delta, int(signf(happy_delta)))
+	_prov_happiness_lbl.text = "%s (avg of your settlements)" % happy_txt
 
 	# Army tab
 	_prov_levy_lbl.text = "Levy this season: %d / remaining %d (cap 80%% of %d)" % [
@@ -6320,10 +7674,10 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 		int(data.get("season_start_population", 0)),
 	]
 	var weapons: Dictionary = data.get("weapons", {})
-	var wparts: PackedStringArray = []
 	for k in GlobalUnits.WEAPON_KEYS:
-		wparts.append("%s %d" % [GlobalUnits.weapon_name(k), int(weapons.get(k, 0))])
-	_prov_weapons_lbl.text = "Weapons: %s" % ", ".join(wparts)
+		var qty_lbl: Label = _prov_weapon_qty_lbls.get(k)
+		if qty_lbl != null:
+			qty_lbl.text = str(int(weapons.get(k, 0)))
 	_prov_recruit_btn.visible = has_dejure
 	_prov_recruit_btn.disabled = not has_dejure
 
@@ -6416,6 +7770,7 @@ func _ensure_battle_menu() -> void:
 	close_btn.pressed.connect(_close_battle_menu)
 	header.add_child(_bt_title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_bt_panel, header, close_btn)
 	_bt_body = VBoxContainer.new()
 	_bt_body.add_theme_constant_override("separation", 6)
 	vbox.add_child(header)
@@ -6534,9 +7889,15 @@ func _rebuild_battle_menu() -> void:
 
 	if siege_lvl >= 0:
 		var siege_lbl := Label.new()
-		var bonus := GlobalUnits.siege_inside_bonus(siege_lvl)
-		siege_lbl.text = "Siege engines: %d/%d (castle inside ×%.1f)" % [
-			siege_lvl, GlobalUnits.SIEGE_MAX_LEVEL, bonus
+		var works := (
+			_bt_building != null
+			and _bt_building.has_method("is_upgrade_project")
+			and bool(_bt_building.is_upgrade_project())
+		)
+		var bonus := GlobalUnits.siege_inside_bonus(siege_lvl, works)
+		var works_note := " · under construction" if works else ""
+		siege_lbl.text = "Siege engines: %d/%d (castle inside ×%.1f%s)" % [
+			siege_lvl, GlobalUnits.SIEGE_MAX_LEVEL, bonus, works_note
 		]
 		siege_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		siege_lbl.custom_minimum_size = Vector2(360, 0)
@@ -6598,6 +7959,7 @@ func _rebuild_battle_menu() -> void:
 	_bt_body.add_child(stand_btn)
 
 	_bt_panel.visible = true
+	_bring_to_front(_bt_panel)
 	_bt_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_bt_panel.size = Vector2(minf(420, vp.x * 0.9), _bt_panel.get_combined_minimum_size().y)
@@ -6673,14 +8035,25 @@ func _rebuild_siege_prompt() -> void:
 	var bname := "Castle"
 	if _sg_base.has_method("_building_display_name") and _sg_building is Node2D:
 		bname = _sg_base._building_display_name(_sg_building)
-	_sg_title.text = "Assault %s" % bname
+	_sg_title.text = "Siege %s" % bname
 
+	var works := (
+		_sg_building != null
+		and _sg_building.has_method("is_upgrade_project")
+		and bool(_sg_building.is_upgrade_project())
+	)
 	var info := Label.new()
 	info.text = (
-		"Build siege engines while camped here. Engines improve each season "
+		"Begin a siege while camped here. Engines improve each season "
 		+ "(up to %d), lowering the defenders' castle bonus.\n\n"
-		+ "Assault now with no engines — the garrison fights at ×%.1f inside."
-	) % [GlobalUnits.SIEGE_MAX_LEVEL, GlobalUnits.siege_inside_bonus(0)]
+		+ "Assault is available from engine level %d (after at least one season). "
+		+ "Until then the garrison would fight at ×%.1f inside."
+		+ ("\n\nThis castle is under construction — inside bonuses are reduced." if works else "")
+	) % [
+		GlobalUnits.SIEGE_MAX_LEVEL,
+		GlobalUnits.SIEGE_ASSAULT_MIN_LEVEL,
+		GlobalUnits.siege_inside_bonus(0, works),
+	]
 	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	info.custom_minimum_size = Vector2(360, 0)
 	_sg_body.add_child(info)
@@ -6691,17 +8064,13 @@ func _rebuild_siege_prompt() -> void:
 	build_btn.pressed.connect(_on_sg_start_building)
 	_sg_body.add_child(build_btn)
 
-	var assault_btn := Button.new()
-	assault_btn.text = "Assault now"
-	assault_btn.pressed.connect(_on_sg_assault_now)
-	_sg_body.add_child(assault_btn)
-
 	var cancel_btn := Button.new()
 	cancel_btn.text = "Cancel"
 	cancel_btn.pressed.connect(_close_siege_prompt)
 	_sg_body.add_child(cancel_btn)
 
 	_sg_panel.visible = true
+	_bring_to_front(_sg_panel)
 	_sg_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_sg_panel.size = Vector2(minf(420, vp.x * 0.9), _sg_panel.get_combined_minimum_size().y)
@@ -6719,34 +8088,50 @@ func _on_sg_start_building() -> void:
 		base.do_start_siege(fid, building)
 
 
-func _on_sg_assault_now() -> void:
-	if _sg_base == null or _sg_building == null:
-		return
-	var base = _sg_base
-	var fid := _sg_force_id
-	var building = _sg_building
-	_close_siege_prompt()
-	open_battle_menu(base, fid, "", building)
-
-
 func on_battle_resolved(base_map, attacker_id: String, building: Node, attacker_won: bool, hostage_pool: Array, event_id: String = "") -> void:
-	# Battle report is delivered via the event inbox. Only the attacker
-	# controller gets hostage / building follow-up menus. With hostages, the
-	# report opens after fate is chosen (see apply_battle_hostage_fate).
+	# Inbox already received the event. Auto-open report for local participants.
+	# Attacker controller follow-up order: hostages → report → building actions.
+	var my_id: int = int(base_map.my_pl_id)
 	var show_followup := false
 	if base_map.forces.has(attacker_id):
-		show_followup = base_map.get_force_controller(attacker_id) == base_map.my_pl_id
+		show_followup = base_map.get_force_controller(attacker_id) == my_id
+	var i_am_participant := _er_i_am_participant(base_map, event_id)
 
-	if not show_followup:
-		return
-	if not attacker_won:
-		return
+	_er_clear_pending_building()
+	if show_followup and attacker_won and building != null and is_instance_valid(building):
+		_er_set_pending_building(base_map, attacker_id, building)
 
-	# Hostages first; building actions after (or immediately if no hostages).
-	if not hostage_pool.is_empty():
+	if show_followup and attacker_won and not hostage_pool.is_empty():
 		open_hostage_menu(base_map, attacker_id, hostage_pool, building, event_id)
-	elif building != null and is_instance_valid(building):
-		open_building_actions_menu(base_map, attacker_id, building)
+		return
+
+	if (i_am_participant or show_followup) and event_id != "":
+		open_event_report(base_map, event_id)
+
+
+func _er_i_am_participant(base_map, event_id: String) -> bool:
+	if base_map == null or event_id == "" or not base_map.has_method("get_event"):
+		return false
+	var event: Dictionary = base_map.get_event(event_id)
+	if event.is_empty():
+		return false
+	var my_id: int = int(base_map.my_pl_id)
+	for pid in event.get("participant_ids", []):
+		if int(pid) == my_id:
+			return true
+	return false
+
+
+func _er_set_pending_building(base_map, force_id: String, building: Node) -> void:
+	_er_pending_base = base_map
+	_er_pending_force_id = force_id
+	_er_pending_building = building
+
+
+func _er_clear_pending_building() -> void:
+	_er_pending_base = null
+	_er_pending_force_id = ""
+	_er_pending_building = null
 
 
 # --- Event report card ------------------------------------------------------
@@ -6761,7 +8146,7 @@ func _ensure_event_report() -> void:
 	_er_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_er_panel.clip_contents = true
 	_er_panel.visible = false
-	_er_panel.custom_minimum_size = Vector2(560, 520)
+	_er_panel.custom_minimum_size = Vector2(760, 520)
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		margin.add_theme_constant_override(side, 14)
@@ -6776,16 +8161,23 @@ func _ensure_event_report() -> void:
 	close_btn.pressed.connect(_close_event_report)
 	header.add_child(_er_title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_er_panel, header, close_btn)
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var scroll_body := VBoxContainer.new()
 	scroll_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll_body.add_theme_constant_override("separation", 12)
+	_er_outcome = Label.new()
+	_er_outcome.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_er_outcome.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_er_outcome.add_theme_font_size_override("font_size", 18)
+	_er_outcome.visible = false
+	scroll_body.add_child(_er_outcome)
 	_er_body = Label.new()
 	_er_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_er_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_er_body.custom_minimum_size = Vector2(512, 0)
+	_er_body.custom_minimum_size = Vector2(712, 0)
 	scroll_body.add_child(_er_body)
 	_er_roster = VBoxContainer.new()
 	_er_roster.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -6814,9 +8206,11 @@ func _fit_event_report_panel() -> void:
 	if _er_panel == null:
 		return
 	var vp := get_viewport().get_visible_rect().size
-	var max_w := minf(560.0, vp.x * 0.92)
+	var max_w := minf(780.0, vp.x * 0.94)
 	var max_h := minf(520.0, vp.y * 0.8)
-	_er_body.custom_minimum_size = Vector2(max_w - 48.0, 0)
+	_er_body.custom_minimum_size = Vector2(max_w - 56.0, 0)
+	if _er_outcome != null:
+		_er_outcome.custom_minimum_size = Vector2(max_w - 56.0, 0)
 	_er_panel.custom_minimum_size = Vector2(max_w, max_h)
 	_er_panel.size = Vector2(max_w, max_h)
 	_er_panel.position = (vp - _er_panel.size) * 0.5
@@ -6832,6 +8226,11 @@ func _er_clear_roster() -> void:
 		child.queue_free()
 
 
+const _ER_SHIELD_SIZE := 28
+const _ER_WIN_COLOR := Color(0.35, 0.85, 0.4)
+const _ER_LOSE_COLOR := Color(0.95, 0.35, 0.3)
+
+
 func _er_make_cell(text: String, expand: bool = false, bold: bool = false) -> Label:
 	var lbl := Label.new()
 	lbl.text = text
@@ -6845,6 +8244,41 @@ func _er_make_cell(text: String, expand: bool = false, bold: bool = false) -> La
 	return lbl
 
 
+func _er_side_header(table: Dictionary) -> HBoxContainer:
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 6)
+	var players = null
+	if _er_base != null:
+		players = _er_base.get("players")
+	var side_ids: Array = table.get("side_ids", [])
+	for pid_raw in side_ids:
+		var pid := int(pid_raw)
+		var shield := TextureRect.new()
+		shield.custom_minimum_size = Vector2(_ER_SHIELD_SIZE, _ER_SHIELD_SIZE)
+		shield.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		shield.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		if players != null and players.has(pid):
+			shield.texture = Heraldry.texture_for_player(players[pid], _ER_SHIELD_SIZE)
+			var pname := ""
+			if _er_base.has_method("player_display_name"):
+				pname = str(_er_base.player_display_name(pid))
+			if pname != "":
+				shield.tooltip_text = pname
+		header.add_child(shield)
+	var side_title := Label.new()
+	side_title.text = "%s  (%d → %d men)" % [
+		str(table.get("side", "")),
+		int(table.get("before_men", 0)),
+		int(table.get("after_men", 0)),
+	]
+	side_title.add_theme_font_size_override("font_size", 15)
+	side_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var outcome := _ER_WIN_COLOR if bool(table.get("won", false)) else _ER_LOSE_COLOR
+	side_title.add_theme_color_override("font_color", outcome)
+	header.add_child(side_title)
+	return header
+
+
 func _er_build_roster_tables(event: Dictionary) -> void:
 	_er_clear_roster()
 	var tables: Array = GameEvents.roster_tables(event)
@@ -6853,14 +8287,7 @@ func _er_build_roster_tables(event: Dictionary) -> void:
 	for table in tables:
 		var side_box := VBoxContainer.new()
 		side_box.add_theme_constant_override("separation", 4)
-		var side_title := Label.new()
-		side_title.text = "%s  (%d → %d men)" % [
-			str(table.get("side", "")),
-			int(table.get("before_men", 0)),
-			int(table.get("after_men", 0)),
-		]
-		side_title.add_theme_font_size_override("font_size", 15)
-		side_box.add_child(side_title)
+		side_box.add_child(_er_side_header(table))
 		var grid := GridContainer.new()
 		grid.columns = 3
 		grid.add_theme_constant_override("h_separation", 16)
@@ -6895,26 +8322,55 @@ func open_event_report(base_map, event_id: String) -> void:
 	var event: Dictionary = base_map.get_event(event_id) if base_map.has_method("get_event") else {}
 	if event.is_empty():
 		return
+	if base_map.has_method("mark_inbox_read"):
+		base_map.mark_inbox_read(event_id)
 	# MSG menu steals input when brought in front of the report; close it first.
 	if msg_menu != null and msg_menu.visible:
 		msg_menu.visible = false
 	var reader_id: int = int(base_map.my_pl_id)
 	var name_cb := Callable(base_map, "player_display_name")
 	_er_title.text = GameEvents.report_title(event, reader_id)
+	_er_fill_outcome(event, reader_id)
 	_er_body.text = GameEvents.report_body(event, reader_id, name_cb)
 	_er_build_roster_tables(event)
 	_er_panel.visible = true
+	_bring_to_front(_er_panel)
 	_er_panel.z_index = 200
 	move_child(_er_panel, get_child_count() - 1)
 	_fit_event_report_panel()
+	refresh_msg_list_if_open()
+	refresh_msg_button()
 
 
-func _close_event_report() -> void:
+func _er_fill_outcome(event: Dictionary, reader_id: int) -> void:
+	if _er_outcome == null:
+		return
+	var outcome: Dictionary = GameEvents.battle_outcome(event, reader_id)
+	if outcome.is_empty():
+		_er_outcome.visible = false
+		_er_outcome.text = ""
+		_er_outcome.remove_theme_color_override("font_color")
+		return
+	_er_outcome.text = str(outcome.get("text", ""))
+	var col := _ER_WIN_COLOR if bool(outcome.get("won", false)) else _ER_LOSE_COLOR
+	_er_outcome.add_theme_color_override("font_color", col)
+	_er_outcome.visible = true
+
+
+func _close_event_report(proceed_followup: bool = true) -> void:
 	if _er_panel != null:
 		_er_panel.visible = false
 	_er_clear_roster()
 	_er_base = null
 	_er_event_id = ""
+	var base = _er_pending_base
+	var fid := _er_pending_force_id
+	var building = _er_pending_building
+	_er_clear_pending_building()
+	if not proceed_followup:
+		return
+	if base != null and building != null and is_instance_valid(building) and base.forces.has(fid):
+		open_building_actions_menu(base, fid, building, true)
 
 
 func _on_event_report_goto() -> void:
@@ -6941,11 +8397,7 @@ func _ensure_hostage_menu() -> void:
 	title.text = "Enemy wounded"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 16)
-	var close_btn := Button.new()
-	close_btn.text = "X"
-	close_btn.pressed.connect(_on_hs_sword)
 	header.add_child(title)
-	header.add_child(close_btn)
 	_hs_body = VBoxContainer.new()
 	_hs_body.add_theme_constant_override("separation", 6)
 	vbox.add_child(header)
@@ -6984,13 +8436,18 @@ func open_hostage_menu(base_map, attacker_id: String, pool: Array, building: Nod
 	sword_btn.pressed.connect(_on_hs_sword)
 	_hs_body.add_child(sword_btn)
 	_hs_panel.visible = true
+	_bring_to_front(_hs_panel)
 	_hs_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_hs_panel.size = Vector2(minf(420, vp.x * 0.9), _hs_panel.get_combined_minimum_size().y)
 	_hs_panel.position = (vp - _hs_panel.size) * 0.5
 
 
-func _close_hostage_menu() -> void:
+func _hs_is_pending() -> bool:
+	return _hs_panel != null and _hs_panel.visible and _hs_base != null
+
+
+func _hide_hostage_menu_state() -> void:
 	if _hs_panel != null:
 		_hs_panel.visible = false
 	_hs_base = null
@@ -7000,32 +8457,47 @@ func _close_hostage_menu() -> void:
 	_hs_event_id = ""
 
 
+## Close hostages panel. If still undecided, defaults to put-to-the-sword.
+## `open_followup`: when true (Escape / explicit Sword), open settlement actions after.
+func _close_hostage_menu(open_followup: bool = false) -> void:
+	if _hs_is_pending():
+		_resolve_hostage_sword(open_followup)
+		return
+	_hide_hostage_menu_state()
+
+
 func _on_hs_take() -> void:
 	var base = _hs_base
 	var atk := _hs_attacker_id
 	var pool: Array = _hs_pool.duplicate(true)
-	var building = _hs_building
 	var event_id := _hs_event_id
-	_close_hostage_menu()
+	_hide_hostage_menu_state()
 	if base != null:
 		base.do_take_hostages(atk, pool)
 		if event_id != "" and base.has_method("resolve_battle_hostage_fate"):
 			base.resolve_battle_hostage_fate(event_id, "taken")
-		if building != null and is_instance_valid(building) and base.forces.has(atk):
-			open_building_actions_menu(base, atk, building)
+		if event_id != "":
+			open_event_report(base, event_id)
 
 
 func _on_hs_sword() -> void:
+	_resolve_hostage_sword(true)
+
+
+func _resolve_hostage_sword(open_followup: bool) -> void:
 	var base = _hs_base
-	var atk := _hs_attacker_id
-	var building = _hs_building
 	var event_id := _hs_event_id
-	_close_hostage_menu()
-	if base != null:
-		if event_id != "" and base.has_method("resolve_battle_hostage_fate"):
-			base.resolve_battle_hostage_fate(event_id, "sword")
-		if building != null and is_instance_valid(building) and base.forces.has(atk):
-			open_building_actions_menu(base, atk, building)
+	_hide_hostage_menu_state()
+	if base == null:
+		return
+	if event_id != "" and base.has_method("resolve_battle_hostage_fate"):
+		base.resolve_battle_hostage_fate(event_id, "sword")
+	# Escape / clear-all: no report or settlement follow-up.
+	if not open_followup:
+		_er_clear_pending_building()
+		return
+	if event_id != "":
+		open_event_report(base, event_id)
 
 
 # --- Building actions (capture / raid / raze) -------------------------------
@@ -7053,6 +8525,7 @@ func _ensure_building_actions_menu() -> void:
 	close_btn.pressed.connect(_close_building_actions_menu)
 	header.add_child(title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_ba_panel, header, close_btn)
 	_ba_body = VBoxContainer.new()
 	_ba_body.add_theme_constant_override("separation", 6)
 	vbox.add_child(header)
@@ -7063,11 +8536,14 @@ func _ensure_building_actions_menu() -> void:
 	add_child(_ba_panel)
 
 
-func open_building_actions_menu(base_map, force_id: String, building: Node) -> void:
+func open_building_actions_menu(
+	base_map, force_id: String, building: Node, free_capture: bool = false
+) -> void:
 	_ensure_building_actions_menu()
 	_ba_base = base_map
 	_ba_force_id = force_id
 	_ba_building = building
+	_ba_free_capture = free_capture
 	for c in _ba_body.get_children():
 		_ba_body.remove_child(c)
 		c.queue_free()
@@ -7081,10 +8557,15 @@ func open_building_actions_menu(base_map, force_id: String, building: Node) -> v
 	var is_economy = type_ == GlobalStuff.BUILDING_TYPE.ECONOMY
 	var is_settlement = type_ == GlobalStuff.BUILDING_TYPE.TOWN or type_ == GlobalStuff.BUILDING_TYPE.VILLAGE
 	var raid_mp := int(base_map.RAID_MP_COST) if base_map.get("RAID_MP_COST") != null else 4
-	var capt_mp := int(base_map.CAPTURE_MP_COST) if base_map.get("CAPTURE_MP_COST") != null else 2
+	var capt_mp := 0 if free_capture else (
+		int(base_map.CAPTURE_MP_COST) if base_map.get("CAPTURE_MP_COST") != null else 2
+	)
 	var raze_mp := int(base_map.RAZE_MP_COST) if base_map.get("RAZE_MP_COST") != null else 8
 	var has_raid_mp = base_map.force_has_movement(force_id, raid_mp) if base_map.has_method("force_has_movement") else true
-	var has_capt_mp = base_map.force_has_movement(force_id, capt_mp) if base_map.has_method("force_has_movement") else true
+	var has_capt_mp = (
+		true if free_capture
+		else (base_map.force_has_movement(force_id, capt_mp) if base_map.has_method("force_has_movement") else true)
+	)
 	var has_raze_mp = base_map.force_has_movement(force_id, raze_mp) if base_map.has_method("force_has_movement") else true
 
 	var loot = base_map.compute_raid_loot(building)
@@ -7098,7 +8579,10 @@ func open_building_actions_menu(base_map, force_id: String, building: Node) -> v
 	var no_pop = is_settlement and int(building.get("population") if building.get("population") != null else 0) <= 0
 
 	var capt_btn := Button.new()
-	capt_btn.text = "Capture (%d MP)" % capt_mp
+	if free_capture:
+		capt_btn.text = "Capture (0 MP)"
+	else:
+		capt_btn.text = "Capture (%d MP)" % capt_mp
 	capt_btn.disabled = not has_capt_mp
 	if not has_capt_mp:
 		capt_btn.text = "Capture (need %d MP)" % capt_mp
@@ -7163,6 +8647,7 @@ func open_building_actions_menu(base_map, force_id: String, building: Node) -> v
 	_ba_body.add_child(leave_btn)
 
 	_ba_panel.visible = true
+	_bring_to_front(_ba_panel)
 	_ba_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_ba_panel.size = Vector2(minf(400, vp.x * 0.9), _ba_panel.get_combined_minimum_size().y)
@@ -7175,15 +8660,17 @@ func _close_building_actions_menu() -> void:
 	_ba_base = null
 	_ba_force_id = ""
 	_ba_building = null
+	_ba_free_capture = false
 
 
 func _on_ba_capture() -> void:
 	var base = _ba_base
 	var fid := _ba_force_id
 	var building = _ba_building
+	var free_capture := _ba_free_capture
 	_close_building_actions_menu()
 	if base != null and building != null:
-		base.do_capture_building(fid, building)
+		base.do_capture_building(fid, building, free_capture)
 
 
 func _on_ba_raid() -> void:
@@ -7249,9 +8736,10 @@ func _ensure_recruit_panel() -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 	var close_btn := Button.new()
-	close_btn.text = "✕"
+	close_btn.text = "X"
 	close_btn.pressed.connect(_close_recruit_menu)
 	header.add_child(close_btn)
+	PanelDragController.attach(_rc_panel, header, close_btn)
 	vbox.add_child(header)
 	_rc_info_lbl = Label.new()
 	_rc_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -7363,6 +8851,7 @@ func open_recruit_menu(base_map: Node, province_id: String) -> void:
 	_rc_blocker.visible = true
 	_rc_blocker.move_to_front()
 	_rc_panel.visible = true
+	_bring_to_front(_rc_panel)
 	_rc_panel.reset_size()
 	_rc_panel.size = Vector2(minf(420, vp.x * 0.9), _rc_panel.get_combined_minimum_size().y)
 	_rc_panel.position = (vp - _rc_panel.size) * 0.5
@@ -7521,6 +9010,7 @@ func _ensure_arm_peasants_panel() -> void:
 	close_btn.text = "X"
 	close_btn.pressed.connect(_close_arm_peasants_menu)
 	header.add_child(close_btn)
+	PanelDragController.attach(_ap_panel, header, close_btn)
 	vbox.add_child(header)
 	_ap_info_lbl = Label.new()
 	_ap_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -7636,6 +9126,7 @@ func open_arm_peasants_menu(base_map: Node, force_id: String) -> void:
 	_ap_blocker.visible = true
 	_ap_blocker.move_to_front()
 	_ap_panel.visible = true
+	_bring_to_front(_ap_panel)
 	_ap_panel.reset_size()
 	_ap_panel.size = Vector2(minf(460, vp.x * 0.9), _ap_panel.get_combined_minimum_size().y)
 	_ap_panel.position = (vp - _ap_panel.size) * 0.5
@@ -7812,9 +9303,10 @@ func _ensure_send_caravan_panel() -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 	var close_btn := Button.new()
-	close_btn.text = "✕"
+	close_btn.text = "X"
 	close_btn.pressed.connect(_close_send_caravan_menu)
 	header.add_child(close_btn)
+	PanelDragController.attach(_cv_send_panel, header, close_btn)
 	vbox.add_child(header)
 	_cv_send_info_lbl = Label.new()
 	_cv_send_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -7885,6 +9377,7 @@ func open_send_caravan_menu(base_map: Node, prefer_from_id: String = "") -> void
 	_cv_send_from.select(prefer_idx)
 	_rebuild_send_caravan_dest_and_cargo()
 	_cv_send_panel.visible = true
+	_bring_to_front(_cv_send_panel)
 	_cv_send_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_cv_send_panel.size = Vector2(minf(440, vp.x * 0.9), minf(520, vp.y * 0.85))
@@ -8027,6 +9520,7 @@ func _ensure_caravan_menu() -> void:
 	close_btn.pressed.connect(_close_caravan_menu)
 	header.add_child(title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_cv_panel, header, close_btn)
 	_cv_body = VBoxContainer.new()
 	_cv_body.add_theme_constant_override("separation", 6)
 	vbox.add_child(header)
@@ -8107,6 +9601,7 @@ func _rebuild_caravan_menu() -> void:
 	set_btn.pressed.connect(_on_caravan_set_dest)
 	_cv_body.add_child(set_btn)
 	_cv_panel.visible = true
+	_bring_to_front(_cv_panel)
 	_cv_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_cv_panel.size = Vector2(minf(380, vp.x * 0.9), _cv_panel.get_combined_minimum_size().y)
@@ -8140,33 +9635,21 @@ func _ensure_caravan_capture_menu() -> void:
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 8)
 	var header := HBoxContainer.new()
-	var title := Label.new()
-	title.text = "Enemy caravan"
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.add_theme_font_size_override("font_size", 16)
+	_cv_cap_title = Label.new()
+	_cv_cap_title.text = "Caravan"
+	_cv_cap_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cv_cap_title.add_theme_font_size_override("font_size", 16)
 	var close_btn := Button.new()
 	close_btn.text = "X"
 	close_btn.pressed.connect(_close_caravan_capture_menu)
-	header.add_child(title)
+	header.add_child(_cv_cap_title)
 	header.add_child(close_btn)
-	_cv_cap_info = Label.new()
-	_cv_cap_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_cv_cap_info.custom_minimum_size = Vector2(280, 0)
-	var take_btn := Button.new()
-	take_btn.text = "Take ownership"
-	take_btn.pressed.connect(_on_caravan_capture_take)
-	var destroy_btn := Button.new()
-	destroy_btn.text = "Destroy"
-	destroy_btn.pressed.connect(_on_caravan_capture_destroy)
-	var ignore_btn := Button.new()
-	ignore_btn.text = "Ignore"
-	ignore_btn.pressed.connect(_close_caravan_capture_menu)
+	PanelDragController.attach(_cv_cap_panel, header, close_btn)
+	_cv_cap_body = VBoxContainer.new()
+	_cv_cap_body.add_theme_constant_override("separation", 6)
 	vbox.add_child(header)
 	vbox.add_child(HSeparator.new())
-	vbox.add_child(_cv_cap_info)
-	vbox.add_child(take_btn)
-	vbox.add_child(destroy_btn)
-	vbox.add_child(ignore_btn)
+	vbox.add_child(_cv_cap_body)
 	margin.add_child(vbox)
 	_cv_cap_panel.add_child(margin)
 	add_child(_cv_cap_panel)
@@ -8177,17 +9660,180 @@ func open_caravan_capture_menu(base_map: Node, army: Node2D, caravan: Node2D) ->
 	_cv_cap_base = base_map
 	_cv_cap_caravan = caravan
 	_cv_cap_force_id = str(army.force_id) if army != null and army.get("force_id") != null else ""
+	_cv_cap_absorb_mode = false
+	_rebuild_caravan_capture_menu()
+
+
+func _caravan_action_mp_cost() -> int:
+	if _cv_cap_base != null and _cv_cap_base.get("CARAVAN_ACTION_MP_COST") != null:
+		return int(_cv_cap_base.CARAVAN_ACTION_MP_COST)
+	return 1
+
+
+func _caravan_interact_has_mp() -> bool:
+	if _cv_cap_base == null or _cv_cap_force_id == "":
+		return false
+	var cost := _caravan_action_mp_cost()
+	if _cv_cap_base.has_method("force_has_movement"):
+		return _cv_cap_base.force_has_movement(_cv_cap_force_id, cost)
+	return false
+
+
+func _caravan_interact_is_hostile() -> bool:
+	if _cv_cap_base == null or _cv_cap_caravan == null or not is_instance_valid(_cv_cap_caravan):
+		return false
+	var owner_id := int(_cv_cap_caravan.player_owner)
+	var me := int(_cv_cap_base.my_pl_id)
+	if owner_id == me:
+		return false
+	if _cv_cap_base.has_method("are_friendly_players"):
+		return not _cv_cap_base.are_friendly_players(owner_id, me)
+	return true
+
+
+func _rebuild_caravan_capture_menu() -> void:
+	if _cv_cap_body == null or _cv_cap_base == null or _cv_cap_caravan == null:
+		return
+	for child in _cv_cap_body.get_children():
+		child.queue_free()
+	_cv_cap_spinboxes.clear()
+	var c := _cv_cap_caravan
+	if not is_instance_valid(c):
+		_close_caravan_capture_menu()
+		return
 	var owner_name := "?"
-	if base_map.players.has(caravan.player_owner):
-		owner_name = str(base_map.players[caravan.player_owner].name)
-	_cv_cap_info.text = "Owner: %s\nCargo: %s\nTake it to redirect, or destroy it (no loot)." % [
-		owner_name, GlobalUnits.caravan_cargo_summary(caravan.cargo)
-	]
+	if _cv_cap_base.players.has(c.player_owner):
+		owner_name = str(_cv_cap_base.players[c.player_owner].name_)
+	var cargo: Dictionary = GlobalUnits.sanitize_caravan_cargo(c.cargo)
+	var has_cargo := GlobalUnits.caravan_cargo_has_any(cargo)
+	var has_mp := _caravan_interact_has_mp()
+	var cost := _caravan_action_mp_cost()
+	var hostile := _caravan_interact_is_hostile()
+	var mp_left := 0
+	if _cv_cap_base.has_method("get_force_army"):
+		var army = _cv_cap_base.get_force_army(_cv_cap_force_id)
+		if army != null:
+			mp_left = int(army.movement_left)
+
+	if _cv_cap_absorb_mode:
+		_cv_cap_title.text = "Absorb into army stock"
+		_rebuild_caravan_absorb_picker(cargo, has_mp, cost, mp_left)
+	else:
+		if hostile:
+			_cv_cap_title.text = "Enemy caravan"
+		elif int(c.player_owner) == int(_cv_cap_base.my_pl_id):
+			_cv_cap_title.text = "Your caravan"
+		else:
+			_cv_cap_title.text = "Friendly caravan"
+		var info := Label.new()
+		info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		info.custom_minimum_size = Vector2(280, 0)
+		var hint := "Actions cost %d MP (army has %d)." % [cost, mp_left]
+		if hostile:
+			hint += " Hostile actions declare war."
+		info.text = "Owner: %s\nCargo: %s\n%s" % [
+			owner_name, GlobalUnits.caravan_cargo_summary(cargo), hint
+		]
+		_cv_cap_body.add_child(info)
+
+		if hostile:
+			var take_btn := Button.new()
+			take_btn.text = "Take ownership (%d MP)" % cost
+			take_btn.disabled = not has_mp
+			take_btn.tooltip_text = "" if has_mp else "Need %d MP" % cost
+			take_btn.pressed.connect(_on_caravan_capture_take)
+			_cv_cap_body.add_child(take_btn)
+			var destroy_btn := Button.new()
+			destroy_btn.text = "Destroy (%d MP)" % cost
+			destroy_btn.disabled = not has_mp
+			destroy_btn.tooltip_text = "" if has_mp else "Need %d MP" % cost
+			destroy_btn.pressed.connect(_on_caravan_capture_destroy)
+			_cv_cap_body.add_child(destroy_btn)
+
+		var absorb_btn := Button.new()
+		absorb_btn.text = "Absorb into army stock (%d MP)" % cost
+		absorb_btn.disabled = not has_mp or not has_cargo
+		if not has_cargo:
+			absorb_btn.tooltip_text = "Caravan has no cargo"
+		elif not has_mp:
+			absorb_btn.tooltip_text = "Need %d MP" % cost
+		absorb_btn.pressed.connect(_on_caravan_absorb_open)
+		_cv_cap_body.add_child(absorb_btn)
+
+		if int(c.player_owner) == int(_cv_cap_base.my_pl_id):
+			var manage_btn := Button.new()
+			manage_btn.text = "Manage destination"
+			manage_btn.pressed.connect(_on_caravan_interact_manage)
+			_cv_cap_body.add_child(manage_btn)
+
+		var ignore_btn := Button.new()
+		ignore_btn.text = "Ignore"
+		ignore_btn.pressed.connect(_close_caravan_capture_menu)
+		_cv_cap_body.add_child(ignore_btn)
+
 	_cv_cap_panel.visible = true
+	_bring_to_front(_cv_cap_panel)
 	_cv_cap_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
-	_cv_cap_panel.size = Vector2(minf(360, vp.x * 0.9), _cv_cap_panel.get_combined_minimum_size().y)
+	_cv_cap_panel.size = Vector2(minf(380, vp.x * 0.9), _cv_cap_panel.get_combined_minimum_size().y)
 	_cv_cap_panel.position = (vp - _cv_cap_panel.size) * 0.5
+
+
+func _rebuild_caravan_absorb_picker(
+	cargo: Dictionary, has_mp: bool, cost: int, mp_left: int
+) -> void:
+	var info := Label.new()
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.custom_minimum_size = Vector2(280, 0)
+	info.text = (
+		"Choose cargo to move into this army's stock. Costs %d MP (have %d). "
+		+ "Empty caravan is dismissed."
+	) % [cost, mp_left]
+	_cv_cap_body.add_child(info)
+	var keys: Array = []
+	for k in GlobalUnits.WEAPON_KEYS:
+		keys.append(k)
+	for k in GlobalUnits.MATERIAL_KEYS:
+		keys.append(k)
+	for k in keys:
+		var have := int(cargo.get(k, 0))
+		if have <= 0:
+			continue
+		var row := HBoxContainer.new()
+		var lbl := Label.new()
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var label_name := (
+			GlobalUnits.weapon_name(k) if k in GlobalUnits.WEAPON_KEYS
+			else GlobalUnits.material_name(k)
+		)
+		lbl.text = "%s (have %d)" % [label_name, have]
+		row.add_child(lbl)
+		var spin := SpinBox.new()
+		spin.min_value = 0
+		spin.max_value = have
+		spin.step = 1
+		spin.value = 0
+		spin.custom_minimum_size = Vector2(90, 0)
+		row.add_child(spin)
+		_cv_cap_body.add_child(row)
+		_cv_cap_spinboxes[k] = spin
+
+	var take_all_btn := Button.new()
+	take_all_btn.text = "Take all"
+	take_all_btn.pressed.connect(_on_caravan_absorb_take_all)
+	_cv_cap_body.add_child(take_all_btn)
+
+	var confirm := Button.new()
+	confirm.text = "Confirm absorb (%d MP)" % cost
+	confirm.disabled = not has_mp
+	confirm.tooltip_text = "" if has_mp else "Need %d MP" % cost
+	confirm.pressed.connect(_on_caravan_absorb_confirm)
+	_cv_cap_body.add_child(confirm)
+
+	var back := Button.new()
+	back.text = "Back"
+	back.pressed.connect(_on_caravan_absorb_back)
+	_cv_cap_body.add_child(back)
 
 
 func _close_caravan_capture_menu() -> void:
@@ -8196,6 +9842,50 @@ func _close_caravan_capture_menu() -> void:
 	_cv_cap_base = null
 	_cv_cap_caravan = null
 	_cv_cap_force_id = ""
+	_cv_cap_absorb_mode = false
+	_cv_cap_spinboxes.clear()
+
+
+func _on_caravan_interact_manage() -> void:
+	var base = _cv_cap_base
+	var c = _cv_cap_caravan
+	_close_caravan_capture_menu()
+	if base != null and c != null and is_instance_valid(c):
+		open_caravan_menu(base, c)
+
+
+func _on_caravan_absorb_open() -> void:
+	_cv_cap_absorb_mode = true
+	_rebuild_caravan_capture_menu()
+
+
+func _on_caravan_absorb_back() -> void:
+	_cv_cap_absorb_mode = false
+	_rebuild_caravan_capture_menu()
+
+
+func _on_caravan_absorb_take_all() -> void:
+	for k in _cv_cap_spinboxes:
+		var spin: SpinBox = _cv_cap_spinboxes[k]
+		spin.value = spin.max_value
+
+
+func _on_caravan_absorb_confirm() -> void:
+	var base = _cv_cap_base
+	var c = _cv_cap_caravan
+	var fid := _cv_cap_force_id
+	var cargo := GlobalUnits.empty_caravan_cargo()
+	for k in _cv_cap_spinboxes:
+		cargo[k] = int(_cv_cap_spinboxes[k].value)
+	if not GlobalUnits.caravan_cargo_has_any(cargo):
+		show_info_popup("Select cargo to absorb")
+		return
+	_close_caravan_capture_menu()
+	if base != null and c != null and is_instance_valid(c) and fid != "":
+		if base.has_method("do_clear_force_siege"):
+			base.do_clear_force_siege(fid)
+		if base.has_method("do_absorb_caravan_cargo"):
+			base.do_absorb_caravan_cargo(String(c.name), fid, cargo)
 
 
 func _on_caravan_capture_take() -> void:
@@ -8203,10 +9893,10 @@ func _on_caravan_capture_take() -> void:
 	var c = _cv_cap_caravan
 	var fid := _cv_cap_force_id
 	_close_caravan_capture_menu()
-	if base != null and c != null and is_instance_valid(c):
-		if fid != "" and base.has_method("do_clear_force_siege"):
+	if base != null and c != null and is_instance_valid(c) and fid != "":
+		if base.has_method("do_clear_force_siege"):
 			base.do_clear_force_siege(fid)
-		base.do_capture_caravan(String(c.name))
+		base.do_capture_caravan(String(c.name), fid)
 
 
 func _on_caravan_capture_destroy() -> void:
@@ -8214,10 +9904,10 @@ func _on_caravan_capture_destroy() -> void:
 	var c = _cv_cap_caravan
 	var fid := _cv_cap_force_id
 	_close_caravan_capture_menu()
-	if base != null and c != null and is_instance_valid(c):
-		if fid != "" and base.has_method("do_clear_force_siege"):
+	if base != null and c != null and is_instance_valid(c) and fid != "":
+		if base.has_method("do_clear_force_siege"):
 			base.do_clear_force_siege(fid)
-		base.do_destroy_caravan(String(c.name))
+		base.do_destroy_caravan(String(c.name), fid)
 
 
 # --- Merchant raid ----------------------------------------------------------
@@ -8269,6 +9959,7 @@ func open_merchant_raid_menu(base_map: Node, force_id: String, merchant: Node) -
 	var raid_mp := int(base_map.RAID_MP_COST) if base_map.get("RAID_MP_COST") != null else 2
 	_mr_info.text = "Raid %s?\nCosts %d movement points." % [mname, raid_mp]
 	_mr_panel.visible = true
+	_bring_to_front(_mr_panel)
 	_mr_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_mr_panel.size = Vector2(minf(340, vp.x * 0.9), _mr_panel.get_combined_minimum_size().y)
@@ -8359,6 +10050,7 @@ func open_field_raid_menu(base_map: Node, force_id: String, field: Node) -> void
 			yes_btn.text = "Raid"
 		yes_btn.disabled = not can
 	_fr_panel.visible = true
+	_bring_to_front(_fr_panel)
 	_fr_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_fr_panel.size = Vector2(minf(340, vp.x * 0.9), _fr_panel.get_combined_minimum_size().y)
@@ -8422,9 +10114,10 @@ func _ensure_merchant_shop() -> void:
 	_ms_title.add_theme_font_size_override("font_size", 16)
 	header.add_child(_ms_title)
 	var close_btn := Button.new()
-	close_btn.text = "✕"
+	close_btn.text = "X"
 	close_btn.pressed.connect(_close_merchant_shop)
 	header.add_child(close_btn)
+	PanelDragController.attach(_ms_panel, header, close_btn)
 	vbox.add_child(header)
 	_ms_info_lbl = Label.new()
 	_ms_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -8570,6 +10263,7 @@ func open_merchant_shop(base_map: Node, merchant: Node) -> void:
 
 	_refresh_merchant_totals()
 	_ms_panel.visible = true
+	_bring_to_front(_ms_panel)
 	_ms_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_ms_panel.size = Vector2(minf(720, vp.x * 0.9), minf(640, vp.y * 0.85))
@@ -8932,9 +10626,10 @@ func _ensure_sellswords_hire() -> void:
 	title.add_theme_font_size_override("font_size", 16)
 	header.add_child(title)
 	var close_btn := Button.new()
-	close_btn.text = "✕"
+	close_btn.text = "X"
 	close_btn.pressed.connect(_close_sellswords_hire)
 	header.add_child(close_btn)
+	PanelDragController.attach(_ss_panel, header, close_btn)
 	vbox.add_child(header)
 	_ss_info_lbl = Label.new()
 	_ss_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -9048,6 +10743,7 @@ func open_sellswords_hire(base_map: Node, band: Node) -> void:
 
 	_refresh_sellswords_hire_totals()
 	_ss_panel.visible = true
+	_bring_to_front(_ss_panel)
 	_ss_panel.size = SS_PANEL_SIZE
 	_ss_panel.custom_minimum_size = SS_PANEL_SIZE
 	var vp := get_viewport().get_visible_rect().size
@@ -9151,6 +10847,7 @@ func _ensure_fleet_menu() -> void:
 	close_btn.pressed.connect(_close_fleet_menu)
 	header.add_child(title)
 	header.add_child(close_btn)
+	PanelDragController.attach(_fl_panel, header, close_btn)
 	_fl_body = VBoxContainer.new()
 	_fl_body.add_theme_constant_override("separation", 6)
 	vbox.add_child(header)
@@ -9252,6 +10949,7 @@ func _rebuild_fleet_menu() -> void:
 	_fl_body.add_child(disband_btn)
 
 	_fl_panel.visible = true
+	_bring_to_front(_fl_panel)
 	_fl_panel.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_fl_panel.size = Vector2(minf(360, vp.x * 0.9), _fl_panel.get_combined_minimum_size().y)
@@ -9644,6 +11342,7 @@ func _close_fleet_prompt() -> void:
 
 func _show_fleet_prompt() -> void:
 	_fl_prompt.visible = true
+	_bring_to_front(_fl_prompt)
 	_fl_prompt.reset_size()
 	var vp := get_viewport().get_visible_rect().size
 	_fl_prompt.size = Vector2(minf(360, vp.x * 0.9), _fl_prompt.get_combined_minimum_size().y)

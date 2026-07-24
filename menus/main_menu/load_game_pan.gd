@@ -72,14 +72,31 @@ func _build_ui() -> void:
 	_rename_edit = LineEdit.new()
 	box.add_child(_rename_edit)
 	_rename_dialog.add_child(box)
+	_style_dialog_panel(_rename_dialog)
 	add_child(_rename_dialog)
 	_rename_dialog.confirmed.connect(_on_rename_confirmed)
 
 	_delete_dialog = ConfirmationDialog.new()
 	_delete_dialog.title = "Delete save"
 	_delete_dialog.dialog_text = "Delete this save permanently?"
+	_style_dialog_panel(_delete_dialog)
 	add_child(_delete_dialog)
 	_delete_dialog.confirmed.connect(_on_delete_confirmed)
+
+
+func _style_dialog_panel(dialog: Window) -> void:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.18, 0.12, 0.07, 0.98)
+	sb.set_border_width_all(3)
+	sb.border_color = Color(0.05, 0.03, 0.015, 1)
+	sb.set_corner_radius_all(4)
+	sb.set_content_margin_all(12)
+	sb.shadow_color = Color(0, 0, 0, 0.45)
+	sb.shadow_size = 4
+	dialog.add_theme_stylebox_override("panel", sb)
+	dialog.add_theme_stylebox_override("embedded_border", sb)
+	dialog.add_theme_stylebox_override("embedded_unfocused_border", sb)
+	dialog.transparent = false
 
 
 func refresh_list() -> void:

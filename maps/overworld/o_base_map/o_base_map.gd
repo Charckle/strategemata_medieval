@@ -14,8 +14,18 @@ var my_pl_id = 0
 var players = {}
 
 # Mutual alliances: alliances[pid] = Array of other player ids allied with pid.
-# Kept bidirectional; mutated only via apply_set_alliance RPC.
+# Kept bidirectional; mutated via diplomacy apply_* (ask/break) RPCs.
 var alliances := {}
+# Directed opinion: opinions[viewer_pid][target_pid] = 0..100
+var opinions := {}
+# Active wars: war_key(lo_hi) -> { a, b, started_by }
+var wars := {}
+# Move permits: pair_key(mover, land_owner) -> { kind: temp|perm, expires_turn }
+var move_permits := {}
+# Pending diplo asks: pair_key(from, to) -> message dict (new replaces old)
+var diplo_messages := {}
+# Last season a player sent a diplo action to a target: pair_key(from, to) -> turn
+var diplo_sent_turn := {}
 
 # Authoritative force registry (rosters). Keyed by force_id:
 #   { "units": Array[stack], "location": Dictionary, "controller": int,
@@ -54,8 +64,8 @@ var _pending_army_interaction_target: Node2D = null
 
 # Global event log (kept for the whole game) + per-player message inboxes.
 # game_events: event_id (String) -> event Dictionary
-# player_inboxes: player_id -> Array of {"event_id": String} (newest first, capped)
-# player_msg_unread: player_id -> bool
+# player_inboxes: player_id -> Array of {"event_id": String, "unread": bool} (newest first, capped)
+# player_msg_unread: player_id -> bool (MSG* until Messages menu opened)
 var game_events: Dictionary = {}
 var _next_event_id: int = 1
 var player_inboxes: Dictionary = {}
@@ -261,6 +271,7 @@ func _ready() -> void:
 	spawn_local_councils()
 	Heraldry.ensure_all(players)
 	GlobalStuff.ensure_order_colors(players)
+	Diplomacy.ensure_opinion_maps(self)
 	update_player_data.rpc(players)
 	assign_players_home_provinces()
 	initialize_map()
@@ -1040,7 +1051,7 @@ func _make_vip_message_event(kind_extra: String, text: String, recipient: int, a
 		"actor_id": actor_id if actor_id >= 0 else recipient,
 	}
 	var eid := _register_event(event)
-	_deliver_event_to_players(eid, [recipient], int(event["actor_id"]), false)
+	_deliver_event_to_players(eid, [recipient], int(event["actor_id"]))
 	return eid
 
 
@@ -1112,6 +1123,28 @@ func get_inbox_entries(pid: int = -1) -> Array:
 	return player_inboxes.get(pid, [])
 
 
+func mark_inbox_read(event_id: String, pid: int = -1) -> void:
+	if pid < 0:
+		pid = my_pl_id
+	if event_id == "" or not player_inboxes.has(pid):
+		return
+	var inbox: Array = player_inboxes[pid]
+	var changed := false
+	for i in inbox.size():
+		var entry = inbox[i]
+		if not (entry is Dictionary):
+			continue
+		if str(entry.get("event_id", "")) != event_id:
+			continue
+		if bool(entry.get("unread", false)):
+			entry["unread"] = false
+			inbox[i] = entry
+			changed = true
+		break
+	if changed:
+		player_inboxes[pid] = inbox
+
+
 func get_event(event_id: String) -> Dictionary:
 	if game_events.has(event_id):
 		return game_events[event_id]
@@ -1149,11 +1182,11 @@ func _register_event(event: Dictionary) -> String:
 	return eid
 
 
-func _push_inbox(pid: int, event_id: String, mark_unread: bool) -> void:
+func _push_inbox(pid: int, event_id: String, mark_unread: bool = true) -> void:
 	if not player_inboxes.has(pid):
 		player_inboxes[pid] = []
 	var inbox: Array = player_inboxes[pid]
-	inbox.push_front({"event_id": event_id})
+	inbox.push_front({"event_id": event_id, "unread": mark_unread})
 	while inbox.size() > GameEvents.INBOX_CAP:
 		inbox.pop_back()
 	player_inboxes[pid] = inbox
@@ -1161,17 +1194,16 @@ func _push_inbox(pid: int, event_id: String, mark_unread: bool) -> void:
 		player_msg_unread[pid] = true
 
 
-func _deliver_event_to_players(event_id: String, recipient_ids: Array, actor_id: int, auto_open_for_actor: bool = true) -> void:
+## Deliver to inboxes only (no popup / auto-open). Every recipient starts unread.
+func _deliver_event_to_players(event_id: String, recipient_ids: Array, _actor_id: int = -1) -> void:
 	var i_am_recipient := false
 	for pid in recipient_ids:
 		var p := int(pid)
-		_push_inbox(p, event_id, p != actor_id)
+		_push_inbox(p, event_id, true)
 		if p == my_pl_id:
 			i_am_recipient = true
 	if not i_am_recipient or not is_instance_valid(gui_node):
 		return
-	if auto_open_for_actor and my_pl_id == actor_id and gui_node.has_method("open_event_report"):
-		gui_node.open_event_report(self, event_id)
 	if gui_node.has_method("refresh_msg_button"):
 		gui_node.refresh_msg_button()
 	if gui_node.has_method("refresh_msg_list_if_open"):
@@ -1516,16 +1548,9 @@ func _on_army_interaction(mover: Node2D, target: Node2D) -> void:
 		pathfinding.deselect_army()
 		_try_open_army_embark(mover, target)
 		return
-	# Army approaching a caravan: capture menu for enemies; own/ally → inspect.
+	# Army approaching a caravan: interact (absorb / capture / destroy).
 	if target.has_method("is_caravan") and target.is_caravan():
 		pathfinding.deselect_army()
-		if are_friendly_players(mover.get_controller(), target.get_controller()):
-			if target.is_controllable_by(my_pl_id) and is_instance_valid(gui_node) \
-					and gui_node.has_method("open_caravan_menu"):
-				gui_node.open_caravan_menu(self, target)
-			elif is_instance_valid(gui_node):
-				gui_node.show_info_popup("Friendly caravan")
-			return
 		if is_instance_valid(gui_node) and gui_node.has_method("open_caravan_capture_menu"):
 			gui_node.open_caravan_capture_menu(self, mover, target)
 		return
@@ -1533,7 +1558,8 @@ func _on_army_interaction(mover: Node2D, target: Node2D) -> void:
 	if mover == target or mover.force_id == target.force_id:
 		open_selected_army_menu(mover)
 		return
-	if forces_are_friendly(mover.get_owner_set(), target.get_owner_set()):
+	# Controllers only (same lord or allies). Hostages must not make enemies "friendly".
+	if are_friendly_players(mover.get_controller(), target.get_controller()):
 		pathfinding.deselect_army()
 		gui_node.open_force_menu(self, mover.force_id, target.force_id)
 	else:
@@ -1559,7 +1585,7 @@ func on_caravan_clicked(caravan: Node2D) -> void:
 			gui_node.open_caravan_menu(self, caravan)
 	else:
 		if is_instance_valid(gui_node):
-			gui_node.show_info_popup("Enemy caravan — move an army next to it to capture")
+			gui_node.show_info_popup("Enemy caravan — move an army next to it to interact")
 
 
 func get_fleet_by_id(fleet_id: String) -> Node2D:
@@ -1692,7 +1718,7 @@ func refresh_fleet_stack_visuals() -> void:
 				f.set_stack_display(f == primary, owner_pids)
 
 
-# --- Diplomacy (alliances) --------------------------------------------------
+# --- Diplomacy (alliances, opinion, war, permits) ---------------------------
 
 func are_allied(a: int, b: int) -> bool:
 	if a == b:
@@ -1715,6 +1741,14 @@ func forces_are_friendly(owners_a, owners_b) -> bool:
 	return false
 
 
+func are_at_war(a: int, b: int) -> bool:
+	return Diplomacy.are_at_war(self, a, b)
+
+
+func get_opinion(viewer: int, target: int) -> int:
+	return Diplomacy.get_opinion(self, viewer, target)
+
+
 func get_playing_players_except(except_id: int) -> Array:
 	var out: Array = []
 	for pid in players.keys():
@@ -1728,33 +1762,32 @@ func get_playing_players_except(except_id: int) -> Array:
 	return out
 
 
-func do_set_alliance(other_id: int, allied: bool) -> void:
-	request_set_alliance.rpc_id(1, my_pl_id, other_id, allied)
+func get_diplomable_lords_except(except_id: int) -> Array:
+	return Diplomacy.diplomable_lords(self, except_id)
 
 
-@rpc("any_peer", "call_local", "reliable")
-func request_set_alliance(player_a: int, player_b: int, allied: bool) -> void:
-	if not multiplayer.is_server():
-		return
-	if player_a == player_b:
-		return
-	if not players.has(player_a) or not players.has(player_b):
-		return
-	apply_set_alliance.rpc(player_a, player_b, allied)
+func _make_diplo_message_event(kind: String, text: String, recipient: int, actor_id: int) -> String:
+	var event := {
+		"kind": GameEvents.KIND.DIPLO,
+		"diplo_kind": kind,
+		"diplo_label": Diplomacy.msg_label(kind),
+		"text": text,
+		"turn": turn,
+		"season": int(season),
+		"place_name": "",
+		"world_x": 0.0,
+		"world_y": 0.0,
+		"participant_ids": [recipient],
+		"actor_id": actor_id,
+	}
+	var eid := _register_event(event)
+	_deliver_event_to_players(eid, [recipient], actor_id)
+	return eid
 
 
-@rpc("authority", "call_local", "reliable")
-func apply_set_alliance(player_a: int, player_b: int, allied: bool) -> void:
-	if player_a == player_b:
-		return
-	if allied:
-		_add_ally(player_a, player_b)
-		_add_ally(player_b, player_a)
-	else:
-		_remove_ally(player_a, player_b)
-		_remove_ally(player_b, player_a)
-	if is_instance_valid(gui_node) and gui_node.has_method("refresh_alliances_list"):
-		gui_node.refresh_alliances_list()
+func _refresh_diplo_gui() -> void:
+	if is_instance_valid(gui_node) and gui_node.has_method("refresh_diplomacy_ui"):
+		gui_node.refresh_diplomacy_ui()
 
 
 func _add_ally(a: int, b: int) -> void:
@@ -1770,6 +1803,398 @@ func _remove_ally(a: int, b: int) -> void:
 	alliances[a].erase(b)
 	if alliances[a].is_empty():
 		alliances.erase(a)
+
+
+func _set_war(a: int, b: int, started_by: int) -> void:
+	if a == b:
+		return
+	if not Diplomacy.is_diplomable(self, a) or not Diplomacy.is_diplomable(self, b):
+		return
+	var key := Diplomacy.war_key(a, b)
+	if wars.has(key):
+		return
+	wars[key] = {"a": a, "b": b, "started_by": started_by}
+	# War breaks alliance.
+	_remove_ally(a, b)
+	_remove_ally(b, a)
+	Diplomacy.set_opinion(self, a, b, GameBalance.DIPLO_OPINION_MIN)
+	Diplomacy.set_opinion(self, b, a, GameBalance.DIPLO_OPINION_MIN)
+	# Revoke permits both ways.
+	if move_permits != null:
+		move_permits.erase(Diplomacy.pair_key(a, b))
+		move_permits.erase(Diplomacy.pair_key(b, a))
+
+
+func _clear_war(a: int, b: int) -> void:
+	wars.erase(Diplomacy.war_key(a, b))
+
+
+func _grant_permit(mover: int, land_owner: int, permanent: bool) -> void:
+	var entry := {"kind": Diplomacy.PERMIT_PERM if permanent else Diplomacy.PERMIT_TEMP}
+	if not permanent:
+		entry["expires_turn"] = int(turn) + GameBalance.DIPLO_PERMIT_TEMP_SEASONS
+	move_permits[Diplomacy.pair_key(mover, land_owner)] = entry
+
+
+func _revoke_permit(mover: int, land_owner: int) -> void:
+	move_permits.erase(Diplomacy.pair_key(mover, land_owner))
+
+
+## Open war from combat / capture. Returns true if a new war was opened.
+## If the victim is AI, queues an angry war-declaration inbox message (no season slot).
+func ensure_war_from_hostility(attacker: int, defender: int) -> bool:
+	if attacker == defender:
+		return false
+	if not Diplomacy.is_diplomable(self, attacker) or not Diplomacy.is_diplomable(self, defender):
+		return false
+	if are_friendly_players(attacker, defender):
+		# Attacking an ally breaks the bond first.
+		_remove_ally(attacker, defender)
+		_remove_ally(defender, attacker)
+	var already := are_at_war(attacker, defender)
+	Diplomacy.set_opinion(self, defender, attacker, GameBalance.DIPLO_OPINION_MIN)
+	Diplomacy.set_opinion(self, attacker, defender, GameBalance.DIPLO_OPINION_MIN)
+	if already:
+		return false
+	_set_war(attacker, defender, attacker)
+	if GlobalStuff.is_ai_lord(players[defender].type):
+		var aname := player_display_name(attacker)
+		var text := (
+			"%s has attacked our forces. We declare war!"
+			% aname
+		)
+		_make_diplo_message_event(Diplomacy.MSG_WAR_ANGRY, text, attacker, defender)
+	elif GlobalStuff.is_ai_lord(players[attacker].type):
+		_make_diplo_message_event(
+			Diplomacy.MSG_WAR_DECLARE,
+			"%s declares war!" % player_display_name(attacker),
+			defender,
+			attacker
+		)
+	_refresh_diplo_gui()
+	return true
+
+
+func _hostility_from_battle(attacker_id: String, defender_army_id: String, building: Node) -> void:
+	var atk := get_force_controller(attacker_id)
+	var def := -1
+	if building != null and building.get("player_owner") != null:
+		def = int(building.player_owner)
+	elif defender_army_id != "" and forces.has(defender_army_id):
+		def = get_force_controller(defender_army_id)
+	if atk >= 0 and def >= 0 and atk != def:
+		ensure_war_from_hostility(atk, def)
+
+
+func tick_diplomacy_trespass() -> void:
+	## Once per season: −20 to land owner's opinion of each foreign army controller
+	## present without a move permit (one hit per controller pair).
+	var hit: Dictionary = {} # "mover_owner" -> true
+	for fid in forces.keys():
+		var loc: Dictionary = forces[fid].get("location", {})
+		if str(loc.get("kind", "")) != "cell":
+			continue
+		var mover := get_force_controller(str(fid))
+		if not Diplomacy.is_diplomable(self, mover):
+			continue
+		var prov = get_force_province(str(fid))
+		if prov == null:
+			continue
+		var owner := Diplomacy.province_land_owner(prov)
+		if owner < 0 or owner == mover:
+			continue
+		if not Diplomacy.is_diplomable(self, owner):
+			continue
+		if are_friendly_players(mover, owner):
+			continue
+		if Diplomacy.has_move_permit(self, mover, owner):
+			continue
+		var hk := Diplomacy.pair_key(mover, owner)
+		if hit.has(hk):
+			continue
+		hit[hk] = true
+		Diplomacy.adjust_opinion(self, owner, mover, GameBalance.DIPLO_TRESPASS_DELTA)
+
+
+func tick_diplomacy_ai_inbox() -> void:
+	## Resolve pending messages addressed to AI lords (before LordAI acts).
+	Diplomacy.ensure_opinion_maps(self)
+	for pid in Diplomacy.diplomable_lords(self):
+		if not GlobalStuff.is_ai_lord(players[pid].type):
+			continue
+		_ai_resolve_diplo_inbox(int(pid))
+
+
+func _ai_resolve_diplo_inbox(ai_pid: int) -> void:
+	var pending: Array = Diplomacy.pending_to(self, ai_pid)
+	for m in pending:
+		if not (m is Dictionary):
+			continue
+		var from_id := int(m.get("from", -1))
+		var kind := str(m.get("kind", ""))
+		Diplomacy.clear_pending(self, from_id, ai_pid)
+		match kind:
+			Diplomacy.MSG_ALLIANCE_ASK:
+				var ok := Diplomacy.ai_should_accept_alliance(self, ai_pid, from_id)
+				if ok:
+					_add_ally(ai_pid, from_id)
+					_add_ally(from_id, ai_pid)
+				var txt := (
+					"%s accepted your alliance." if ok else "%s refused your alliance."
+				) % player_display_name(ai_pid)
+				_make_diplo_message_event(
+					kind, txt, from_id, ai_pid
+				)
+			Diplomacy.MSG_PEACE_ASK:
+				var okp := Diplomacy.ai_should_accept_peace(self, ai_pid, from_id)
+				if okp:
+					_clear_war(ai_pid, from_id)
+				var txtp := (
+					"%s accepted peace." if okp else "%s refused peace."
+				) % player_display_name(ai_pid)
+				_make_diplo_message_event(kind, txtp, from_id, ai_pid)
+			Diplomacy.MSG_PERMIT_ASK_TEMP, Diplomacy.MSG_PERMIT_ASK_PERM:
+				var perm := kind == Diplomacy.MSG_PERMIT_ASK_PERM
+				var okg := Diplomacy.ai_should_grant_permit(self, ai_pid, from_id, perm)
+				if okg:
+					_grant_permit(from_id, ai_pid, perm)
+				var txtg := (
+					"%s granted your passage permit." if okg
+					else "%s refused your passage permit."
+				) % player_display_name(ai_pid)
+				_make_diplo_message_event(kind, txtg, from_id, ai_pid)
+			_:
+				pass
+	_refresh_diplo_gui()
+
+
+func diplomacy_on_building_lost(loser: int, capturer: int, building: Node) -> void:
+	## AI peace offer after losing a town/castle when outnumbered.
+	if building == null:
+		return
+	if not Diplomacy.is_diplomable(self, loser) or not Diplomacy.is_diplomable(self, capturer):
+		return
+	if not GlobalStuff.is_ai_lord(players[loser].type):
+		return
+	var bt := int(building.type_) if building.get("type_") != null else -1
+	if bt != int(GlobalStuff.BUILDING_TYPE.TOWN) and bt != int(GlobalStuff.BUILDING_TYPE.CASTLE):
+		return
+	if not are_at_war(loser, capturer):
+		return
+	if not Diplomacy.ai_should_accept_peace(self, loser, capturer):
+		return
+	if not Diplomacy.can_send_message(self, loser, capturer):
+		return
+	_queue_or_apply_diplo(loser, capturer, Diplomacy.MSG_PEACE_ASK, true)
+
+
+func _queue_or_apply_diplo(from_id: int, to_id: int, kind: String, use_slot: bool) -> bool:
+	if use_slot and not Diplomacy.can_send_message(self, from_id, to_id):
+		return false
+	if use_slot:
+		Diplomacy.mark_message_sent(self, from_id, to_id)
+	var fname := player_display_name(from_id)
+	match kind:
+		Diplomacy.MSG_PRAISE:
+			if are_at_war(from_id, to_id):
+				return false
+			Diplomacy.adjust_opinion(self, to_id, from_id, GameBalance.DIPLO_PRAISE_DELTA)
+			_make_diplo_message_event(
+				kind, "%s sends praise." % fname, to_id, from_id
+			)
+		Diplomacy.MSG_INSULT:
+			Diplomacy.adjust_opinion(self, to_id, from_id, GameBalance.DIPLO_INSULT_DELTA)
+			_make_diplo_message_event(
+				kind, "%s insults you." % fname, to_id, from_id
+			)
+		Diplomacy.MSG_ALLIANCE_BREAK:
+			_remove_ally(from_id, to_id)
+			_remove_ally(to_id, from_id)
+			_make_diplo_message_event(
+				kind, "%s has broken the alliance." % fname, to_id, from_id
+			)
+		Diplomacy.MSG_WAR_DECLARE:
+			_set_war(from_id, to_id, from_id)
+			_make_diplo_message_event(
+				kind, "%s declares war!" % fname, to_id, from_id
+			)
+		Diplomacy.MSG_PERMIT_REVOKE:
+			_revoke_permit(to_id, from_id) # revoke their right to cross our land
+			_make_diplo_message_event(
+				kind, "%s revoked your passage permit." % fname, to_id, from_id
+			)
+		Diplomacy.MSG_ALLIANCE_ASK, Diplomacy.MSG_PEACE_ASK, Diplomacy.MSG_PERMIT_ASK_TEMP, Diplomacy.MSG_PERMIT_ASK_PERM:
+			if kind == Diplomacy.MSG_ALLIANCE_ASK and are_at_war(from_id, to_id):
+				return false
+			if kind == Diplomacy.MSG_PEACE_ASK and not are_at_war(from_id, to_id):
+				return false
+			if (
+				(kind == Diplomacy.MSG_PERMIT_ASK_TEMP or kind == Diplomacy.MSG_PERMIT_ASK_PERM)
+				and are_at_war(from_id, to_id)
+			):
+				return false
+			diplo_messages[Diplomacy.pair_key(from_id, to_id)] = {
+				"from": from_id,
+				"to": to_id,
+				"kind": kind,
+				"turn": int(turn),
+			}
+			_make_diplo_message_event(
+				kind,
+				"%s: %s. Open War → Diplomacy to respond." % [fname, Diplomacy.msg_label(kind)],
+				to_id,
+				from_id
+			)
+		_:
+			return false
+	_refresh_diplo_gui()
+	return true
+
+
+func do_diplo_action(to_id: int, kind: String) -> void:
+	request_diplo_action.rpc_id(1, my_pl_id, to_id, kind)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_diplo_action(from_id: int, to_id: int, kind: String) -> void:
+	if not multiplayer.is_server():
+		return
+	if not Diplomacy.is_diplomable(self, from_id) or not Diplomacy.is_diplomable(self, to_id):
+		return
+	if kind == Diplomacy.MSG_PRAISE and are_at_war(from_id, to_id):
+		return
+	if kind == Diplomacy.MSG_ALLIANCE_ASK and are_at_war(from_id, to_id):
+		return
+	if (
+		(kind == Diplomacy.MSG_PERMIT_ASK_TEMP or kind == Diplomacy.MSG_PERMIT_ASK_PERM)
+		and are_at_war(from_id, to_id)
+	):
+		return
+	if kind == Diplomacy.MSG_PEACE_ASK and not are_at_war(from_id, to_id):
+		return
+	if kind == Diplomacy.MSG_WAR_DECLARE and are_at_war(from_id, to_id):
+		return
+	if kind == Diplomacy.MSG_ALLIANCE_BREAK and not are_allied(from_id, to_id):
+		return
+	apply_diplo_action.rpc(from_id, to_id, kind)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_diplo_action(from_id: int, to_id: int, kind: String) -> void:
+	_queue_or_apply_diplo(from_id, to_id, kind, true)
+
+
+func do_diplo_respond(from_id: int, accept: bool) -> void:
+	request_diplo_respond.rpc_id(1, my_pl_id, from_id, accept)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_diplo_respond(to_id: int, from_id: int, accept: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	var pending: Dictionary = Diplomacy.pending_message(self, from_id, to_id)
+	if pending.is_empty():
+		return
+	apply_diplo_respond.rpc(to_id, from_id, accept)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_diplo_respond(to_id: int, from_id: int, accept: bool) -> void:
+	var pending: Dictionary = Diplomacy.pending_message(self, from_id, to_id)
+	if pending.is_empty():
+		return
+	var kind := str(pending.get("kind", ""))
+	Diplomacy.clear_pending(self, from_id, to_id)
+	var tname := player_display_name(to_id)
+	match kind:
+		Diplomacy.MSG_ALLIANCE_ASK:
+			if accept:
+				_add_ally(to_id, from_id)
+				_add_ally(from_id, to_id)
+			_make_diplo_message_event(
+				kind,
+				("%s accepted your alliance." if accept else "%s refused your alliance.") % tname,
+				from_id,
+				to_id
+			)
+		Diplomacy.MSG_PEACE_ASK:
+			if accept:
+				_clear_war(to_id, from_id)
+			_make_diplo_message_event(
+				kind,
+				("%s accepted peace." if accept else "%s refused peace.") % tname,
+				from_id,
+				to_id
+			)
+		Diplomacy.MSG_PERMIT_ASK_TEMP:
+			if accept:
+				_grant_permit(from_id, to_id, false)
+			_make_diplo_message_event(
+				kind,
+				("%s granted your passage permit." if accept else "%s refused your passage permit.") % tname,
+				from_id,
+				to_id
+			)
+		Diplomacy.MSG_PERMIT_ASK_PERM:
+			if accept:
+				_grant_permit(from_id, to_id, true)
+			_make_diplo_message_event(
+				kind,
+				("%s granted your passage permit." if accept else "%s refused your passage permit.") % tname,
+				from_id,
+				to_id
+			)
+		_:
+			pass
+	_refresh_diplo_gui()
+
+
+func do_set_opinion(target_id: int, value: int) -> void:
+	request_set_opinion.rpc_id(1, my_pl_id, target_id, value)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_set_opinion(viewer: int, target: int, value: int) -> void:
+	if not multiplayer.is_server():
+		return
+	if not Diplomacy.is_diplomable(self, viewer) or not Diplomacy.is_diplomable(self, target):
+		return
+	apply_set_opinion.rpc(viewer, target, value)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_set_opinion(viewer: int, target: int, value: int) -> void:
+	Diplomacy.set_opinion(self, viewer, target, value)
+	_refresh_diplo_gui()
+
+
+## Legacy checkbox API removed — kept as no-op stubs so old save UI hooks don't crash.
+func do_set_alliance(other_id: int, allied: bool) -> void:
+	if allied:
+		do_diplo_action(other_id, Diplomacy.MSG_ALLIANCE_ASK)
+	else:
+		do_diplo_action(other_id, Diplomacy.MSG_ALLIANCE_BREAK)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_set_alliance(player_a: int, player_b: int, allied: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	if allied:
+		apply_diplo_action.rpc(player_a, player_b, Diplomacy.MSG_ALLIANCE_ASK)
+	else:
+		apply_diplo_action.rpc(player_a, player_b, Diplomacy.MSG_ALLIANCE_BREAK)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_set_alliance(player_a: int, player_b: int, allied: bool) -> void:
+	if allied:
+		_add_ally(player_a, player_b)
+		_add_ally(player_b, player_a)
+	else:
+		_remove_ally(player_a, player_b)
+		_remove_ally(player_b, player_a)
+	_refresh_diplo_gui()
 
 
 # --- Battle / building conquest ---------------------------------------------
@@ -1796,9 +2221,12 @@ func get_building_battle_strength(building: Node, attacker_id: String = "") -> i
 		return 0
 	var is_castle = building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.CASTLE
 	if is_castle:
-		var inside_bonus := GlobalUnits.CASTLE_INSIDE_BONUS
+		var works := building.has_method("is_upgrade_project") and bool(building.is_upgrade_project())
+		var inside_bonus := GlobalUnits.castle_inside_list_bonus(works)
 		if attacker_id != "":
-			inside_bonus = GlobalUnits.siege_inside_bonus(get_force_siege_level_vs(attacker_id, building))
+			inside_bonus = GlobalUnits.siege_inside_bonus(
+				get_force_siege_level_vs(attacker_id, building), works
+			)
 		var inside_str := GlobalUnits.fighting_strength(
 			get_building_garrison(building, GlobalUnits.SPOT.INSIDE), inside_bonus
 		)
@@ -1814,7 +2242,7 @@ func get_building_battle_strength(building: Node, attacker_id: String = "") -> i
 func open_army_building_interaction(force_id: String, building: Node) -> void:
 	if not forces.has(force_id) or building == null or not is_instance_valid(building):
 		return
-	# Empty / under-construction castle plots are non-interactable worksites.
+	# Empty-build / dismantle worksites are non-interactable; upgrades stay fightable.
 	if building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
 		if building.has_method("is_army_interactable") and not building.is_army_interactable():
 			gui_node.show_info_popup("Castle worksite — armies cannot interact here")
@@ -1829,9 +2257,17 @@ func open_army_building_interaction(force_id: String, building: Node) -> void:
 		gui_node.open_building_actions_menu(self, force_id, building)
 		return
 	var is_castle = building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.CASTLE
-	if is_castle and not is_force_sieging_building(force_id, building):
-		gui_node.open_siege_prompt(self, force_id, building)
-		return
+	if is_castle:
+		if not is_force_sieging_building(force_id, building):
+			gui_node.open_siege_prompt(self, force_id, building)
+			return
+		if not can_assault_castle(force_id, building):
+			var lvl := get_force_siege_level_vs(force_id, building)
+			gui_node.show_info_popup(
+				"Siege engines %d/%d — assault available at level %d (next season)"
+				% [lvl, GlobalUnits.SIEGE_MAX_LEVEL, GlobalUnits.SIEGE_ASSAULT_MIN_LEVEL]
+			)
+			return
 	gui_node.open_battle_menu(self, force_id, "", building)
 
 
@@ -1873,6 +2309,17 @@ func get_force_siege_level_vs(force_id: String, building: Node) -> int:
 	return 0
 
 
+## Castle assaults require engines ≥ SIEGE_ASSAULT_MIN_LEVEL (no same-season take).
+func can_assault_castle(force_id: String, building: Node) -> bool:
+	if building == null or building.get("type_") == null:
+		return false
+	if building.type_ != GlobalStuff.BUILDING_TYPE.CASTLE:
+		return true
+	if GlobalUnits.fighting_men(get_all_building_garrison(building)) <= 0:
+		return true
+	return get_force_siege_level_vs(force_id, building) >= GlobalUnits.SIEGE_ASSAULT_MIN_LEVEL
+
+
 func force_siege_status_text(force_id: String) -> String:
 	var s := get_force_siege(force_id)
 	if s.is_empty():
@@ -1880,6 +2327,10 @@ func force_siege_status_text(force_id: String) -> String:
 	var lvl := clampi(int(s.get("level", 0)), 0, GlobalUnits.SIEGE_MAX_LEVEL)
 	var b := _building_from_key(str(s.get("building", "")))
 	var place := _building_display_name(b) if b is Node2D else "castle"
+	if lvl < GlobalUnits.SIEGE_ASSAULT_MIN_LEVEL:
+		return "Sieging %s — engines %d/%d (assault next season)" % [
+			place, lvl, GlobalUnits.SIEGE_MAX_LEVEL
+		]
 	return "Sieging %s — engines %d/%d" % [place, lvl, GlobalUnits.SIEGE_MAX_LEVEL]
 
 
@@ -2011,7 +2462,7 @@ func _make_siege_complete_event(force_id: String, building: Node) -> void:
 		"actor_id": -1,
 	}
 	var eid := _register_event(event)
-	_deliver_event_to_players(eid, [controller], -1, false)
+	_deliver_event_to_players(eid, [controller], -1)
 
 
 const SIEGE_HAMMER_SCRIPT := preload("res://objects/overworld/othr/siege_hammer/siege_hammer.gd")
@@ -2126,6 +2577,7 @@ const RAZE_SMOKE_INTENSITY_FADED := 0.45
 const RAID_MP_COST := 4
 const FIELD_RAID_MP_COST := 2
 const CAPTURE_MP_COST := 2
+const CARAVAN_ACTION_MP_COST := 1
 const RAZE_MP_COST := 8
 const SETTLEMENT_BATTLE_MP_COST := 1
 const RAID_POP_KEEP := 0.8 ## lose 20%
@@ -2623,6 +3075,10 @@ func request_battle_attack(
 		building = _building_from_key(building_key)
 		if building == null:
 			return
+		# Garrisoned castles cannot be assaulted until engines reach the min level.
+		if building.get("type_") != null and building.type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
+			if not can_assault_castle(attacker_id, building):
+				return
 	elif defender_army_id == "" or not forces.has(defender_army_id):
 		return
 
@@ -2860,6 +3316,7 @@ func apply_battle_result(
 	landing_cell_y: int = 0
 ) -> void:
 	var building: Node = _building_from_key(building_key) if building_key != "" else null
+	_hostility_from_battle(attacker_id, defender_army_id, building)
 	var loot := GlobalUnits.sanitize_caravan_cargo(battle_loot)
 	if loot_force_id == "":
 		loot_force_id = str(battle_event.get("loot_force_id", ""))
@@ -3015,9 +3472,7 @@ func apply_battle_result(
 	var event_id := _register_event(battle_event)
 	var participants: Array = battle_event.get("participant_ids", [])
 	var actor_id := int(battle_event.get("actor_id", -1))
-	# Attacker opens the report after hostage fate is chosen (if any).
-	var pending_hostages := str(battle_event.get("hostage_fate", "none")) == "pending"
-	_deliver_event_to_players(event_id, participants, actor_id, not pending_hostages)
+	_deliver_event_to_players(event_id, participants, actor_id)
 
 	if is_instance_valid(gui_node):
 		gui_node.on_battle_resolved(
@@ -3142,12 +3597,8 @@ func apply_battle_hostage_fate(event_id: String, fate: String, sword_loot: Dicti
 				GlobalUnits.sanitize_weapon_stock(event.get("loot", {})), extra
 			)
 	game_events[event_id] = event
-	if is_instance_valid(gui_node):
-		if gui_node.has_method("refresh_msg_list_if_open"):
-			gui_node.refresh_msg_list_if_open()
-		var actor_id := int(event.get("actor_id", -1))
-		if my_pl_id == actor_id and gui_node.has_method("open_event_report"):
-			gui_node.open_event_report(self, event_id)
+	if is_instance_valid(gui_node) and gui_node.has_method("refresh_msg_list_if_open"):
+		gui_node.refresh_msg_list_if_open()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -3239,8 +3690,8 @@ func apply_offer_join(force_id: String, stack_spec: Dictionary) -> void:
 		gui_node.refresh_army_menu_if_force(force_id)
 
 
-func do_capture_building(force_id: String, building: Node) -> void:
-	request_capture_building.rpc_id(1, force_id, _building_key(building))
+func do_capture_building(force_id: String, building: Node, free_capture: bool = false) -> void:
+	request_capture_building.rpc_id(1, force_id, _building_key(building), free_capture)
 
 
 func do_raid_building(force_id: String, building: Node) -> void:
@@ -3256,12 +3707,13 @@ func do_raze_building(force_id: String, building: Node) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func request_capture_building(force_id: String, building_key: String) -> void:
+func request_capture_building(force_id: String, building_key: String, free_capture: bool = false) -> void:
 	if not multiplayer.is_server():
 		return
 	if not forces.has(force_id):
 		return
-	if not force_has_movement(force_id, CAPTURE_MP_COST):
+	var capture_mp := 0 if free_capture else CAPTURE_MP_COST
+	if capture_mp > 0 and not force_has_movement(force_id, capture_mp):
 		return
 	var building = _building_from_key(building_key)
 	if building == null:
@@ -3271,7 +3723,7 @@ func request_capture_building(force_id: String, building_key: String) -> void:
 	var capturer := get_force_controller(force_id)
 	var previous_owner := int(building.player_owner) if building.get("player_owner") != null else -1
 	var capture_event := _make_building_capture_event(building, previous_owner, capturer)
-	apply_capture_building.rpc(force_id, building_key, capturer, capture_event)
+	apply_capture_building.rpc(force_id, building_key, capturer, capture_event, free_capture)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -3279,14 +3731,18 @@ func apply_capture_building(
 	force_id: String,
 	building_key: String,
 	capturer: int,
-	capture_event: Dictionary = {}
+	capture_event: Dictionary = {},
+	free_capture: bool = false
 ) -> void:
 	var building = _building_from_key(building_key)
 	if building == null:
 		return
-	if not spend_force_movement(force_id, CAPTURE_MP_COST):
+	var capture_mp := 0 if free_capture else CAPTURE_MP_COST
+	if capture_mp > 0 and not spend_force_movement(force_id, capture_mp):
 		return
 	var previous_owner := int(building.player_owner) if building.get("player_owner") != null else -1
+	if capturer >= 0 and previous_owner >= 0 and capturer != previous_owner:
+		ensure_war_from_hostility(capturer, previous_owner)
 	var prov := find_province_for_building(building)
 	# Split grain/horse holding stock by field share before ownership flips.
 	if prov != null and previous_owner >= 0 and capturer >= 0 and previous_owner != capturer:
@@ -3296,6 +3752,8 @@ func apply_capture_building(
 	# Population remembers the lord they lost — will not rise against them later.
 	if is_settlement_building(building) and previous_owner >= 0 and previous_owner != capturer:
 		set_settlement_militia_loyal_to(building, previous_owner)
+	if previous_owner >= 0 and capturer >= 0 and previous_owner != capturer:
+		diplomacy_on_building_lost(previous_owner, capturer, building)
 	if building.has_method("set_flags"):
 		building.set_flags()
 	# Local council folds when its town falls (remaining holdings transfer).
@@ -3394,6 +3852,9 @@ func apply_raid_building(
 		return
 	building.set_meta("last_raid_turn", raid_turn)
 	clear_force_siege(force_id)
+	var owner_id := int(building.player_owner) if building.get("player_owner") != null else -1
+	if raider >= 0 and owner_id >= 0 and raider != owner_id:
+		ensure_war_from_hostility(raider, owner_id)
 	if players.has(raider):
 		players[raider].game_data["marks"] = int(players[raider].game_data.get("marks", 0)) + loot
 	var type_ = building.get("type_")
@@ -3578,6 +4039,9 @@ func apply_raze_building(
 		return
 	if razer < 0:
 		razer = get_force_controller(force_id)
+	var owner_id := int(building.player_owner) if building.get("player_owner") != null else -1
+	if razer >= 0 and owner_id >= 0 and razer != owner_id:
+		ensure_war_from_hostility(razer, owner_id)
 	if loot < 0:
 		loot = compute_raze_loot(building)
 	if raze_turn < 0:
@@ -3950,7 +4414,13 @@ func _show_building_info_popup(building: Node2D) -> void:
 	var deploy_cb := Callable()
 	if has_own_garrison:
 		deploy_cb = func(): gui_node.open_deploy_menu(self, building, my_pl_id)
-	gui_node.show_building_popup(building, _building_display_name(building), _building_display_body(building), true, deploy_cb)
+	var manage_cb := Callable()
+	if building.has_method("get_garrison_capacity") \
+			and can_manage_building_garrison(building, GlobalUnits.SPOT.FLAT):
+		manage_cb = func(): gui_node.open_garrison_army_menu(self, building, GlobalUnits.SPOT.FLAT)
+	gui_node.show_building_popup(
+		building, _building_display_name(building), _building_display_body(building), true, deploy_cb, manage_cb
+	)
 
 
 # Returns true if the click was consumed (popup shown). If an army is selected,
@@ -4281,16 +4751,24 @@ func _building_display_body(b: Node2D) -> String:
 		if full and b.has_method("construction_summary"):
 			lines.append(str(b.construction_summary()))
 		if b.has_method("is_under_construction") and b.is_under_construction():
+			var upgrading := b.has_method("is_upgrade_project") and bool(b.is_upgrade_project())
 			if full:
-				lines.append("Offline — assign Castle labor in the province menu")
-				lines.append("Armies cannot interact with this worksite")
+				if upgrading:
+					lines.append("Upgrading — old castle still holds (half marks · weaker inside bonus)")
+					lines.append("Assign Castle labor in the province menu")
+				else:
+					lines.append("Offline — assign Castle labor in the province menu")
+					lines.append("Armies cannot interact with this worksite")
 			else:
 				var eta := 99
 				if b.has_method("seasons_to_complete") and b.has_method("dejure_castle_labor"):
 					eta = int(b.seasons_to_complete(b.dejure_castle_labor()))
 				elif b.has_method("seasons_to_complete"):
 					eta = int(b.seasons_to_complete(0))
-				lines.append("Under construction · ~%d seasons" % eta)
+				if upgrading:
+					lines.append("Upgrading · ~%d seasons" % eta)
+				else:
+					lines.append("Under construction · ~%d seasons" % eta)
 		elif b.has_method("is_built") and not b.is_built():
 			lines.append("Empty plot")
 	else:
@@ -4396,7 +4874,13 @@ func _economy_building_production_line(b: Node2D, cat: String) -> String:
 func _building_garrison_text(b: Node) -> String:
 	var out: PackedStringArray = []
 	if b.get("type_") != null and b.type_ == GlobalStuff.BUILDING_TYPE.CASTLE:
-		out.append(_garrison_line("Inside", get_building_garrison(b, GlobalUnits.SPOT.INSIDE), b.get_inside_capacity(), GlobalUnits.CASTLE_INSIDE_BONUS))
+		var works := b.has_method("is_upgrade_project") and bool(b.is_upgrade_project())
+		out.append(_garrison_line(
+			"Inside",
+			get_building_garrison(b, GlobalUnits.SPOT.INSIDE),
+			b.get_inside_capacity(),
+			GlobalUnits.castle_inside_list_bonus(works)
+		))
 		out.append(_garrison_line("Outside", get_building_garrison(b, GlobalUnits.SPOT.OUTSIDE), b.get_outside_capacity(), 1.0))
 	else:
 		out.append(_garrison_line("Garrison", get_building_garrison(b, GlobalUnits.SPOT.FLAT), b.get_garrison_capacity(), 1.0))
@@ -5406,6 +5890,30 @@ func get_building_key(b: Node) -> String:
 
 func garrison_force_id_for(b: Node, spot: int) -> String:
 	return _garrison_force_id(_building_key(b), spot)
+
+
+## Ensure a garrison force exists for this building/spot (empty if new).
+func ensure_garrison_force(b: Node, spot: int) -> String:
+	if b == null:
+		return ""
+	var key := _building_key(b)
+	var fid := _garrison_force_id(key, spot)
+	if not forces.has(fid):
+		forces[fid] = {
+			"units": [],
+			"location": {"kind": "garrison", "building": key, "spot": spot},
+			"cargo": GlobalUnits.empty_caravan_cargo(),
+			"controller": int(b.player_owner) if b.get("player_owner") != null else -1,
+		}
+	return fid
+
+
+## True if local player commands this building garrison spot (incl. empty owned).
+func can_manage_building_garrison(b: Node, spot: int) -> bool:
+	if b == null or not b.has_method("get_garrison_capacity"):
+		return false
+	var fid := ensure_garrison_force(b, spot)
+	return get_force_controller(fid) == my_pl_id
 
 
 func do_transfer(source_id: String, dest_id: String, out_units: Array) -> void:
@@ -7553,70 +8061,73 @@ func apply_redirect_caravan(caravan_id: String, dest_id: String) -> void:
 		gui_node.refresh_caravan_menu_if(self, c)
 
 
-func do_capture_caravan(caravan_id: String) -> void:
-	request_capture_caravan.rpc_id(1, caravan_id, my_pl_id)
+func do_capture_caravan(caravan_id: String, force_id: String) -> void:
+	request_capture_caravan.rpc_id(1, caravan_id, force_id, my_pl_id)
 
 
 @rpc("any_peer", "call_local", "reliable")
-func request_capture_caravan(caravan_id: String, player_id: int) -> void:
+func request_capture_caravan(caravan_id: String, force_id: String, player_id: int) -> void:
 	if not multiplayer.is_server():
 		return
-	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
-	if c == null:
+	if not _can_force_act_on_caravan(force_id, caravan_id, player_id, true):
 		return
-	if int(c.player_owner) == player_id:
+	if not force_has_movement(force_id, CARAVAN_ACTION_MP_COST):
 		return
-	if are_friendly_players(int(c.player_owner), player_id):
-		return
-	# Must have a controllable army adjacent.
-	if not _player_has_army_adjacent_to(player_id, c):
-		return
-	apply_capture_caravan.rpc(caravan_id, player_id)
+	apply_capture_caravan.rpc(caravan_id, force_id, player_id)
 
 
 @rpc("authority", "call_local", "reliable")
-func apply_capture_caravan(caravan_id: String, player_id: int) -> void:
+func apply_capture_caravan(caravan_id: String, force_id: String, player_id: int) -> void:
 	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
 	if c == null:
 		return
+	if not spend_force_movement(force_id, CARAVAN_ACTION_MP_COST):
+		return
+	var previous_owner := int(c.player_owner)
+	if previous_owner >= 0 and previous_owner != player_id \
+			and not are_friendly_players(previous_owner, player_id):
+		ensure_war_from_hostility(player_id, previous_owner)
 	c.player_owner = player_id
 	c.path_fail_streak = 0
 	c.path_fail_notified = false
 	c.set_flags()
 	update_all_army_visuals()
 	if player_id == my_pl_id and is_instance_valid(gui_node):
+		if gui_node.has_method("close_caravan_menus"):
+			gui_node.close_caravan_menus()
 		if gui_node.has_method("open_caravan_menu"):
 			gui_node.open_caravan_menu(self, c)
 		else:
 			gui_node.show_info_popup("Caravan captured")
 
 
-func do_destroy_caravan(caravan_id: String) -> void:
-	request_destroy_caravan.rpc_id(1, caravan_id, my_pl_id)
+func do_destroy_caravan(caravan_id: String, force_id: String) -> void:
+	request_destroy_caravan.rpc_id(1, caravan_id, force_id, my_pl_id)
 
 
 @rpc("any_peer", "call_local", "reliable")
-func request_destroy_caravan(caravan_id: String, player_id: int) -> void:
+func request_destroy_caravan(caravan_id: String, force_id: String, player_id: int) -> void:
 	if not multiplayer.is_server():
 		return
-	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
-	if c == null:
+	# Hostile only — cannot scuttle own/ally caravans this way.
+	if not _can_force_act_on_caravan(force_id, caravan_id, player_id, true):
 		return
-	# Owner cannot scuttle; only an adjacent enemy army may destroy.
-	if int(c.player_owner) == player_id:
+	if not force_has_movement(force_id, CARAVAN_ACTION_MP_COST):
 		return
-	if are_friendly_players(int(c.player_owner), player_id):
-		return
-	if not _player_has_army_adjacent_to(player_id, c):
-		return
-	apply_destroy_caravan.rpc(caravan_id, player_id)
+	apply_destroy_caravan.rpc(caravan_id, force_id, player_id)
 
 
 @rpc("authority", "call_local", "reliable")
-func apply_destroy_caravan(caravan_id: String, player_id: int = -1) -> void:
+func apply_destroy_caravan(caravan_id: String, force_id: String, player_id: int = -1) -> void:
 	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
 	if c == null:
 		return
+	if not spend_force_movement(force_id, CARAVAN_ACTION_MP_COST):
+		return
+	var previous_owner := int(c.player_owner)
+	if previous_owner >= 0 and previous_owner != player_id \
+			and not are_friendly_players(previous_owner, player_id):
+		ensure_war_from_hostility(player_id, previous_owner)
 	c.queue_free()
 	call_deferred("_rebuild_occupancy_after_caravan_removed")
 	if player_id == my_pl_id and is_instance_valid(gui_node):
@@ -7625,10 +8136,106 @@ func apply_destroy_caravan(caravan_id: String, player_id: int = -1) -> void:
 		gui_node.show_info_popup("Caravan destroyed")
 
 
+func do_absorb_caravan_cargo(caravan_id: String, force_id: String, cargo: Dictionary) -> void:
+	request_absorb_caravan_cargo.rpc_id(1, caravan_id, force_id, cargo, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_absorb_caravan_cargo(
+	caravan_id: String, force_id: String, cargo: Dictionary, player_id: int
+) -> void:
+	if not multiplayer.is_server():
+		return
+	# Any caravan (own / ally / enemy) when the acting army is adjacent.
+	if not _can_force_act_on_caravan(force_id, caravan_id, player_id, false):
+		return
+	if not force_has_movement(force_id, CARAVAN_ACTION_MP_COST):
+		return
+	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
+	if c == null:
+		return
+	var taken := GlobalUnits.clamp_caravan_stock(c.cargo, cargo)
+	if not GlobalUnits.caravan_cargo_has_any(taken):
+		return
+	apply_absorb_caravan_cargo.rpc(caravan_id, force_id, taken, player_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_absorb_caravan_cargo(
+	caravan_id: String, force_id: String, cargo: Dictionary, player_id: int
+) -> void:
+	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
+	if c == null or not forces.has(force_id):
+		return
+	var taken := GlobalUnits.clamp_caravan_stock(c.cargo, cargo)
+	if not GlobalUnits.caravan_cargo_has_any(taken):
+		return
+	if not spend_force_movement(force_id, CARAVAN_ACTION_MP_COST):
+		return
+	var previous_owner := int(c.player_owner)
+	if previous_owner >= 0 and previous_owner != player_id \
+			and not are_friendly_players(previous_owner, player_id):
+		ensure_war_from_hostility(player_id, previous_owner)
+	var left := GlobalUnits.sanitize_caravan_cargo(c.cargo)
+	GlobalUnits.subtract_caravan_stock(left, taken)
+	c.cargo = left
+	add_force_cargo(force_id, taken)
+	var emptied := not GlobalUnits.caravan_cargo_has_any(left)
+	if emptied:
+		c.queue_free()
+		call_deferred("_rebuild_occupancy_after_caravan_removed")
+	else:
+		update_all_army_visuals()
+	if player_id == my_pl_id and is_instance_valid(gui_node):
+		if gui_node.has_method("close_caravan_menus"):
+			gui_node.close_caravan_menus()
+		var summary := GlobalUnits.caravan_cargo_summary(taken)
+		if emptied:
+			gui_node.show_info_popup("Absorbed into army stock: %s\nCaravan dismissed." % summary)
+		else:
+			gui_node.show_info_popup("Absorbed into army stock: %s" % summary)
+		if gui_node.has_method("refresh_army_menu_if_force"):
+			gui_node.refresh_army_menu_if_force(force_id)
+
+
 func _rebuild_occupancy_after_caravan_removed() -> void:
 	if pathfinding != null:
 		pathfinding.rebuild_occupancy()
 	update_all_army_visuals()
+
+
+func _force_army_adjacent_to(force_id: String, target: Node2D) -> bool:
+	if pathfinding == null or target == null or force_id == "":
+		return false
+	var army = get_force_army(force_id)
+	if army == null:
+		return false
+	return pathfinding.are_armies_adjacent(army, target)
+
+
+## `hostile_only`: require non-friendly owner (capture / destroy). Absorb allows any owner.
+func _can_force_act_on_caravan(
+	force_id: String, caravan_id: String, player_id: int, hostile_only: bool
+) -> bool:
+	if not forces.has(force_id):
+		return false
+	if get_force_controller(force_id) != player_id:
+		return false
+	var army = get_force_army(force_id)
+	if army == null or not army.is_controllable_by(player_id):
+		return false
+	var c = caravans.get_node_or_null(caravan_id) if caravans != null else null
+	if c == null:
+		return false
+	var owner_id := int(c.player_owner)
+	if hostile_only:
+		if owner_id == player_id:
+			return false
+		if are_friendly_players(owner_id, player_id):
+			return false
+	if not _force_army_adjacent_to(force_id, c):
+		return false
+	return true
 
 
 func _player_has_army_adjacent_to(player_id: int, target: Node2D) -> bool:
@@ -7752,6 +8359,16 @@ func request_disband_force(force_id: String) -> void:
 		army_cell = pathfinding.get_free_adjacent_cell(fleet_cell)
 		if army_cell == Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
 			army_cell = fleet_cell
+	elif force_is_garrison(force_id):
+		var loc: Dictionary = forces[force_id].get("location", {})
+		var b := _building_from_key(str(loc.get("building", "")))
+		if b == null:
+			return
+		army_cell = get_free_approach_cell_for(b)
+		if army_cell == Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
+			army_cell = _force_anchor_cell(force_id)
+		if army_cell == Vector2i(0x7FFFFFFF, 0x7FFFFFFF):
+			return
 	else:
 		return
 
@@ -8079,6 +8696,8 @@ func calculate_new_turn_game_data():
 	# Season already bumped; apply agriculture for the season that just ended.
 	tick_all_agriculture()
 	# Councils / AI lords act after plant/harvest so grain labor matches the new season's fields.
+	tick_diplomacy_trespass()
+	tick_diplomacy_ai_inbox()
 	CouncilAI.tick_all(self)
 	LordAI.tick_all(self)
 	#calculate and then display the new data
@@ -8372,9 +8991,50 @@ func remove_local_council_player(pid: int) -> void:
 		return
 	_remove_ally_everywhere(pid)
 	alliances.erase(pid)
+	_purge_diplomacy_for_player(pid)
 	players.erase(pid)
-	if is_instance_valid(gui_node) and gui_node.has_method("refresh_alliances_list"):
-		gui_node.refresh_alliances_list()
+	_refresh_diplo_gui()
+
+
+func _purge_diplomacy_for_player(pid: int) -> void:
+	if opinions.has(pid):
+		opinions.erase(pid)
+	for viewer in opinions.keys():
+		if opinions[viewer] is Dictionary:
+			opinions[viewer].erase(pid)
+	for k in wars.keys().duplicate():
+		var w = wars[k]
+		if w is Dictionary and (int(w.get("a", -1)) == pid or int(w.get("b", -1)) == pid):
+			wars.erase(k)
+	for k in move_permits.keys().duplicate():
+		var parts := str(k).split("_")
+		if parts.size() == 2 and (int(parts[0]) == pid or int(parts[1]) == pid):
+			move_permits.erase(k)
+	for k in diplo_messages.keys().duplicate():
+		var m = diplo_messages[k]
+		if m is Dictionary and (int(m.get("from", -1)) == pid or int(m.get("to", -1)) == pid):
+			diplo_messages.erase(k)
+	for k in diplo_sent_turn.keys().duplicate():
+		var parts2 := str(k).split("_")
+		if parts2.size() == 2 and (int(parts2[0]) == pid or int(parts2[1]) == pid):
+			diplo_sent_turn.erase(k)
+
+
+func _defeat_player(pid: int, _wiped: bool) -> void:
+	if not players.has(pid):
+		return
+	var p = players[pid]
+	if int(p.status) == int(GlobalStuff.PLAYER_STATUS.DEFEATED):
+		return
+	p.status = GlobalStuff.PLAYER_STATUS.DEFEATED
+	p.ended_turn = true
+	# Drop alliances / wars / permits involving the defeated lord.
+	if alliances.has(pid):
+		var allies: Array = alliances[pid].duplicate()
+		for aid in allies:
+			_remove_ally(int(aid), pid)
+			_remove_ally(pid, int(aid))
+	_purge_diplomacy_for_player(pid)
 
 
 func _remove_ally_everywhere(pid: int) -> void:
@@ -8580,7 +9240,7 @@ func _make_civilian_food_event(player_id: int, entries: Array) -> void:
 		"actor_id": -1,
 	}
 	var eid := _register_event(event)
-	_deliver_event_to_players(eid, [player_id], -1, false)
+	_deliver_event_to_players(eid, [player_id], -1)
 
 	
 func set_players_turn():
@@ -9056,22 +9716,6 @@ func _has_playing_local_human() -> bool:
 	return false
 
 
-func _defeat_player(pid: int, _wiped: bool) -> void:
-	if not players.has(pid):
-		return
-	var p = players[pid]
-	if int(p.status) == int(GlobalStuff.PLAYER_STATUS.DEFEATED):
-		return
-	p.status = GlobalStuff.PLAYER_STATUS.DEFEATED
-	p.ended_turn = true
-	# Drop alliances involving the defeated lord.
-	if alliances.has(pid):
-		var allies: Array = alliances[pid].duplicate()
-		for aid in allies:
-			_remove_ally(int(aid), pid)
-			_remove_ally(pid, int(aid))
-
-
 func _finish_campaign(outcome: String, winner_pids: Array, subtitle: String) -> void:
 	if game_outcome_done:
 		return
@@ -9186,15 +9830,15 @@ func _used_army_display_names(except_fid: String = "") -> Dictionary:
 	return used
 
 
-## Deterministic mint from force_id so every peer agrees without syncing the string.
+## Deterministic mint from world_seed + force_id so peers agree without syncing the string,
+## while each new match (different world_seed) gets a fresh name set.
 func _assign_force_display_name(fid: String) -> void:
 	if not forces.has(fid):
 		return
 	if str(forces[fid].get("display_name", "")) != "":
 		return
 	var used := _used_army_display_names(fid)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = hash(fid)
+	var rng := make_world_rng(0x4E414D45, hash(fid))  # "NAME"
 	rng.state = used.size()
 	forces[fid]["display_name"] = ArmyNames.mint_unique(used, rng) as String
 
@@ -9382,6 +10026,42 @@ func get_player_production_overview(pid: int) -> Dictionary:
 	}
 
 
+## True for AI lords with ≤ AI_EARLY_HOLDINGS_MAX de jure provinces (secret early boost).
+func player_ai_early_boost_active(pid: int) -> bool:
+	if not players.has(pid):
+		return false
+	if not GlobalStuff.is_ai_lord(players[pid].type):
+		return false
+	if provinces == null:
+		return false
+	var n := 0
+	for prov in provinces.get_children():
+		if prov.has_method("has_dejure") and prov.has_dejure(pid):
+			n += 1
+			if n > GlobalUnits.AI_EARLY_HOLDINGS_MAX:
+				return false
+	return true
+
+
+## Nominal upkeep after secret early-AI discount (face preview stays uncheated).
+func get_player_upkeep_owed(pid: int) -> int:
+	var raw := int(get_player_upkeep_preview(pid).get("total", 0))
+	if raw <= 0:
+		return 0
+	if player_ai_early_boost_active(pid):
+		return int(floor(float(raw) * GlobalUnits.AI_EARLY_UPKEEP_MULT))
+	return raw
+
+
+## Wallet tax after secret early-AI income boost.
+func get_player_wallet_income_paid(pid: int, raw_wallet: int) -> int:
+	if raw_wallet <= 0:
+		return 0
+	if player_ai_early_boost_active(pid):
+		return int(ceili(float(raw_wallet) * GlobalUnits.AI_EARLY_WALLET_INCOME_MULT))
+	return raw_wallet
+
+
 ## Projected upkeep for current troops owned by pid (includes all forces with your men).
 func get_player_upkeep_preview(pid: int) -> Dictionary:
 	var levy_raw := 0.0
@@ -9464,9 +10144,7 @@ func _make_upkeep_event(pid: int, upkeep_kind: String, text: String) -> void:
 		"actor_id": pid,
 	}
 	var eid := _register_event(event)
-	_deliver_event_to_players(eid, [pid], pid, false)
-	if pid == my_pl_id and is_instance_valid(gui_node) and gui_node.has_method("show_info_popup"):
-		gui_node.show_info_popup(text)
+	_deliver_event_to_players(eid, [pid], pid)
 
 
 func _disband_player_sellswords(pid: int) -> int:
@@ -9524,8 +10202,7 @@ func tick_army_upkeep() -> void:
 		if int(players[player_id].status) != GlobalStuff.PLAYER_STATUS.PLAYING:
 			continue
 		_ensure_upkeep_game_data(player_id)
-		var preview := get_player_upkeep_preview(player_id)
-		var owed: int = int(preview["total"])
+		var owed: int = get_player_upkeep_owed(player_id)
 		var marks := int(players[player_id].game_data.get("marks", 0))
 		var strikes := int(players[player_id].game_data.get("upkeep_strikes", 0))
 		var streak := int(players[player_id].game_data.get("upkeep_pay_streak", 0))
@@ -9704,8 +10381,7 @@ func _make_food_event(recipient_ids: Array, food_kind: String, text: String, wor
 		"actor_id": -1,
 	}
 	var eid := _register_event(event)
-	# actor_id -1 so every recipient gets an unread inbox mark (no popup).
-	_deliver_event_to_players(eid, recipient_ids, -1, false)
+	_deliver_event_to_players(eid, recipient_ids, -1)
 
 
 func _attrition_force_stacks(fid: String) -> int:
@@ -10754,6 +11430,423 @@ func admin_spawn_debug_army(province_id: String) -> String:
 	if is_instance_valid(gui_node):
 		update_menus()
 	return ""
+
+
+## Hotseat/admin: snapshot for province Edit tab (dejure stockpiles + buildings + castle).
+func get_admin_province_edit_data(province_id: String) -> Dictionary:
+	var prov := _get_province_by_id(province_id)
+	if prov == null:
+		return {}
+	var dej := int(prov.dejure) if prov.get("dejure") != null else -1
+	var dej_name := "?"
+	if players.has(dej):
+		dej_name = str(players[dej].name_)
+	var materials := {}
+	var weapons := {}
+	var horses := 0
+	var marks := 0
+	var pop_all := 0
+	if dej >= 0 and prov.has_method("get_player_material"):
+		for k in GlobalUnits.MATERIAL_KEYS:
+			materials[k] = int(prov.get_player_material(dej, k))
+		if prov.has_method("get_weapons_for"):
+			weapons = prov.get_weapons_for(dej)
+			horses = int(weapons.get("horses", 0))
+		if players.has(dej):
+			marks = int(players[dej].game_data.get("marks", 0))
+	if prov.resources != null and prov.resources.has("population"):
+		pop_all = int(prov.resources["population"]["has"].get("all", 0))
+	var castle_level := GlobalUnits.CASTLE_TARGET_EMPTY
+	var castle_label := "Empty plot"
+	if prov.defense != null:
+		for c in prov.defense.get_children():
+			if c.get("type_") != null and int(c.type_) == GlobalStuff.BUILDING_TYPE.CASTLE:
+				if c.has_method("standing_level"):
+					castle_level = int(c.standing_level())
+				if c.has_method("construction_summary"):
+					castle_label = str(c.construction_summary())
+				elif c.has_method("get_stage_name"):
+					castle_label = str(c.get_stage_name())
+				break
+	var buildings: Array = []
+	if prov.economy != null:
+		for b in prov.economy.get_children():
+			if b.get("type_") == null or int(b.type_) != GlobalStuff.BUILDING_TYPE.ECONOMY:
+				continue
+			var built = b.has_method("is_built") and b.is_built()
+			var label := str(b.name)
+			if built and b.has_method("get_subtype_name"):
+				var stage_n = b.get_stage_name() if b.has_method("get_stage_name") else "?"
+				label = "%s (%s)" % [b.get_subtype_name(), stage_n]
+			elif b.has_method("get_slot_description"):
+				label = str(b.get_slot_description())
+			var allowed: Array = []
+			if b.has_method("allowed_build_subtypes"):
+				for sub in b.allowed_build_subtypes():
+					allowed.append(int(sub))
+			buildings.append({
+				"key": _building_key(b),
+				"name": label,
+				"node_name": str(b.name),
+				"built": built,
+				"stage": int(b.stage) if b.get("stage") != null else 0,
+				"subtype": int(b.subtype) if b.get("subtype") != null else 0,
+				"owner": int(b.player_owner) if b.get("player_owner") != null else -1,
+				"allowed_subtypes": allowed,
+			})
+	return {
+		"province_id": province_id,
+		"province_name": str(prov.get("p_name")),
+		"dejure": dej,
+		"dejure_name": dej_name,
+		"materials": materials,
+		"weapons": weapons,
+		"horses": horses,
+		"marks": marks,
+		"population": pop_all,
+		"castle_level": castle_level,
+		"castle_label": castle_label,
+		"buildings": buildings,
+	}
+
+
+func admin_adjust_province_stock(province_id: String, materials: Dictionary, weapons: Dictionary, marks_delta: int) -> String:
+	var prov := _get_province_by_id(province_id)
+	if prov == null:
+		return "Province not found: %s" % province_id
+	var dej := int(prov.dejure) if prov.get("dejure") != null else -1
+	if dej < 0 or not players.has(dej):
+		return "No dejure owner"
+	for k in materials:
+		if str(k) in GlobalUnits.MATERIAL_KEYS:
+			prov.add_player_material(dej, str(k), int(materials[k]))
+	var wadd := {}
+	for k in weapons:
+		var key := str(k)
+		var amt := int(weapons[k])
+		if amt == 0:
+			continue
+		if key == "horses":
+			wadd["horses"] = amt
+		elif key in GlobalUnits.WEAPON_STOCK_KEYS:
+			wadd[key] = amt
+	if not wadd.is_empty():
+		prov.add_weapons_for(dej, wadd)
+	if marks_delta != 0:
+		var cur := int(players[dej].game_data.get("marks", 0))
+		players[dej].game_data["marks"] = maxi(0, cur + marks_delta)
+		if dej == my_pl_id and is_instance_valid(gui_node):
+			gui_node.update_money(players[my_pl_id].game_data["marks"])
+	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
+		gui_node.update_economy_menu(self)
+	return ""
+
+
+func admin_adjust_province_population(province_id: String, amount: int) -> String:
+	var prov := _get_province_by_id(province_id)
+	if prov == null:
+		return "Province not found: %s" % province_id
+	if not prov.has_method("admin_add_population"):
+		return "Province cannot adjust population"
+	prov.admin_add_population(amount)
+	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
+		gui_node.update_economy_menu(self)
+	return ""
+
+
+func admin_set_province_castle(province_id: String, level: int) -> String:
+	var prov := _get_province_by_id(province_id)
+	if prov == null:
+		return "Province not found: %s" % province_id
+	if prov.defense == null:
+		return "No defense plot"
+	var castle: Node = null
+	for c in prov.defense.get_children():
+		if c.get("type_") != null and int(c.type_) == GlobalStuff.BUILDING_TYPE.CASTLE:
+			castle = c
+			break
+	if castle == null:
+		return "No castle node"
+	if not castle.has_method("admin_set_level"):
+		return "Castle cannot admin-set level"
+	castle.admin_set_level(level)
+	var dej := int(prov.dejure) if prov.get("dejure") != null else -1
+	_refresh_province_labor(prov, dej)
+	if is_instance_valid(gui_node):
+		if gui_node.has_method("update_economy_menu"):
+			gui_node.update_economy_menu(self)
+		update_menus()
+	return ""
+
+
+func admin_build_economy_free(province_id: String, building_key: String, subtype: int) -> String:
+	var prov := _get_province_by_id(province_id)
+	if prov == null:
+		return "Province not found: %s" % province_id
+	var dej := int(prov.dejure) if prov.get("dejure") != null else -1
+	if dej < 0:
+		return "No dejure owner"
+	var building := _building_from_key(building_key)
+	if building == null or not building.has_method("apply_build"):
+		return "Building not found"
+	if find_province_for_building(building) != prov:
+		return "Building not in province"
+	if not building.has_method("can_build") or not building.can_build(subtype):
+		return "Cannot build that subtype here"
+	building.apply_build(subtype, dej)
+	_refresh_province_labor(prov, dej)
+	if prov.has_method("_update_material_will"):
+		prov._update_material_will()
+	if is_instance_valid(gui_node):
+		if gui_node.has_method("update_economy_menu"):
+			gui_node.update_economy_menu(self)
+		update_menus()
+	return ""
+
+
+func admin_set_economy_stage_free(province_id: String, building_key: String, stage: int) -> String:
+	var prov := _get_province_by_id(province_id)
+	if prov == null:
+		return "Province not found: %s" % province_id
+	var building := _building_from_key(building_key)
+	if building == null:
+		return "Building not found"
+	if find_province_for_building(building) != prov:
+		return "Building not in province"
+	if not building.has_method("admin_set_stage") or not building.admin_set_stage(stage):
+		return "Cannot set stage (build first)"
+	var owner_id := int(building.player_owner) if building.get("player_owner") != null else -1
+	_refresh_province_labor(prov, owner_id)
+	if prov.has_method("_update_material_will"):
+		prov._update_material_will()
+	if is_instance_valid(gui_node):
+		if gui_node.has_method("update_economy_menu"):
+			gui_node.update_economy_menu(self)
+		update_menus()
+	return ""
+
+
+func admin_raze_economy_free(province_id: String, building_key: String) -> String:
+	var prov := _get_province_by_id(province_id)
+	if prov == null:
+		return "Province not found: %s" % province_id
+	var building := _building_from_key(building_key)
+	if building == null or not building.has_method("apply_demolish"):
+		return "Building not found"
+	if find_province_for_building(building) != prov:
+		return "Building not in province"
+	if not building.has_method("is_built") or not building.is_built():
+		return "Nothing to raze"
+	var owner_id := int(building.player_owner) if building.get("player_owner") != null else -1
+	building.apply_demolish()
+	_refresh_province_labor(prov, owner_id)
+	if prov.has_method("_update_material_will"):
+		prov._update_material_will()
+	if is_instance_valid(gui_node):
+		if gui_node.has_method("update_economy_menu"):
+			gui_node.update_economy_menu(self)
+		update_menus()
+	return ""
+
+
+## Hotseat/admin: instant defense-complete for AI conquest gate on this province.
+## Concentric + max econ + full defense-mix garrisons + grain/rations + conquest arms.
+func admin_make_defense_complete(province_id: String) -> String:
+	var prov := _get_province_by_id(province_id)
+	if prov == null:
+		return "Province not found: %s" % province_id
+	var pid := int(prov.dejure) if prov.get("dejure") != null else -1
+	if pid < 0 or not players.has(pid):
+		return "No dejure owner"
+
+	# 1) Concentric castle, owned by dejure.
+	var castle = prov.get_castle_plot() if prov.has_method("get_castle_plot") else null
+	if castle == null:
+		return "No castle plot"
+	if castle.has_method("admin_set_level"):
+		castle.admin_set_level(LordAI.DEFENSE_CASTLE_MAX)
+	castle.player_owner = pid
+	if castle.has_method("set_flags"):
+		castle.set_flags()
+
+	# 2) Build empty econ pads (wood → smith → deposits), claim + upgrade to Big.
+	_admin_max_economy_for_defense(prov, pid)
+
+	# 3) Fill all active defense garrison slots with exact mix (free).
+	var garrison_men := _admin_fill_defense_garrisons(prov, pid)
+
+	# 4) Clear stray non-conquest field armies in this province.
+	var keep_fid := str(LordAI._invasion_force_id(self, pid))
+	LordAI._defense_disband_unparked_field(self, pid, prov, keep_fid)
+
+	# 5) Grain for Quad + garrisons (multi-season buffer) + set Quad rations.
+	_admin_ensure_defense_grain(prov, pid, garrison_men)
+	apply_set_holding_ration(province_id, GlobalUnits.RATION.QUADRUPLE, pid)
+	var avg_h := 100.0
+	if prov.has_method("average_settlement_happiness"):
+		avg_h = float(prov.average_settlement_happiness(pid))
+	var tax := LordAI._defense_pick_stable_tax(GlobalUnits.RATION.QUADRUPLE, avg_h)
+	apply_set_holding_tax(province_id, tax, pid)
+
+	# 6) Conquest mix weapons vs border target, or a large fallback.
+	var need_men := _admin_conquest_kit_men(pid, prov)
+	var want_comp: Array = LordAI._conquest_composition_for_men(need_men)
+	var need_w: Dictionary = GlobalUnits.weapons_needed_for_composition(want_comp)
+	var stock: Dictionary = prov.get_weapons_for(pid) if prov.has_method("get_weapons_for") else {}
+	var add_w: Dictionary = GlobalUnits.empty_weapon_stock()
+	var any_w := false
+	for k in ["bows", "maces", "swords", "pikes"]:
+		var short := maxi(0, int(need_w.get(k, 0)) - int(stock.get(k, 0)))
+		if short > 0:
+			add_w[k] = short
+			any_w = true
+	if any_w:
+		prov.add_weapons_for(pid, add_w)
+	# Marks buffer for any leftover buys / upkeep.
+	var marks_cur := int(players[pid].game_data.get("marks", 0))
+	if marks_cur < 50000:
+		players[pid].game_data["marks"] = 50000
+		if pid == my_pl_id and is_instance_valid(gui_node):
+			gui_node.update_money(players[my_pl_id].game_data["marks"])
+
+	_refresh_province_labor(prov, pid)
+	if prov.has_method("_update_material_will"):
+		prov._update_material_will()
+	if pathfinding != null:
+		pathfinding.rebuild_occupancy()
+	update_all_army_visuals()
+	if is_instance_valid(gui_node):
+		if gui_node.has_method("update_economy_menu"):
+			gui_node.update_economy_menu(self)
+		update_menus()
+
+	var done := LordAI._province_defense_complete(self, prov, pid)
+	return "" if done else "Applied, but defense-complete check still failing (check ownership / strays)"
+
+
+func _admin_max_economy_for_defense(prov: Node, pid: int) -> void:
+	if prov.get("economy") == null:
+		return
+	var has_wood := false
+	var has_smith := false
+	for b in prov.economy.get_children():
+		if not b.has_method("is_built") or not b.is_built():
+			continue
+		if int(b.get("player_owner")) != pid:
+			continue
+		match int(b.get("subtype")):
+			0: has_wood = true
+			5: has_smith = true
+	# Build empties.
+	for b in prov.economy.get_children():
+		if b.has_method("is_built") and b.is_built():
+			continue
+		if not b.has_method("allowed_build_subtypes"):
+			continue
+		var allowed: Array = b.allowed_build_subtypes()
+		if allowed.is_empty():
+			continue
+		var pick := -1
+		var slot_open := int(b.get("slot_kind")) == 0 # OPEN
+		if slot_open:
+			var can_wood := allowed.has(0)
+			var can_smith := allowed.has(5)
+			if can_wood and not has_wood:
+				pick = 0
+				has_wood = true
+			elif can_smith and not has_smith:
+				pick = 5
+				has_smith = true
+			elif can_wood:
+				pick = 0
+			elif can_smith:
+				pick = 5
+			else:
+				pick = int(allowed[0])
+		else:
+			# Deposit: first (only) allowed mine/quarry.
+			pick = int(allowed[0])
+		if pick < 0:
+			continue
+		b.apply_build(pick, pid)
+	# Upgrade / claim all built to Big.
+	for b in prov.economy.get_children():
+		if not b.has_method("is_built") or not b.is_built():
+			continue
+		b.player_owner = pid
+		if b.has_method("admin_set_stage"):
+			b.admin_set_stage(3) # BIG
+		elif b.has_method("apply_upgrade"):
+			while b.has_method("can_upgrade") and b.can_upgrade():
+				b.apply_upgrade()
+		if b.has_method("set_flags"):
+			b.set_flags()
+
+
+func _admin_fill_defense_garrisons(prov: Node, pid: int) -> int:
+	var total_men := 0
+	for slot in LordAI._defense_active_slots_for_pid(prov, pid):
+		var b = slot["b"]
+		var spot := int(slot["spot"])
+		if b == null or not b.has_method("get_garrison_capacity"):
+			continue
+		# Ensure building ownership for flags / friendliness.
+		if b.get("player_owner") != null:
+			b.player_owner = pid
+		var cap := int(b.get_garrison_capacity(spot))
+		if cap <= 0:
+			continue
+		var mix: Dictionary = LordAI._defense_mix_counts(cap)
+		var units: Array = []
+		for t in [
+			GlobalUnits.UNIT_TYPE.ARCHER,
+			GlobalUnits.UNIT_TYPE.SWORDSMEN,
+			GlobalUnits.UNIT_TYPE.PIKEMEN,
+		]:
+			var n := int(mix.get(t, 0))
+			if n > 0:
+				GlobalUnits.add_stack(
+					units,
+					GlobalUnits.make_stack(t, pid, GlobalUnits.SOURCE.LEVY, n)
+				)
+		var fid := LordAI._ensure_spot_garrison(self, b, spot)
+		if fid == "" or not forces.has(fid):
+			continue
+		forces[fid]["units"] = units
+		forces[fid]["controller"] = pid
+		total_men += GlobalUnits.total_men(units)
+		if b.has_method("set_flags"):
+			b.set_flags()
+	return total_men
+
+
+func _admin_ensure_defense_grain(prov: Node, pid: int, garrison_men: int) -> void:
+	var pop := int(prov.owned_settlement_population(pid)) if prov.has_method("owned_settlement_population") else 0
+	var seed_r := 0
+	if prov.has_method("preview_holding_rations"):
+		seed_r = int(prov.preview_holding_rations(pid).get("seed_reserve", 0))
+	var civilian := GlobalUnits.ration_grain_need(pop, GlobalUnits.RATION.QUADRUPLE)
+	var army := int(ceili(float(maxi(0, garrison_men)) * GlobalUnits.FOOD_GRAIN_PER_MAN_GARRISON))
+	# ~12 seasons of Quad + garrison feed beyond seed reserve.
+	var want := seed_r + (civilian + army) * 12
+	var have := int(prov.get_player_material(pid, "grain")) if prov.has_method("get_player_material") else 0
+	var delta := want - have
+	if delta > 0:
+		prov.add_player_material(pid, "grain", delta)
+
+
+func _admin_conquest_kit_men(pid: int, home_prov: Node) -> int:
+	var holdings := LordAI._provinces_for_lord(self, pid)
+	if holdings.is_empty():
+		holdings = [home_prov]
+	var pick: Dictionary = LordAI._pick_conquest_target(self, pid, holdings)
+	var need_str := 0
+	if not pick.is_empty() and has_method("_get_province_by_id"):
+		var target = _get_province_by_id(str(pick.get("province_id", "")))
+		if target != null:
+			need_str = int(LordAI._invasion_raise_need_strength(self, target, pid, ""))
+	var need_men := LordAI._conquest_men_for_strength(need_str) if need_str > 0 else 200
+	return maxi(need_men + 40, 200) # buffer so raise isn't tight
 
 
 func _admin_pick_spawn_cell(prov: Node) -> Vector2i:

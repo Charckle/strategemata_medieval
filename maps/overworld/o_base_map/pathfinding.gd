@@ -172,12 +172,21 @@ func _cell_blocked_for_stop(mover: Node2D, cell: Vector2i) -> bool:
 	return occupancy[cell] != mover
 
 
-# Walkable terrain layer (skips decorative layers like roads).
-func _get_map_layer() -> TileMapLayer:
+# Terrain layers used for walkability (skips decorative layers like roads).
+func _get_terrain_layers() -> Array[TileMapLayer]:
+	var layers: Array[TileMapLayer] = []
 	for child in tilemap.get_children():
 		if child is TileMapLayer and child.tile_set != null and child.name != "roads":
-			return child as TileMapLayer
-	return null
+			layers.append(child as TileMapLayer)
+	return layers
+
+
+# Coordinate / cell-space reference layer (first terrain layer).
+func _get_map_layer() -> TileMapLayer:
+	var layers := _get_terrain_layers()
+	if layers.is_empty():
+		return null
+	return layers[0]
 
 
 func _get_roads_layer() -> TileMapLayer:
@@ -185,6 +194,32 @@ func _get_roads_layer() -> TileMapLayer:
 	if layer is TileMapLayer:
 		return layer as TileMapLayer
 	return null
+
+
+func _tile_set_has_custom_data(tile_set: TileSet, data_name: String) -> bool:
+	if tile_set == null:
+		return false
+	for i in tile_set.get_custom_data_layers_count():
+		if tile_set.get_custom_data_layer_name(i) == data_name:
+			return true
+	return false
+
+
+## True when some terrain layer marks walkable and none mark unwalkable.
+## Roads are ignored. Layers without a "walkable" custom-data channel are skipped.
+func _is_terrain_walkable(cell: Vector2i) -> bool:
+	var saw_walkable := false
+	for layer in _get_terrain_layers():
+		if not _tile_set_has_custom_data(layer.tile_set, "walkable"):
+			continue
+		var tile_data := layer.get_cell_tile_data(cell)
+		if tile_data == null:
+			continue
+		if bool(tile_data.get_custom_data("walkable")):
+			saw_walkable = true
+		else:
+			return false
+	return saw_walkable
 
 
 func is_road_cell(cell: Vector2i) -> bool:
@@ -197,12 +232,13 @@ func is_road_cell(cell: Vector2i) -> bool:
 
 
 func is_hills_cell(cell: Vector2i) -> bool:
-	if map_layer == null:
-		return false
-	var tile_data := map_layer.get_cell_tile_data(cell)
-	if tile_data == null:
-		return false
-	return bool(tile_data.get_custom_data("hills"))
+	for layer in _get_terrain_layers():
+		if not _tile_set_has_custom_data(layer.tile_set, "hills"):
+			continue
+		var tile_data := layer.get_cell_tile_data(cell)
+		if tile_data != null and bool(tile_data.get_custom_data("hills")):
+			return true
+	return false
 
 
 ## MP cost to enter `cell` (start cell is never charged).
@@ -245,6 +281,7 @@ func _farthest_affordable_index(path_cells: Array[Vector2i], mp: int, mover: Nod
 func _setup_astar_graph() -> void:
 	map_layer = _get_map_layer()
 	roads_layer = _get_roads_layer()
+	var terrain_layers := _get_terrain_layers()
 
 	astar_graph = AStar2D.new()
 	walkable_cells.clear()
@@ -252,17 +289,23 @@ func _setup_astar_graph() -> void:
 	cell_to_point_id.clear()
 	point_id_to_cell.clear()
 
-	# set walkable + sea tiles
-	for cell in map_layer.get_used_cells():
-		var tile_data = map_layer.get_cell_tile_data(cell)
-		if tile_data == null:
-			continue
+	# Union of used cells across terrain layers; any walkable=false blocks the cell.
+	var cells_to_check: Dictionary = {}
+	for layer in terrain_layers:
+		for cell in layer.get_used_cells():
+			cells_to_check[cell] = true
 
-		var is_walkable = tile_data.get_custom_data("walkable")
-		if is_walkable:
+	for cell_variant in cells_to_check.keys():
+		var cell: Vector2i = cell_variant
+		if _is_terrain_walkable(cell):
 			walkable_cells[cell] = true
-		if bool(tile_data.get_custom_data("sea")):
-			sea_cells[cell] = true
+		for layer in terrain_layers:
+			if not _tile_set_has_custom_data(layer.tile_set, "sea"):
+				continue
+			var tile_data := layer.get_cell_tile_data(cell)
+			if tile_data != null and bool(tile_data.get_custom_data("sea")):
+				sea_cells[cell] = true
+				break
 
 	# remove cells covered by objects (they return list of global tile-center positions)
 	blocked_cell_to_object.clear()
@@ -401,6 +444,81 @@ func _best_path_to_cells(from_cell: Vector2i, target_cells: Array[Vector2i], mov
 			best_path = path_cells
 			best_cost = cost
 	return best_path
+
+
+## Cheapest land path using army MP costs (road < off-road < hills).
+## Ignores unit occupancy — for AI conquest / caravan corridor checks that must
+## match the route an army would prefer, not unweighted tile hops.
+func find_strategic_land_path(from_cell: Vector2i, target_cells: Array[Vector2i]) -> Array[Vector2i]:
+	var best_path: Array[Vector2i] = []
+	var best_cost := 0x7FFFFFFF
+	if target_cells.is_empty():
+		return best_path
+	for target_cell in target_cells:
+		var path_cells: Array[Vector2i] = _find_strategic_land_path_cells(from_cell, target_cell)
+		if path_cells.is_empty():
+			continue
+		var cost := strategic_land_mp_cost(path_cells)
+		if best_path.is_empty() or cost < best_cost:
+			best_path = path_cells
+			best_cost = cost
+	return best_path
+
+
+## Sum of land enter-costs along a strategic path (index 0 free).
+func strategic_land_mp_cost(path_cells: Array[Vector2i]) -> int:
+	var total := 0
+	for i in range(1, path_cells.size()):
+		total += enter_cost(path_cells[i], null)
+	return total
+
+
+func _find_strategic_land_path_cells(from_cell: Vector2i, target_cell: Vector2i) -> Array[Vector2i]:
+	if not walkable_cells.has(from_cell) or not walkable_cells.has(target_cell):
+		return []
+	if from_cell == target_cell:
+		return [from_cell]
+	var came_from: Dictionary = {}
+	var cost_so_far: Dictionary = {from_cell: 0}
+	var frontier: Array = [[0, from_cell]]
+	came_from[from_cell] = from_cell
+	var found := false
+	while not frontier.is_empty():
+		var best_i := 0
+		var best_cost: int = frontier[0][0]
+		for i in range(1, frontier.size()):
+			if int(frontier[i][0]) < best_cost:
+				best_cost = int(frontier[i][0])
+				best_i = i
+		var item: Array = frontier.pop_at(best_i)
+		var cost: int = int(item[0])
+		var current: Vector2i = item[1]
+		if cost > int(cost_so_far.get(current, 0x7FFFFFFF)):
+			continue
+		if current == target_cell:
+			found = true
+			break
+		for dir_variant in EDGE_DIRS:
+			var dir: Vector2i = dir_variant
+			var n: Vector2i = current + dir
+			if not walkable_cells.has(n):
+				continue
+			var next_cost: int = cost + enter_cost(n, null)
+			if cost_so_far.has(n) and int(cost_so_far[n]) <= next_cost:
+				continue
+			cost_so_far[n] = next_cost
+			came_from[n] = current
+			frontier.append([next_cost, n])
+	if not found:
+		return []
+	var cell_path: Array[Vector2i] = []
+	var c: Vector2i = target_cell
+	while true:
+		cell_path.push_front(c)
+		if c == from_cell:
+			break
+		c = came_from[c]
+	return cell_path
 
 
 # True when two cells share an edge (cardinal neighbors in iso cell space).
@@ -969,8 +1087,7 @@ func unblock_object(obj: Node) -> void:
 			blocked_cell_to_object.erase(cell)
 		if blocked_cell_to_object.has(cell):
 			continue
-		var tile_data = map_layer.get_cell_tile_data(cell)
-		if tile_data == null or not tile_data.get_custom_data("walkable"):
+		if not _is_terrain_walkable(cell):
 			continue
 		if walkable_cells.has(cell):
 			continue

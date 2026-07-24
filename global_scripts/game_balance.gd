@@ -56,17 +56,17 @@ const TAX_COLLECT_MP := 1
 ## Marks deposited into each settlement coffer per person (ceil).
 const TAX_MARKS_PER_PERSON := {
 	0: 0,
-	1: 1,
-	2: 2,
-	3: 3,
-	4: 4,
+	1: 0.1,
+	2: 0.4,
+	3: 1,
+	4: 2,
 }
 const TAX_HAPPINESS_DELTA := {
 	0: 10.0,
 	1: 5.0,
-	2: -5.0,
-	3: -10.0,
-	4: -18.0,
+	2: -10.0,
+	3: -20.0,
+	4: -40.0,
 }
 const TAX_POP_DELTA := {
 	0: 0.05,
@@ -109,10 +109,11 @@ const SELLSWORD_HIRE_MIN := 20
 const SELLSWORD_FULL_OFFER_DISCOUNT := 0.20
 
 ## Seasonal upkeep (marks per man). Player total is ceiled.
-const UPKEEP_LEVY_PEASANT := 0.5
-const UPKEEP_LEVY_KNIGHT := 2.0
+## Levy peasants: free (0) — they are unpaid levies until armed.
+const UPKEEP_LEVY_PEASANT := 0.0
+const UPKEEP_LEVY_KNIGHT := 1.0
 const UPKEEP_LEVY_OTHER := 1.0
-const UPKEEP_SELLSWORD_KNIGHT := 5.0
+const UPKEEP_SELLSWORD_KNIGHT := 3.0
 const UPKEEP_SELLSWORD_OTHER := 3.0
 ## Flat marks per transport ship per season (unpaid ships not struck, v1).
 const UPKEEP_TRANSPORT_SHIP := 20
@@ -124,6 +125,12 @@ const UPKEEP_DESERT_FRACTION := 0.10
 ## Attacker wage loot: one roll per battle × next-season upkeep of wiped side.
 const WAGE_CAPTURE_MIN := 0.60
 const WAGE_CAPTURE_MAX := 0.80
+
+## Secret early-game AI lord boost (hidden in normal UI; Admin / AI Debug show real).
+## Active while AI lord has ≤ this many de jure holdings (ends at holdings_max+1).
+const AI_EARLY_HOLDINGS_MAX := 2
+const AI_EARLY_UPKEEP_MULT := 0.5
+const AI_EARLY_WALLET_INCOME_MULT := 1.5
 
 ## Levy recruitment: max fraction of season-start province population.
 const LEVY_MAX_FRACTION := 0.80
@@ -190,7 +197,7 @@ const ECONOMY_WORKERS_BY_SUBTYPE := {
 	1: [100, 250, 500],
 	3: [50, 150, 300],
 	4: [50, 150, 300],
-	5: [50, 150, 300],
+	5: [100, 250, 350],
 }
 ## Output per assigned worker per season.
 const ECONOMY_WOOD_PER_WORKER := 1
@@ -201,9 +208,7 @@ const ECONOMY_SILVER_MARKS_PER_WORKER := 2
 # =============================================================================
 # Settlement marks / population
 # =============================================================================
-## Base tax from population; tier % applies only to that settlement's base.
-const SETTLEMENT_MARKS_POP_RATE := 0.10
-## Tier index: 0=Small, 1=Medium, 2=Big, 3=Very Big
+## Tier index: 0=Small, 1=Medium, 2=Big, 3=Very Big (bonus % of tax base).
 const SETTLEMENT_TIER_MARKS_BONUS := [0.0, 0.10, 0.20, 0.30]
 ## Population ceilings for Small / Medium / Big (above last → Very Big).
 const TOWN_TIER_POP_MAX := [300, 600, 900]
@@ -224,7 +229,8 @@ const VILLAGE_OVERFLOW_JITTER := 10
 const CASTLE_COST_WOOD := [500, 1000, 1000, 1000, 1500, 2000]
 const CASTLE_COST_STONE := [0, 0, 1000, 2500, 3200, 4500]
 const CASTLE_WORK := [500, 1000, 2500, 3500, 4500, 6000]
-## Holding-wide marks bonus on Σ settlement base (CASTLE_TYPE 0..5). Mid-build = 0.
+## Holding-wide marks bonus on Σ settlement base (CASTLE_TYPE 0..5).
+## Mid-upgrade uses half the old level; empty-build / dismantle = 0.
 const CASTLE_HOLDING_MARKS_BONUS := [0.10, 0.20, 0.30, 0.50, 0.80, 1.00]
 
 # =============================================================================
@@ -235,18 +241,33 @@ const BLACKSMITH_LABOR := {
 	"bows": 1,
 	"maces": 2,
 	"pikes": 2,
-	"swords": 3,
-	"crossbows": 5,
-	"armour": 7,
+	"swords": 2,
+	"crossbows": 3,
+	"armour": 3,
 }
 const BLACKSMITH_RECIPES := {
 	"bows": {"wood": 10},
 	"pikes": {"wood": 3, "iron": 7},
 	"armour": {"iron": 15},
 	"maces": {"wood": 3, "iron": 3},
-	"swords": {"wood": 10, "iron": 3},
-	"crossbows": {"wood": 5, "iron": 10},
+	"swords": {"wood": 3, "iron": 10},
+	"crossbows": {"wood": 10, "iron": 10},
 }
+
+
+# === Diplomacy ==============================================================
+
+const DIPLO_OPINION_MIN := 0
+const DIPLO_OPINION_MAX := 100
+const DIPLO_OPINION_DEFAULT := 50
+const DIPLO_PRAISE_DELTA := 10
+const DIPLO_INSULT_DELTA := -15
+const DIPLO_TRESPASS_DELTA := -20
+const DIPLO_ALLIANCE_ACCEPT_OPINION := 90 ## AI accepts if opinion strictly greater
+const DIPLO_CONQUEST_EXCLUDE_OPINION := 80 ## AI skips holder provinces if opinion > this
+const DIPLO_PERMIT_TEMP_OPINION := 70
+const DIPLO_PERMIT_PERM_OPINION := 90
+const DIPLO_PERMIT_TEMP_SEASONS := 4
 
 
 ## Grain per person at a ration level (0–5). Built from POP_GRAIN_PER_PERSON.

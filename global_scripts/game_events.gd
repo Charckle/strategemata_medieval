@@ -4,11 +4,24 @@ class_name GameEvents
 ## Shared helpers for the global event log + per-player message inbox.
 ## Events are plain Dictionaries so they survive RPC / JSON.
 
-enum KIND { BATTLE, JOIN, BUILDING_CAPTURE, VIP, UPKEEP, FOOD, SIEGE }
+enum KIND { BATTLE, JOIN, BUILDING_CAPTURE, VIP, UPKEEP, FOOD, SIEGE, DIPLO }
 
 const INBOX_CAP := 30
+## Matches OBaseMap.START_YEAR — used for inbox date prefixes.
+const START_YEAR := 1100
 
 const SEASON_NAMES := ["Winter", "Spring", "Summer", "Autumn"]
+
+
+static func event_year(event: Dictionary) -> int:
+	return START_YEAR + int(event.get("turn", 0)) / 4
+
+
+static func event_season_name(event: Dictionary) -> String:
+	var season := int(event.get("season", 0))
+	if season >= 0 and season < SEASON_NAMES.size():
+		return SEASON_NAMES[season]
+	return str(season)
 
 
 static func kind_name(kind: int) -> String:
@@ -20,55 +33,69 @@ static func kind_name(kind: int) -> String:
 		KIND.UPKEEP: return "Upkeep"
 		KIND.FOOD: return "Food"
 		KIND.SIEGE: return "Siege"
+		KIND.DIPLO: return "Diplomacy"
 	return "Event"
 
 
-static func inbox_label(event: Dictionary, reader_id: int) -> String:
+static func inbox_label(event: Dictionary, reader_id: int, unread: bool = false) -> String:
 	var place := str(event.get("place_name", "Unknown"))
+	var body := ""
 	match int(event.get("kind", -1)):
 		KIND.BATTLE:
-			return "Battle report — %s" % place
+			body = "Battle report — %s" % place
 		KIND.JOIN:
 			var verdict := "accepted" if bool(event.get("accepted", false)) else "refused"
-			return "Join offer — %s" % verdict
+			body = "Join offer — %s" % verdict
 		KIND.BUILDING_CAPTURE:
 			if reader_id == int(event.get("new_owner", -1)):
-				return "Building captured — %s" % place
-			return "Building lost — %s" % place
+				body = "Building captured — %s" % place
+			else:
+				body = "Building lost — %s" % place
 		KIND.VIP:
 			var vk := str(event.get("vip_kind", ""))
 			if vk == "sword":
-				return "VIP executed"
-			if vk == "trade_propose":
-				return "Trade offer received"
-			if vk == "trade_reject":
-				return "Trade rejected"
-			if vk == "trade_accept":
-				return "Trade completed"
-			return "VIP"
+				body = "VIP executed"
+			elif vk == "trade_propose":
+				body = "Trade offer received"
+			elif vk == "trade_reject":
+				body = "Trade rejected"
+			elif vk == "trade_accept":
+				body = "Trade completed"
+			else:
+				body = "VIP"
 		KIND.UPKEEP:
 			match str(event.get("upkeep_kind", "")):
 				"cleared":
-					return "Army pay restored"
+					body = "Army pay restored"
 				"desertion":
-					return "Levy desertion"
+					body = "Levy desertion"
 				"sellswords":
-					return "Sellswords disbanded"
+					body = "Sellswords disbanded"
 				_:
-					return "Army pay warning"
+					body = "Army pay warning"
 		KIND.FOOD:
 			match str(event.get("food_kind", "")):
 				"starving":
-					return "One of your armies is starving"
+					body = "One of your armies is starving"
 				"warning":
-					return "One of your armies is out of food"
+					body = "One of your armies is out of food"
 				"civilian_shrink":
-					return "Province population fell"
+					body = "Province population fell"
 				_:
-					return "Food"
+					body = "Food"
 		KIND.SIEGE:
-			return "Siege engines completed — %s" % place
-	return kind_name(int(event.get("kind", -1)))
+			body = "Siege engines completed — %s" % place
+		KIND.DIPLO:
+			var dk := str(event.get("diplo_kind", ""))
+			body = str(event.get("diplo_label", "Diplomacy"))
+			if dk != "" and body == "Diplomacy":
+				body = dk
+		_:
+			body = kind_name(int(event.get("kind", -1)))
+	var dated := "%d %s — %s" % [event_year(event), event_season_name(event), body]
+	if unread:
+		return "* %s" % dated
+	return dated
 
 
 static func report_title(event: Dictionary, reader_id: int) -> String:
@@ -106,15 +133,14 @@ static func report_title(event: Dictionary, reader_id: int) -> String:
 					return "Food"
 		KIND.SIEGE:
 			return "Siege engines completed"
+		KIND.DIPLO:
+			return str(event.get("diplo_label", "Diplomacy"))
 	return "Status report"
 
 
 static func report_body(event: Dictionary, reader_id: int, player_name_cb: Callable) -> String:
 	var lines: PackedStringArray = []
-	var turn := int(event.get("turn", 0))
-	var season := int(event.get("season", 0))
-	var season_txt = SEASON_NAMES[season] if season >= 0 and season < SEASON_NAMES.size() else str(season)
-	lines.append("%s, turn %d" % [season_txt, turn])
+	lines.append("%d %s" % [event_year(event), event_season_name(event)])
 	var place := str(event.get("place_name", ""))
 	if place != "":
 		lines.append("Location: %s" % place)
@@ -151,34 +177,60 @@ static func report_body(event: Dictionary, reader_id: int, player_name_cb: Calla
 				lines.append(st)
 			else:
 				lines.append("An army has completed all its siege engines.")
+		KIND.DIPLO:
+			var dt := str(event.get("text", ""))
+			if dt != "":
+				lines.append(dt)
+			else:
+				lines.append("Diplomatic update.")
 		_:
 			lines.append("No details available.")
 	return "\n".join(lines)
+
+
+## Reader-facing battle outcome for UI coloring.
+## Returns {} if not a battle; else { "text": String, "won": bool }.
+## Spectator / both-sides: "won" is absolute attacker_won.
+static func battle_outcome(event: Dictionary, reader_id: int) -> Dictionary:
+	if int(event.get("kind", -1)) != KIND.BATTLE:
+		return {}
+	var atk_side: Array = event.get("attacker_side_ids", [])
+	var def_side: Array = event.get("defender_side_ids", [])
+	var on_atk := _side_has(atk_side, reader_id)
+	var on_def := _side_has(def_side, reader_id)
+	var attacker_won := bool(event.get("attacker_won", false))
+	var is_siege := bool(event.get("is_siege", false))
+	var def_label := "garrison" if is_siege else "army"
+	if on_atk and not on_def:
+		if attacker_won:
+			return {"text": "Victory!", "won": true}
+		return {"text": "Defeat — your army was destroyed.", "won": false}
+	if on_def and not on_atk:
+		if attacker_won:
+			return {"text": "Defeat — your %s was overwhelmed." % def_label, "won": false}
+		return {"text": "Victory — your %s held the field." % def_label, "won": true}
+	return {
+		"text": "Attacker victory." if attacker_won else "Defender victory.",
+		"won": attacker_won,
+	}
+
+
+static func _side_has(side_ids: Array, reader_id: int) -> bool:
+	for pid in side_ids:
+		if int(pid) == reader_id:
+			return true
+	return false
 
 
 static func _battle_body(event: Dictionary, reader_id: int, player_name_cb: Callable) -> PackedStringArray:
 	var lines: PackedStringArray = []
 	var atk_side: Array = event.get("attacker_side_ids", [])
 	var def_side: Array = event.get("defender_side_ids", [])
-	var on_atk := atk_side.has(reader_id)
-	var on_def := def_side.has(reader_id)
+	var on_atk := _side_has(atk_side, reader_id)
+	var on_def := _side_has(def_side, reader_id)
 	var attacker_won := bool(event.get("attacker_won", false))
-	var is_siege := bool(event.get("is_siege", false))
-	var def_label := "garrison" if is_siege else "army"
 
-	if on_atk and not on_def:
-		if attacker_won:
-			lines.append("Victory!")
-		else:
-			lines.append("Defeat — your army was destroyed.")
-	elif on_def and not on_atk:
-		if attacker_won:
-			lines.append("Defeat — your %s was overwhelmed." % def_label)
-		else:
-			lines.append("Victory — your %s held the field." % def_label)
-	else:
-		# Spectator edge case / both sides (shouldn't happen often).
-		lines.append("Attacker victory." if attacker_won else "Defender victory.")
+	# Outcome line is rendered separately (colored) in the event report UI.
 
 	var atk_dead := int(event.get("attacker_dead", 0))
 	var atk_wounded := int(event.get("attacker_wounded", 0))
@@ -219,25 +271,39 @@ static func _battle_body(event: Dictionary, reader_id: int, player_name_cb: Call
 
 
 ## Structured before/after roster tables for the event report UI.
-## Returns Array of { "side", "before_men", "after_men", "rows": [{ "label", "before", "after" }] }.
+## Returns Array of {
+##   "side", "side_ids", "won", "before_men", "after_men",
+##   "rows": [{ "label", "before", "after" }]
+## }.
 static func roster_tables(event: Dictionary) -> Array:
 	if not event.has("attacker_units_before") and not event.has("defender_units_before"):
 		return []
+	var attacker_won := bool(event.get("attacker_won", false))
 	var out: Array = []
 	out.append(_roster_table_data(
 		"Attacker",
+		event.get("attacker_side_ids", []),
+		attacker_won,
 		event.get("attacker_units_before", []),
 		event.get("attacker_units_after", [])
 	))
 	out.append(_roster_table_data(
 		"Defender",
+		event.get("defender_side_ids", []),
+		not attacker_won,
 		event.get("defender_units_before", []),
 		event.get("defender_units_after", [])
 	))
 	return out
 
 
-static func _roster_table_data(side: String, before: Array, after: Array) -> Dictionary:
+static func _roster_table_data(
+	side: String,
+	side_ids: Array,
+	won: bool,
+	before: Array,
+	after: Array
+) -> Dictionary:
 	var before_counts := _roster_counts(before)
 	var after_counts := _roster_counts(after)
 	var keys: Array = []
@@ -261,6 +327,8 @@ static func _roster_table_data(side: String, before: Array, after: Array) -> Dic
 		})
 	return {
 		"side": side,
+		"side_ids": side_ids.duplicate(),
+		"won": won,
 		"before_men": GlobalUnits.total_men(before),
 		"after_men": GlobalUnits.total_men(after),
 		"rows": rows,
