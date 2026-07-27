@@ -165,6 +165,7 @@ const WAGE_CAPTURE_MAX := GameBalance.WAGE_CAPTURE_MAX
 const AI_EARLY_HOLDINGS_MAX := GameBalance.AI_EARLY_HOLDINGS_MAX
 const AI_EARLY_UPKEEP_MULT := GameBalance.AI_EARLY_UPKEEP_MULT
 const AI_EARLY_WALLET_INCOME_MULT := GameBalance.AI_EARLY_WALLET_INCOME_MULT
+const AI_CHEATS_DEFAULT := GameBalance.AI_CHEATS_DEFAULT
 
 # Economy knobs live in GameBalance (global_scripts/game_balance.gd) — edit there.
 const FOOD_GRAIN_PER_MAN_MOBILE := GameBalance.FOOD_GRAIN_PER_MAN_MOBILE

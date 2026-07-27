@@ -491,6 +491,7 @@ var _admin_pop_spin: SpinBox = null
 var _admin_castle_opt: OptionButton = null
 var _admin_castle_cur: Label = null
 var _admin_buildings_box: VBoxContainer = null
+var _admin_ai_cheats_cb: CheckButton = null
 
 
 func _ensure_admin_tab() -> void:
@@ -536,9 +537,20 @@ func _ensure_admin_tab() -> void:
 		spawn_btn.text = "Spawn 10k swordsmen + 100k grain"
 		spawn_btn.pressed.connect(_on_admin_spawn_debug_army)
 		spawn_row.add_child(spawn_btn)
+
+		_admin_ai_cheats_cb = CheckButton.new()
+		_admin_ai_cheats_cb.name = "AiCheatsToggle"
+		_admin_ai_cheats_cb.text = "AI cheats (session)"
+		_admin_ai_cheats_cb.tooltip_text = (
+			"Master gate: early upkeep/wallet boost + grain duplicate on force withdraw. Not saved."
+		)
+		_admin_ai_cheats_cb.button_pressed = bool(GlobalStuff.ai_cheats_enabled)
+		_admin_ai_cheats_cb.toggled.connect(_on_admin_ai_cheats_toggled)
+		spawn_row.add_child(_admin_ai_cheats_cb)
 	else:
 		if _admin_prov_opt == null:
 			_admin_prov_opt = _find_admin_province_option(root)
+		_ensure_admin_ai_cheats_toggle(root)
 
 	_ensure_admin_inner_tabs(root)
 
@@ -547,6 +559,55 @@ func _ensure_admin_tab() -> void:
 	settings_menu.size = Vector2(780, 800)
 
 	_ensure_victory_debug_tab()
+	_sync_admin_ai_cheats_toggle()
+
+
+func _ensure_admin_ai_cheats_toggle(root: Node) -> void:
+	if _admin_ai_cheats_cb != null and is_instance_valid(_admin_ai_cheats_cb):
+		return
+	var existing := root.find_child("AiCheatsToggle", true, false)
+	if existing is CheckButton:
+		_admin_ai_cheats_cb = existing
+		if not _admin_ai_cheats_cb.toggled.is_connected(_on_admin_ai_cheats_toggled):
+			_admin_ai_cheats_cb.toggled.connect(_on_admin_ai_cheats_toggled)
+		return
+	# Insert on the spawn/tools row if present.
+	var spawn_row: HBoxContainer = null
+	for child in root.get_children():
+		if child is HBoxContainer:
+			for c in child.get_children():
+				if c is Button and str(c.text).begins_with("Spawn 10k"):
+					spawn_row = child
+					break
+		if spawn_row != null:
+			break
+	_admin_ai_cheats_cb = CheckButton.new()
+	_admin_ai_cheats_cb.name = "AiCheatsToggle"
+	_admin_ai_cheats_cb.text = "AI cheats (session)"
+	_admin_ai_cheats_cb.tooltip_text = (
+		"Master gate: early upkeep/wallet boost + grain duplicate on force withdraw. Not saved."
+	)
+	_admin_ai_cheats_cb.toggled.connect(_on_admin_ai_cheats_toggled)
+	if spawn_row != null:
+		spawn_row.add_child(_admin_ai_cheats_cb)
+	else:
+		root.add_child(_admin_ai_cheats_cb)
+
+
+func _sync_admin_ai_cheats_toggle() -> void:
+	if _admin_ai_cheats_cb == null or not is_instance_valid(_admin_ai_cheats_cb):
+		return
+	_admin_ai_cheats_cb.set_pressed_no_signal(bool(GlobalStuff.ai_cheats_enabled))
+
+
+func _on_admin_ai_cheats_toggled(pressed: bool) -> void:
+	GlobalStuff.ai_cheats_enabled = pressed
+	refresh_ai_debug_tab_if_open()
+
+
+func refresh_ai_debug_tab_if_open() -> void:
+	if war_menu != null and war_menu.visible:
+		refresh_ai_debug_tab()
 
 
 func _find_admin_province_option(root: Node) -> OptionButton:

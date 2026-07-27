@@ -8,6 +8,9 @@ enum PLAYER_TYPE { HUMAN_LOCAL, AI, LOCAL_COUNCIL }
 ## Map-authored unowned province; resolved to a LOCAL_COUNCIL at map start.
 const UNOWNED_PLAYER := -1
 
+## Session-only master switch for secret AI lord cheats (not saved). Admin can toggle.
+var ai_cheats_enabled: bool = GameBalance.AI_CHEATS_DEFAULT
+
 
 func is_local_council(type_) -> bool:
 	return int(type_) == int(PLAYER_TYPE.LOCAL_COUNCIL)

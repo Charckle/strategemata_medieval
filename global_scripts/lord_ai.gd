@@ -25,7 +25,9 @@ class_name LordAI
 ##     cascade neighbor levies; recall conquest army if still short. Hold 4 seasons then disband.
 ##     Lost province → reconquest target. Defense forces protected from peacetime disband.
 ##   "offense" — legacy Pass 1/2a (dormant unless doctrine forced); prefer conquest.
-##   Early boost (≤2 dejure): half army upkeep + 1.5× wallet tax; Admin/AI Debug only.
+##   Early boost (≤2 dejure, master gate ON): half army upkeep + 1.5× wallet tax;
+##     grain→force withdraw duplicates grain (army gets it, province keeps it).
+##     Admin / AI Debug only; GlobalStuff.ai_cheats_enabled (session).
 
 const THREAT_STRAIGHT_FILTER := 20
 const WAR_STRENGTH_MARGIN := 1.3
@@ -7159,15 +7161,21 @@ static func debug_status(base_map: Node, pid: int) -> Dictionary:
 		base_map.has_method("player_ai_early_boost_active")
 		and bool(base_map.player_ai_early_boost_active(pid))
 	)
+	var cheats_on := bool(GlobalStuff.ai_cheats_enabled)
 	if early and up_face != up_owed:
 		lines.append(
-			"marks=%d  upkeep=%d (cheat real: %d)  early_boost=on"
-			% [marks_now, up_face, up_owed]
+			"marks=%d  upkeep=%d (cheat real: %d)  early_boost=on  ai_cheats=%s"
+			% [marks_now, up_face, up_owed, "on" if cheats_on else "off"]
 		)
 	else:
 		lines.append(
-			"marks=%d  upkeep=%d%s"
-			% [marks_now, up_face, "  early_boost=on" if early else ""]
+			"marks=%d  upkeep=%d%s  ai_cheats=%s"
+			% [
+				marks_now,
+				up_face,
+				"  early_boost=on" if early else "",
+				"on" if cheats_on else "off",
+			]
 		)
 
 	if true:

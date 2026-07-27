@@ -7898,7 +7898,12 @@ func apply_force_withdraw_cargo(force_id: String, cargo: Dictionary, player_id: 
 	var want := GlobalUnits.sanitize_caravan_cargo(cargo)
 	if not prov.can_afford_caravan_cargo(player_id, want):
 		return
-	prov.subtract_caravan_cargo(player_id, want)
+	# AI cheat: duplicate grain onto the force — province keeps its grain.
+	var debit := want.duplicate()
+	if player_ai_grain_duplicate_active(player_id) and int(want.get("grain", 0)) > 0:
+		debit["grain"] = 0
+	if GlobalUnits.caravan_cargo_has_any(debit):
+		prov.subtract_caravan_cargo(player_id, debit)
 	add_force_cargo(force_id, want)
 	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
 		gui_node.update_economy_menu(self)
@@ -10026,8 +10031,15 @@ func get_player_production_overview(pid: int) -> Dictionary:
 	}
 
 
+## True when the session master gate for secret AI cheats is on.
+func ai_cheats_active() -> bool:
+	return bool(GlobalStuff.ai_cheats_enabled)
+
+
 ## True for AI lords with ≤ AI_EARLY_HOLDINGS_MAX de jure provinces (secret early boost).
 func player_ai_early_boost_active(pid: int) -> bool:
+	if not ai_cheats_active():
+		return false
 	if not players.has(pid):
 		return false
 	if not GlobalStuff.is_ai_lord(players[pid].type):
@@ -10041,6 +10053,15 @@ func player_ai_early_boost_active(pid: int) -> bool:
 			if n > GlobalUnits.AI_EARLY_HOLDINGS_MAX:
 				return false
 	return true
+
+
+## AI lord grain→force withdraw: army gets grain, province keeps it (duplicate).
+func player_ai_grain_duplicate_active(pid: int) -> bool:
+	if not ai_cheats_active():
+		return false
+	if not players.has(pid):
+		return false
+	return GlobalStuff.is_ai_lord(players[pid].type)
 
 
 ## Nominal upkeep after secret early-AI discount (face preview stays uncheated).

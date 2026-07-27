@@ -34,6 +34,16 @@ const OUTLINE := Color8(18, 14, 10, 255)
 const CACHE_MAX := 64
 const MAX_FIELDS := 4
 
+## Compact shareable shield codes (base62). Packed v1 layout — do not reorder.
+const CODE_VERSION := 1
+const CODE_ALPHABET := "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+## Stable index order for encode/decode (3 bits each). Changing this breaks old codes.
+const CODE_TINCTURES := [
+	"or", "argent", "gules", "azure", "vert", "sable", "purpure", "council_gray",
+]
+const CODE_FIELD_BITS := 12
+const CODE_MAX_BYTES := 7  # 1 header + ceil(12*4/8)
+
 var _tex_cache: Dictionary = {}  # key -> ImageTexture
 
 
@@ -282,6 +292,182 @@ func cache_key(h: Dictionary, size: int) -> String:
 			int(f["pattern"]), int(f["charge"]), int(f["charge_type"])
 		])
 	return "|".join(parts)
+
+
+## Short shareable code for a shield (base62). Round-trips via from_code.
+func to_code(h: Dictionary) -> String:
+	var n := normalize(h if h != null else {})
+	var bytes := _pack_code_bytes(n)
+	return _bytes_to_base62(bytes)
+
+
+## Decode a shareable code. Empty dict on invalid / unsupported version.
+func from_code(code: String) -> Dictionary:
+	var s := code.strip_edges()
+	if s.is_empty():
+		return {}
+	var bytes := _base62_to_bytes(s, CODE_MAX_BYTES)
+	if bytes.is_empty():
+		return {}
+	return _unpack_code_bytes(bytes)
+
+
+func _tincture_code_index(key: String) -> int:
+	var i := CODE_TINCTURES.find(key)
+	return i if i >= 0 else CODE_TINCTURES.find("azure")
+
+
+func _pack_code_bytes(h: Dictionary) -> PackedByteArray:
+	var division := clampi(int(h.get("division", DIVISION.SOLID)), 0, 2)
+	var fields: Array = h.get("fields", [])
+	var n := field_count(division)
+	var bit_len := 8 + CODE_FIELD_BITS * n
+	var byte_len := int(ceili(float(bit_len) / 8.0))
+	var values: Array[int] = []
+	var widths: Array[int] = []
+	# Header: version (4) | reserved (2) | division (2)
+	values.append(CODE_VERSION)
+	widths.append(4)
+	values.append(0)
+	widths.append(2)
+	values.append(division)
+	widths.append(2)
+	for i in n:
+		var f: Dictionary = fields[i] if i < fields.size() and fields[i] is Dictionary else default_field()
+		values.append(_tincture_code_index(str(f.get("base", "azure"))))
+		widths.append(3)
+		values.append(_tincture_code_index(str(f.get("ink", "or"))))
+		widths.append(3)
+		values.append(clampi(int(f.get("pattern", PATTERN.SOLID)), 0, 4))
+		widths.append(3)
+		values.append(clampi(int(f.get("charge", CHARGE_LAYOUT.NONE)), 0, 2))
+		widths.append(2)
+		values.append(clampi(int(f.get("charge_type", CHARGE_TYPE.STAR)), 0, 1))
+		widths.append(1)
+	var bits := 0
+	var bit_count := 0
+	var out := PackedByteArray()
+	for i in values.size():
+		var width: int = widths[i]
+		bits = (bits << width) | (values[i] & ((1 << width) - 1))
+		bit_count += width
+		while bit_count >= 8:
+			var shift := bit_count - 8
+			out.append((bits >> shift) & 0xFF)
+			if shift > 0:
+				bits &= (1 << shift) - 1
+			else:
+				bits = 0
+			bit_count -= 8
+	if bit_count > 0:
+		bits <<= (8 - bit_count)
+		out.append(bits & 0xFF)
+	while out.size() < byte_len:
+		out.append(0)
+	if out.size() > byte_len:
+		out.resize(byte_len)
+	return out
+
+
+func _unpack_code_bytes(bytes: PackedByteArray) -> Dictionary:
+	if bytes.is_empty():
+		return {}
+	var bit_pos := 0
+	var total_bits := bytes.size() * 8
+
+	var version := _read_code_bits(bytes, bit_pos, 4, total_bits)
+	bit_pos += 4
+	if version != CODE_VERSION:
+		return {}
+	bit_pos += 2  # reserved
+	var division := _read_code_bits(bytes, bit_pos, 2, total_bits)
+	bit_pos += 2
+	if division < 0 or division > 2:
+		return {}
+	var n := field_count(division)
+	var fields: Array = []
+	for _i in n:
+		var bi := _read_code_bits(bytes, bit_pos, 3, total_bits)
+		bit_pos += 3
+		var ii := _read_code_bits(bytes, bit_pos, 3, total_bits)
+		bit_pos += 3
+		var pattern := _read_code_bits(bytes, bit_pos, 3, total_bits)
+		bit_pos += 3
+		var charge := _read_code_bits(bytes, bit_pos, 2, total_bits)
+		bit_pos += 2
+		var charge_type := _read_code_bits(bytes, bit_pos, 1, total_bits)
+		bit_pos += 1
+		if bi < 0 or ii < 0 or pattern < 0 or charge < 0 or charge_type < 0:
+			return {}
+		if bi >= CODE_TINCTURES.size() or ii >= CODE_TINCTURES.size():
+			return {}
+		if pattern > 4 or charge > 2 or charge_type > 1:
+			return {}
+		fields.append({
+			"base": str(CODE_TINCTURES[bi]),
+			"ink": str(CODE_TINCTURES[ii]),
+			"pattern": pattern,
+			"charge": charge,
+			"charge_type": charge_type,
+		})
+	return normalize({
+		"division": division,
+		"fields": fields,
+	})
+
+
+func _read_code_bits(bytes: PackedByteArray, bit_pos: int, width: int, total_bits: int) -> int:
+	if bit_pos + width > total_bits:
+		return -1
+	var value := 0
+	for _i in width:
+		var byte_i := bit_pos / 8
+		var bit_i := 7 - (bit_pos % 8)
+		value = (value << 1) | ((bytes[byte_i] >> bit_i) & 1)
+		bit_pos += 1
+	return value
+
+
+func _bytes_to_base62(bytes: PackedByteArray) -> String:
+	if bytes.is_empty():
+		return "0"
+	# Big-endian integer (fits: max 7 bytes).
+	var n := 0
+	for b in bytes:
+		n = (n << 8) | int(b)
+	if n == 0:
+		return "0"
+	var chars: PackedStringArray = PackedStringArray()
+	while n > 0:
+		chars.append(CODE_ALPHABET[n % 62])
+		n /= 62
+	chars.reverse()
+	return "".join(chars)
+
+
+func _base62_to_bytes(code: String, max_len: int) -> PackedByteArray:
+	var n := 0
+	for i in code.length():
+		var ch := code[i]
+		var idx := CODE_ALPHABET.find(ch)
+		if idx < 0:
+			return PackedByteArray()
+		# Guard overflow (max meaningful value is 2^56-1 for 7 bytes).
+		if n > (9223372036854775807 - idx) / 62:
+			return PackedByteArray()
+		n = n * 62 + idx
+	var out := PackedByteArray()
+	out.resize(max_len)
+	for i in range(max_len - 1, -1, -1):
+		out[i] = n & 0xFF
+		n >>= 8
+	if n != 0:
+		return PackedByteArray()
+	# Trim leading zero bytes but keep at least 1 (header).
+	var start := 0
+	while start < out.size() - 1 and out[start] == 0:
+		start += 1
+	return out.slice(start)
 
 
 func make_texture(h: Dictionary, size: int = 32) -> Texture2D:

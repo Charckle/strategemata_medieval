@@ -127,7 +127,9 @@ const WAGE_CAPTURE_MIN := 0.60
 const WAGE_CAPTURE_MAX := 0.80
 
 ## Secret early-game AI lord boost (hidden in normal UI; Admin / AI Debug show real).
+## Master gate (session): GlobalStuff.ai_cheats_enabled — default ON; Admin toggles.
 ## Active while AI lord has ≤ this many de jure holdings (ends at holdings_max+1).
+const AI_CHEATS_DEFAULT := true
 const AI_EARLY_HOLDINGS_MAX := 2
 const AI_EARLY_UPKEEP_MULT := 0.5
 const AI_EARLY_WALLET_INCOME_MULT := 1.5
