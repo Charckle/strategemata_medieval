@@ -157,7 +157,7 @@ func dummy_player_data():
 		1, GlobalStuff.PLAYER_TYPE.AI, 1, 1, "William", {
 			"marks": start_marks,
 			"people": 0,
-			"ai_doctrine": "defense",
+			"ai_doctrine": "offense",
 		}
 	)
 	players[1].color = GlobalStuff.ORDER_PALETTE[1].duplicate()

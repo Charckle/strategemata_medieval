@@ -24,7 +24,10 @@ class_name LordAI
 ##     levy+castle sortie (keep 50 in castle) at 1.1×; wait 1 season unless siege engines≥1;
 ##     cascade neighbor levies; recall conquest army if still short. Hold 4 seasons then disband.
 ##     Lost province → reconquest target. Defense forces protected from peacetime disband.
-##   "offense" — legacy Pass 1/2a (dormant unless doctrine forced); prefer conquest.
+##   "offense" — same invasion/home-defense/corridor/cheats; leaner build loop:
+##     Wooden + field → first war; new prize → Wooden, older holdings → Motte (≥ Motte OK);
+##     castle garrisons only; any Motte → Medium econ everywhere; then war again.
+##     Labor: grain → castle mats while building → weapons; stone last; sell all stone.
 ##   Early boost (≤2 dejure, master gate ON): half army upkeep + 1.5× wallet tax;
 ##     grain→force withdraw duplicates grain (army gets it, province keeps it).
 ##     Admin / AI Debug only; GlobalStuff.ai_cheats_enabled (session).
@@ -87,6 +90,13 @@ const DEFENSE_WAR_HOLD_SEASONS := 4
 const DEFENSE_WAR_CASTLE_RESERVE := 50
 const AI_DEFENSE_WAR_KEY := "ai_defense_war"
 const AI_DEBUG_BUYS_KEY := "ai_debug_buys"
+## Offense: most recently secured holding (Wooden target); others Motte+.
+const AI_OFFENSE_NEWEST_KEY := "ai_offense_newest_province"
+## CASTLE_TYPE: WOODEN_FORT=0, MOTTE_AND_BAILEY=1.
+const OFFENSE_CASTLE_NEW := 0
+const OFFENSE_CASTLE_SECURE := 1
+## Economy STAGES.MEDIUM — unlocked once any holding is Motte+.
+const OFFENSE_ECON_MAX_STAGE := 2
 
 
 static func tick_all(base_map: Node) -> void:
@@ -109,9 +119,13 @@ static func tick_all(base_map: Node) -> void:
 		var holdings := _provinces_for_lord(base_map, int(pid))
 		# Home defense first (protects field forces from peacetime park/disband).
 		tick_home_defense(base_map, int(pid), holdings)
-		# Defense policy on every dejure holding; invasion when ready.
-		for prov in holdings:
-			tick_province_defense(base_map, prov, int(pid))
+		var doctrine := _doctrine(base_map, int(pid))
+		if doctrine == DOCTRINE_OFFENSE:
+			for prov in holdings:
+				tick_province_offense(base_map, prov, int(pid))
+		else:
+			for prov in holdings:
+				tick_province_defense(base_map, prov, int(pid))
 		tick_invasion(base_map, int(pid), holdings)
 
 
@@ -357,6 +371,22 @@ static func _defense_active_slots_for_pid(prov: Node, pid: int) -> Array:
 	return out
 
 
+## Offense: castle garrisons only.
+static func _offense_castle_slots_for_pid(prov: Node, pid: int) -> Array:
+	var out: Array = []
+	for slot in _defense_slots_for_pid(prov, pid):
+		if str(slot.get("prio", "")) == "castle":
+			out.append(slot)
+	return out
+
+
+## Doctrine-aware garrison slots (offense = castle only).
+static func _ai_active_slots_for_pid(base_map: Node, prov: Node, pid: int) -> Array:
+	if _doctrine(base_map, pid) == DOCTRINE_OFFENSE:
+		return _offense_castle_slots_for_pid(prov, pid)
+	return _defense_active_slots_for_pid(prov, pid)
+
+
 static func _spot_fighting_counts(base_map: Node, building: Node, spot: int, pid: int) -> Dictionary:
 	var out := {
 		GlobalUnits.UNIT_TYPE.ARCHER: 0,
@@ -388,7 +418,7 @@ static func _set_craft_for_defense(
 	var need_swords := 0
 	var need_pikes := 0
 	var need_maces := 0
-	for slot in _defense_active_slots_for_pid(prov, pid):
+	for slot in _ai_active_slots_for_pid(base_map, prov, pid):
 		var prio := str(slot.get("prio", "town"))
 		var cap := int(slot["b"].get_garrison_capacity(int(slot["spot"]))) if slot["b"].has_method("get_garrison_capacity") else 0
 		var mix: Dictionary = _defense_mix_counts(cap, prio)
@@ -436,7 +466,7 @@ static func _defense_fill_all_garrisons(
 		return
 	if _defense_grain_headroom_men(base_map, prov, pid) <= 0:
 		return
-	for slot in _defense_active_slots_for_pid(prov, pid):
+	for slot in _ai_active_slots_for_pid(base_map, prov, pid):
 		if castle_only and str(slot.get("prio", "")) != "castle":
 			continue
 		var drip := -1
@@ -450,11 +480,18 @@ static func _defense_fill_all_garrisons(
 
 
 ## Active slots full (or grain-capped so we cannot fill more).
-static func _defense_active_garrisons_full(base_map: Node, prov: Node, pid: int) -> bool:
+## `castle_only` — only require castle inside/outside full (offense).
+static func _defense_active_garrisons_full(
+	base_map: Node, prov: Node, pid: int, castle_only: bool = false
+) -> bool:
 	if prov == null:
 		return false
 	var headroom := _defense_grain_headroom_men(base_map, prov, pid)
-	for slot in _defense_active_slots_for_pid(prov, pid):
+	var slots: Array = (
+		_offense_castle_slots_for_pid(prov, pid) if castle_only
+		else _ai_active_slots_for_pid(base_map, prov, pid)
+	)
+	for slot in slots:
 		var b = slot["b"]
 		var spot := int(slot["spot"])
 		var cap := int(b.get_garrison_capacity(spot)) if b.has_method("get_garrison_capacity") else 0
@@ -1949,7 +1986,7 @@ static func tick_invasion(base_map: Node, pid: int, holdings: Array) -> void:
 		if str(war.get("halt_reason", "")).begins_with("captured"):
 			war["halt_reason"] = "province secured — garrisoned & disbanded"
 
-	var all_done := _all_holdings_defense_complete(base_map, pid, holdings)
+	var all_done := _all_holdings_ready_for_invasion(base_map, pid, holdings)
 	if not all_done:
 		# Wait / fortify — no field invasion stack while rebuilding.
 		_set_invasion_war_state(base_map, pid, war)
@@ -2550,6 +2587,8 @@ static func _invasion_complete_campaign(
 	war["objective_id"] = ""
 	war["force_id"] = ""
 	war["halt_reason"] = "province secured — garrisoned & disbanded"
+	if conquered != null and _doctrine(base_map, pid) == DOCTRINE_OFFENSE:
+		_offense_set_newest_province(base_map, pid, conquered)
 
 
 ## After conquest: fill required garrisons in the new holding (then staging / other holdings), disband rest.
@@ -2610,7 +2649,7 @@ static func _invasion_fill_garrisons_from_force(
 ) -> void:
 	if base_map == null or prov == null or fid == "" or not base_map.forces.has(fid):
 		return
-	for slot in _defense_active_slots_for_pid(prov, pid):
+	for slot in _ai_active_slots_for_pid(base_map, prov, pid):
 		if not base_map.forces.has(fid):
 			return
 		var b = slot["b"]
@@ -3549,7 +3588,7 @@ static func _invasion_caravan_supply_arms(base_map: Node, pid: int, holdings: Ar
 	var incomplete: Array = []
 	var complete: Array = []
 	for prov in holdings:
-		if _province_defense_complete(base_map, prov, pid):
+		if _province_ready_under_doctrine(base_map, prov, pid, holdings):
 			complete.append(prov)
 		else:
 			incomplete.append(prov)
@@ -3607,7 +3646,7 @@ static func _invasion_caravan_supply_arms(base_map: Node, pid: int, holdings: Ar
 
 static func _defense_weapon_holes(base_map: Node, prov: Node, pid: int) -> Dictionary:
 	var out := {"bows": 0, "swords": 0, "pikes": 0, "maces": 0}
-	for slot in _defense_active_slots_for_pid(prov, pid):
+	for slot in _ai_active_slots_for_pid(base_map, prov, pid):
 		var prio := str(slot.get("prio", "town"))
 		var cap := int(slot["b"].get_garrison_capacity(int(slot["spot"]))) if slot["b"].has_method("get_garrison_capacity") else 0
 		var mix: Dictionary = _defense_mix_counts(cap, prio)
@@ -3631,53 +3670,423 @@ static func _has_caravan_to(base_map: Node, pid: int, dest_id: String) -> bool:
 
 
 # =============================================================================
-# Offense doctrine — Pass 1 province tick (legacy / dormant)
+# Offense doctrine — lean Wooden → war → Motte on old / Wooden on new → Medium econ → war
 # =============================================================================
 
 
-static func tick_province_offense(base_map: Node, prov: Node, pid: int, holding_n: int = -1) -> void:
+## Most recently secured holding id (Wooden target). Empty until first conquest.
+static func _offense_newest_province_id(base_map: Node, pid: int, holdings: Array) -> String:
+	if not base_map.players.has(pid):
+		return ""
+	var newest := str(base_map.players[pid].game_data.get(AI_OFFENSE_NEWEST_KEY, ""))
+	if newest != "":
+		for h in holdings:
+			if h != null and String(h.name) == newest:
+				return newest
+	return ""
+
+
+static func _offense_set_newest_province(base_map: Node, pid: int, prov: Node) -> void:
+	if base_map == null or not base_map.players.has(pid) or prov == null:
+		return
+	base_map.players[pid].game_data[AI_OFFENSE_NEWEST_KEY] = String(prov.name)
+
+
+## Motte+ anywhere among full-control holdings unlocks Medium econ everywhere.
+static func _offense_any_motte_plus(holdings: Array, pid: int) -> bool:
+	for prov in holdings:
+		if prov == null or not _invasion_province_full_control(prov, pid):
+			continue
+		var castle = prov.get_castle_plot() if prov.has_method("get_castle_plot") else null
+		if castle == null or not castle.has_method("standing_level"):
+			continue
+		if int(castle.standing_level()) >= OFFENSE_CASTLE_SECURE:
+			return true
+	return false
+
+
+## Castle target cap: newest (or sole) holding → Wooden; all others → Motte.
+static func _offense_castle_target_cap(
+	base_map: Node, pid: int, prov: Node, holdings: Array
+) -> int:
+	if prov == null:
+		return OFFENSE_CASTLE_NEW
+	var full_n := 0
+	for h in holdings:
+		if h != null and _invasion_province_full_control(h, pid):
+			full_n += 1
+	if full_n <= 1:
+		return OFFENSE_CASTLE_NEW
+	var newest := _offense_newest_province_id(base_map, pid, holdings)
+	if newest != "" and String(prov.name) == newest:
+		return OFFENSE_CASTLE_NEW
+	# No newest tagged yet with 2+ holdings — treat lowest-standing as newest.
+	if newest == "":
+		var weakest: Node = null
+		var weak_lvl := 0x7FFFFFFF
+		for h in holdings:
+			if h == null or not _invasion_province_full_control(h, pid):
+				continue
+			var c = h.get_castle_plot() if h.has_method("get_castle_plot") else null
+			var st := -1
+			if c != null and c.has_method("standing_level"):
+				st = int(c.standing_level())
+			if st < weak_lvl:
+				weak_lvl = st
+				weakest = h
+		if weakest != null and weakest == prov:
+			return OFFENSE_CASTLE_NEW
+	return OFFENSE_CASTLE_SECURE
+
+
+## Next CASTLE_TYPE toward offense cap (−1 if done / no plot).
+static func _offense_next_castle_level(castle: Node, target_cap: int) -> int:
+	if castle == null or target_cap < 0:
+		return -1
+	if castle.has_method("is_under_construction") and castle.is_under_construction():
+		var pt := int(castle.get("project_target")) if castle.get("project_target") != null else -1
+		return pt if pt >= 0 else -1
+	var standing := int(castle.standing_level()) if castle.has_method("standing_level") else GlobalUnits.CASTLE_TARGET_EMPTY
+	if standing < 0:
+		return 0 # WOODEN_FORT
+	if standing >= target_cap:
+		return -1
+	return mini(standing + 1, target_cap)
+
+
+static func _offense_can_start_castle_upgrade(
+	base_map: Node, prov: Node, pid: int, castle: Node, target_level: int
+) -> bool:
+	if castle == null or target_level < 0:
+		return false
+	if castle.has_method("is_under_construction") and castle.is_under_construction():
+		return false
+	var standing := int(castle.standing_level()) if castle.has_method("standing_level") else GlobalUnits.CASTLE_TARGET_EMPTY
+	if standing >= target_level:
+		return false
+	if standing >= 0 and not _defense_active_garrisons_full(base_map, prov, pid, true):
+		return false
+	if _invasion_arming_for_conquest(base_map, pid):
+		return false
+	if not castle.has_method("preview_retarget"):
+		return false
+	var preview: Dictionary = castle.preview_retarget(target_level)
+	if preview.is_empty():
+		return false
+	var pay: Dictionary = preview.get("pay", {})
+	for key in ["wood", "stone"]:
+		var need := int(pay.get(key, 0))
+		if need > 0 and prov.get_player_material(pid, key) < need:
+			return false
+	return true
+
+
+## Conquest-ready for one holding under offense rules.
+static func _province_offense_complete(
+	base_map: Node, prov: Node, pid: int, holdings: Array
+) -> bool:
+	if prov == null or not prov.has_method("has_dejure") or not prov.has_dejure(pid):
+		return false
+	if not _invasion_province_full_control(prov, pid):
+		return false
+	var castle = prov.get_castle_plot() if prov.has_method("get_castle_plot") else null
+	if castle == null or not castle.has_method("standing_level"):
+		return false
+	var standing := int(castle.standing_level())
+	var cap := _offense_castle_target_cap(base_map, pid, prov, holdings)
+	if standing < cap:
+		return false
+	if castle.has_method("is_under_construction") and castle.is_under_construction():
+		var upgrading: bool = (
+			castle.has_method("is_upgrade_project") and bool(castle.is_upgrade_project())
+		)
+		if not upgrading:
+			return false
+	if _defense_has_stray_field(base_map, pid, prov, _invasion_force_id(base_map, pid)):
+		return false
+	if not _defense_active_garrisons_full(base_map, prov, pid, true):
+		return false
+	# After any Motte (or 2+ holdings once Motte exists): Medium wood+smith.
+	if _offense_any_motte_plus(holdings, pid):
+		return _province_econ_ready_for_conquest(prov, pid)
+	return true
+
+
+static func _all_holdings_offense_complete(base_map: Node, pid: int, holdings: Array) -> bool:
+	if holdings.is_empty():
+		return false
+	var any_full := false
+	for prov in holdings:
+		if not _invasion_province_full_control(prov, pid):
+			continue
+		any_full = true
+		if not _province_offense_complete(base_map, prov, pid, holdings):
+			return false
+	return any_full
+
+
+static func _all_holdings_ready_for_invasion(base_map: Node, pid: int, holdings: Array) -> bool:
+	if _doctrine(base_map, pid) == DOCTRINE_OFFENSE:
+		return _all_holdings_offense_complete(base_map, pid, holdings)
+	return _all_holdings_defense_complete(base_map, pid, holdings)
+
+
+static func _province_ready_under_doctrine(
+	base_map: Node, prov: Node, pid: int, holdings: Array
+) -> bool:
+	if _doctrine(base_map, pid) == DOCTRINE_OFFENSE:
+		return _province_offense_complete(base_map, prov, pid, holdings)
+	return _province_defense_complete(base_map, prov, pid)
+
+
+## Sell wood/iron above floors; dump ALL stone (Motte needs no stone).
+static func _try_sell_surplus_mats_offense(
+	base_map: Node, prov: Node, pid: int, castle: Node, next_castle: int, arming_invasion: bool
+) -> void:
+	if base_map == null or prov == null or pid < 0:
+		return
+	if not base_map.has_method("apply_sell_to_merchant"):
+		return
+	var merchant = _merchant_in_province(base_map, prov)
+	if merchant == null or not prov.has_method("get_player_material"):
+		return
+	var stocking := next_castle >= 0 and not arming_invasion
+	var short: Dictionary = {"wood": 0, "stone": 0}
+	if stocking:
+		short = _defense_castle_mat_shortfall(prov, pid, castle, next_castle)
+	var mats := GlobalUnits.empty_material_stock()
+	var have_wood := int(prov.get_player_material(pid, "wood"))
+	var have_iron := int(prov.get_player_material(pid, "iron"))
+	var have_stone := int(prov.get_player_material(pid, "stone"))
+	if int(short.get("wood", 0)) <= 0:
+		mats["wood"] = maxi(0, have_wood - DEFENSE_SELL_KEEP_WOOD)
+	mats["iron"] = maxi(0, have_iron - DEFENSE_SELL_KEEP_IRON)
+	mats["stone"] = maxi(0, have_stone) # sell all
+	var any := false
+	for k in ["wood", "iron", "stone"]:
+		if int(mats.get(k, 0)) > 0:
+			any = true
+			break
+	if not any:
+		return
+	var competition := bool(base_map.merchant_competition_in_province(prov)) \
+			if base_map.has_method("merchant_competition_in_province") else false
+	var payout := 0
+	if base_map.has_method("_merchant_cart_total_sell"):
+		payout = int(base_map._merchant_cart_total_sell(
+			GlobalUnits.empty_weapon_stock(), mats, competition
+		))
+	else:
+		for k in ["wood", "iron", "stone"]:
+			var amt := int(mats.get(k, 0))
+			if amt > 0:
+				payout += GlobalUnits.material_mark_sell_price(k, competition) * amt
+	if payout <= 0:
+		return
+	base_map.apply_sell_to_merchant(
+		String(merchant.name), GlobalUnits.empty_weapon_stock(), mats, pid, payout
+	)
+	var province_id := String(prov.name)
+	for k in ["wood", "iron", "stone"]:
+		var sold := int(mats.get(k, 0))
+		if sold > 0:
+			_record_debug_buy(base_map, pid, province_id, "sell_%s" % k, sold)
+
+
+## Grain → castle project / mats → weapons (smith/wood/iron); stone always last.
+static func _assign_labor_offense(
+	base_map: Node, prov: Node, pid: int, castle: Node, stockpile_castle: bool,
+	prioritize_weapons: bool
+) -> void:
+	var season := int(base_map.season) if base_map.get("season") != null else 0
+	var province_id := String(prov.name)
+	var pop := int(prov.owned_settlement_population(pid)) if prov.has_method("owned_settlement_population") else 0
+	var grain_need := 0
+	if prov.has_method("grain_labor_required"):
+		grain_need = int(prov.grain_labor_required(pid, season))
+	var grain_n := mini(grain_need, pop)
+	var remaining := maxi(0, pop - grain_n)
+
+	var castle_n := 0
+	var building_castle: bool = (
+		castle != null
+		and castle.has_method("is_under_construction")
+		and bool(castle.is_under_construction())
+	)
+	if building_castle and prov.has_method("castle_construction_cap"):
+		var ccap := int(prov.castle_construction_cap(pid))
+		castle_n = mini(ccap, remaining)
+		remaining = maxi(0, remaining - castle_n)
+
+	var wood_cap := int(prov.economy_worker_cap(pid, "wood")) if prov.has_method("economy_worker_cap") else 0
+	var stone_cap := int(prov.economy_worker_cap(pid, "stone")) if prov.has_method("economy_worker_cap") else 0
+	var iron_cap := int(prov.economy_worker_cap(pid, "iron")) if prov.has_method("economy_worker_cap") else 0
+	var silver_cap := int(prov.economy_worker_cap(pid, "silver")) if prov.has_method("economy_worker_cap") else 0
+	var smith_cap := int(prov.economy_worker_cap(pid, "blacksmith")) if prov.has_method("economy_worker_cap") else 0
+
+	var wood_n := 0
+	var stone_n := 0
+	var iron_n := 0
+	var silver_n := 0
+	var smith_n := 0
+
+	if stockpile_castle:
+		wood_n = mini(wood_cap, remaining)
+		remaining = maxi(0, remaining - wood_n)
+		# Motte/Wooden rarely need stone; still allow quarry only after wood.
+		stone_n = mini(stone_cap, remaining)
+		remaining = maxi(0, remaining - stone_n)
+		if prioritize_weapons:
+			smith_n = mini(smith_cap, remaining)
+			remaining = maxi(0, remaining - smith_n)
+			iron_n = mini(iron_cap, remaining)
+			remaining = maxi(0, remaining - iron_n)
+			silver_n = mini(silver_cap, remaining)
+			remaining = maxi(0, remaining - silver_n)
+	elif prioritize_weapons:
+		smith_n = mini(smith_cap, remaining)
+		remaining = maxi(0, remaining - smith_n)
+		wood_n = mini(wood_cap, remaining)
+		remaining = maxi(0, remaining - wood_n)
+		iron_n = mini(iron_cap, remaining)
+		remaining = maxi(0, remaining - iron_n)
+		silver_n = mini(silver_cap, remaining)
+		remaining = maxi(0, remaining - silver_n)
+		stone_n = mini(stone_cap, remaining)
+		remaining = maxi(0, remaining - stone_n)
+	else:
+		wood_n = mini(wood_cap, remaining)
+		remaining = maxi(0, remaining - wood_n)
+		smith_n = mini(smith_cap, remaining)
+		remaining = maxi(0, remaining - smith_n)
+		iron_n = mini(iron_cap, remaining)
+		remaining = maxi(0, remaining - iron_n)
+		silver_n = mini(silver_cap, remaining)
+		remaining = maxi(0, remaining - silver_n)
+		stone_n = mini(stone_cap, remaining)
+		remaining = maxi(0, remaining - stone_n)
+
+	if building_castle and prov.has_method("castle_construction_cap"):
+		var ccap2 := int(prov.castle_construction_cap(pid))
+		var more := mini(maxi(0, ccap2 - castle_n), remaining)
+		castle_n += more
+
+	if base_map.has_method("apply_set_holding_labor_category"):
+		for cat in GlobalUnits.LABOR_CATEGORIES:
+			base_map.apply_set_holding_labor_category(province_id, cat, 0, pid)
+		base_map.apply_set_holding_labor_category(province_id, "grain", grain_n, pid)
+		base_map.apply_set_holding_labor_category(province_id, "castle", castle_n, pid)
+		base_map.apply_set_holding_labor_category(province_id, "wood", wood_n, pid)
+		base_map.apply_set_holding_labor_category(province_id, "stone", stone_n, pid)
+		base_map.apply_set_holding_labor_category(province_id, "iron", iron_n, pid)
+		base_map.apply_set_holding_labor_category(province_id, "silver", silver_n, pid)
+		base_map.apply_set_holding_labor_category(province_id, "blacksmith", smith_n, pid)
+		return
+	if not prov.has_method("set_labor_category"):
+		return
+	for cat in GlobalUnits.LABOR_CATEGORIES:
+		prov.set_labor_category(pid, cat, 0, season)
+	prov.set_labor_category(pid, "grain", grain_n, season)
+	prov.set_labor_category(pid, "castle", castle_n, season)
+	prov.set_labor_category(pid, "wood", wood_n, season)
+	prov.set_labor_category(pid, "iron", iron_n, season)
+	prov.set_labor_category(pid, "stone", stone_n, season)
+	prov.set_labor_category(pid, "silver", silver_n, season)
+	prov.set_labor_category(pid, "blacksmith", smith_n, season)
+
+
+static func tick_province_offense(base_map: Node, prov: Node, pid: int, _holding_n: int = -1) -> void:
 	if base_map == null or prov == null or pid < 0:
 		return
 	if not prov.has_method("has_dejure") or not prov.has_dejure(pid):
 		return
-	if holding_n < 0:
-		holding_n = _provinces_for_lord(base_map, pid).size()
+	if not _invasion_province_full_control(prov, pid):
+		return
 
+	var holdings := _provinces_for_lord(base_map, pid)
 	var province_id := String(prov.name)
-	var arms_ready := _arms_ready(base_map, prov, pid)
-	var threatened := _province_threatened(base_map, prov, pid)
-	var castle_target := _castle_target_level_offense(holding_n)
 	var castle = prov.get_castle_plot() if prov.has_method("get_castle_plot") else null
-	var need_castle_mats := arms_ready and _needs_castle_materials(castle, castle_target)
-
-	var war: Dictionary = _war_state(base_map, pid)
-	var at_war := (
-		str(war.get("target_province_id", "")) != ""
-		or bool(war.get("pause_until_stable", false))
+	var target_cap := _offense_castle_target_cap(base_map, pid, prov, holdings)
+	var next_castle := _offense_next_castle_level(castle, target_cap)
+	var mat_short: Dictionary = _defense_castle_mat_shortfall(prov, pid, castle, next_castle)
+	var need_castle_mats := (
+		next_castle >= 0
+		and (int(mat_short.get("wood", 0)) > 0 or int(mat_short.get("stone", 0)) > 0)
 	)
-	_set_rations_and_tax(base_map, prov, pid, at_war)
+	var standing_now := int(castle.standing_level()) if castle != null and castle.has_method("standing_level") else -1
+	var arming_invasion := _invasion_arming_for_conquest(base_map, pid)
+	var any_motte := _offense_any_motte_plus(holdings, pid)
+	if arming_invasion:
+		need_castle_mats = false
+		mat_short = {"wood": 0, "stone": 0}
+	_clear_debug_buys(base_map, pid, province_id)
+
+	_set_defense_rations_and_tax(base_map, prov, pid)
 	if base_map.has_method("apply_populate_idle_fields"):
 		base_map.apply_populate_idle_fields(province_id, 1, pid)
 
-	CouncilAI._try_build_open(base_map, prov, pid, 0)
-	CouncilAI._try_build_open(base_map, prov, pid, 5)
+	CouncilAI._try_build_open(base_map, prov, pid, 0) # WOODCUTTER
+	CouncilAI._try_build_open(base_map, prov, pid, 5) # BLACKSMITH
 	_try_build_deposit(base_map, prov, pid)
+	_try_sell_surplus_mats_offense(base_map, prov, pid, castle, next_castle, arming_invasion)
+	# Medium econ once any Motte exists (lord-wide unlock).
+	if any_motte:
+		_try_upgrade_economy(base_map, prov, pid, castle, mat_short, OFFENSE_ECON_MAX_STAGE)
 
-	_assign_labor(base_map, prov, pid, castle, arms_ready, need_castle_mats)
+	_assign_labor_offense(
+		base_map, prov, pid, castle, need_castle_mats, arming_invasion or not need_castle_mats
+	)
 
-	var staging_id := str(war.get("staging_province_id", ""))
-	var staging_war := str(war.get("target_province_id", "")) != "" and staging_id == province_id
-	if staging_war:
-		_set_craft_for_war(base_map, prov, pid)
+	_try_buy_defense_castle_mats(base_map, prov, pid, mat_short)
+	if arming_invasion:
+		mat_short = {"wood": 0, "stone": 0}
+		need_castle_mats = false
 	else:
-		_set_craft_for_garrison(base_map, prov, pid, need_castle_mats)
+		mat_short = _defense_castle_mat_shortfall(prov, pid, castle, next_castle)
+		need_castle_mats = (
+			next_castle >= 0
+			and (int(mat_short.get("wood", 0)) > 0 or int(mat_short.get("stone", 0)) > 0)
+		)
+	_set_craft_for_defense(base_map, prov, pid, need_castle_mats)
+	_try_buy_defense_iron(base_map, prov, pid, mat_short)
+	if not need_castle_mats:
+		_try_buy_defense_weapons(base_map, prov, pid)
+	if arming_invasion or (
+		standing_now >= target_cap
+		and _defense_active_garrisons_full(base_map, prov, pid, true)
+	):
+		var stock_comp: Array = _composition_without_peasants(
+			_conquest_composition_for_men(maxi(INVASION_LEVY_DRIP * 5, 100))
+		)
+		_set_craft_for_composition(base_map, prov, pid, stock_comp)
+		_try_buy_iron_for_composition(base_map, prov, pid, stock_comp)
+		_try_buy_war_weapons(base_map, prov, pid, stock_comp)
+	_try_buy_defense_grain(base_map, prov, pid, mat_short)
+	_set_defense_rations_and_tax(base_map, prov, pid)
 
-	if threatened and not _garrison_targets_met(base_map, prov, pid):
-		_reinforce_town_garrison(base_map, prov, pid)
-		arms_ready = _arms_ready(base_map, prov, pid)
+	var keep_fid := _invasion_force_id(base_map, pid)
+	var starting_upgrade := _offense_can_start_castle_upgrade(
+		base_map, prov, pid, castle, next_castle
+	)
 
-	if arms_ready:
-		_try_advance_castle(base_map, prov, pid, castle, castle_target)
+	_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
+	_defense_redistribute_into_castle(base_map, prov, pid)
+	_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
+
+	if starting_upgrade:
+		_try_advance_castle(base_map, prov, pid, castle, next_castle)
+		_defense_fill_all_garrisons(base_map, prov, pid, true)
+		_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
+		_defense_disband_unparked_field(base_map, pid, prov, keep_fid)
+	else:
+		_defense_fill_all_garrisons(base_map, prov, pid, true)
+		if castle != null and castle.has_method("is_under_construction") \
+				and bool(castle.is_under_construction()) \
+				and not (castle.has_method("is_upgrade_project") and bool(castle.is_upgrade_project())):
+			_absorb_other_field_into_garrison(base_map, pid, prov, keep_fid)
+		_defense_disband_unparked_field(base_map, pid, prov, keep_fid)
+
+	_set_defense_rations_and_tax(base_map, prov, pid)
 
 
 static func _provinces_for_lord(base_map: Node, pid: int) -> Array:
@@ -4175,7 +4584,7 @@ static func _try_buy_defense_weapons(base_map: Node, prov: Node, pid: int) -> vo
 	}
 	var castle_need := {"bows": 0, "swords": 0, "pikes": 0, "maces": 0}
 	var other_need := {"bows": 0, "swords": 0, "pikes": 0, "maces": 0}
-	for slot in _defense_active_slots_for_pid(prov, pid):
+	for slot in _ai_active_slots_for_pid(base_map, prov, pid):
 		var prio := str(slot.get("prio", "town"))
 		var cap := int(slot["b"].get_garrison_capacity(int(slot["spot"]))) if slot["b"].has_method("get_garrison_capacity") else 0
 		var mix: Dictionary = _defense_mix_counts(cap, prio)
@@ -4314,14 +4723,20 @@ static func _defense_econ_max_stage(castle: Node) -> int:
 ## Upgrade owned economy buildings toward castle-gated stage cap.
 ## Priority wood → iron → blacksmith → stone → silver; spend freely above
 ## castle-mat reserve + army upkeep (via _marks_spendable_defense).
+## `max_stage_override` ≥ 0 replaces castle-based cap (offense Medium unlock).
 static func _try_upgrade_economy(
-	base_map: Node, prov: Node, pid: int, castle: Node, castle_short: Dictionary
+	base_map: Node,
+	prov: Node,
+	pid: int,
+	castle: Node,
+	castle_short: Dictionary,
+	max_stage_override: int = -1
 ) -> void:
 	if base_map == null or prov == null or prov.get("economy") == null:
 		return
 	if not base_map.has_method("apply_upgrade_economy") or not base_map.has_method("_building_key"):
 		return
-	var max_stage := _defense_econ_max_stage(castle)
+	var max_stage := max_stage_override if max_stage_override >= 0 else _defense_econ_max_stage(castle)
 	if max_stage < 0:
 		return
 	var reserve := _defense_castle_marks_reserve(base_map, prov, castle_short)
@@ -7179,17 +7594,27 @@ static func debug_status(base_map: Node, pid: int) -> Dictionary:
 		)
 
 	if true:
-		# Defense holdings + invasion status (primary AI path).
-		out["phase"] = "defense"
-		out["goal"] = "Fortify holdings, then invade adjacent councils"
+		# Defense / offense holdings + invasion status (primary AI path).
+		var is_offense := doctrine == DOCTRINE_OFFENSE
+		out["phase"] = "offense" if is_offense else "defense"
+		out["goal"] = (
+			"Wooden→war→Motte/Wooden→Medium econ→war"
+			if is_offense
+			else "Fortify holdings, then invade adjacent councils"
+		)
 		var blockers: Array = []
 		var buys_all: Dictionary = {}
 		if typeof(base_map.players[pid].game_data.get(AI_DEBUG_BUYS_KEY, {})) == TYPE_DICTIONARY:
 			buys_all = base_map.players[pid].game_data.get(AI_DEBUG_BUYS_KEY, {})
-		var all_done := _all_holdings_defense_complete(base_map, pid, holdings)
+		var all_done := _all_holdings_ready_for_invasion(base_map, pid, holdings)
 		for prov in holdings:
 			var castle = prov.get_castle_plot() if prov.has_method("get_castle_plot") else null
-			var next_c := _defense_next_castle_level(castle)
+			var next_c := -1
+			if is_offense:
+				var cap := _offense_castle_target_cap(base_map, pid, prov, holdings)
+				next_c = _offense_next_castle_level(castle, cap)
+			else:
+				next_c = _defense_next_castle_level(castle)
 			var standing := -1
 			if castle != null and castle.has_method("standing_level"):
 				standing = int(castle.standing_level())
@@ -7197,8 +7622,12 @@ static func debug_status(base_map: Node, pid: int) -> Dictionary:
 			if castle != null:
 				if castle.has_method("is_under_construction") and castle.is_under_construction():
 					cstat = "building → %d" % next_c
+				elif is_offense and standing >= OFFENSE_CASTLE_SECURE:
+					cstat = "Motte+ (lvl %d)" % standing
 				elif standing >= DEFENSE_CASTLE_MAX:
 					cstat = "Concentric"
+				elif next_c < 0:
+					cstat = "lvl %d (done)" % standing
 				else:
 					cstat = "lvl %d → next %d" % [standing, next_c]
 			var short: Dictionary = _defense_castle_mat_shortfall(prov, pid, castle, next_c)
@@ -7206,7 +7635,7 @@ static func debug_status(base_map: Node, pid: int) -> Dictionary:
 			var castle_room := 0
 			var men_g := 0
 			var peri := _defense_peripheral_unlocked(prov)
-			for slot in _defense_active_slots_for_pid(prov, pid):
+			for slot in _ai_active_slots_for_pid(base_map, prov, pid):
 				var cap := int(slot["b"].get_garrison_capacity(int(slot["spot"]))) if slot["b"].has_method("get_garrison_capacity") else 0
 				var have := GlobalUnits.total_men(base_map.get_building_garrison(slot["b"], int(slot["spot"])))
 				men_g += have
@@ -7230,7 +7659,7 @@ static func debug_status(base_map: Node, pid: int) -> Dictionary:
 				for k in buy_row.keys():
 					if int(buy_row[k]) > 0:
 						buy_bits.append("%s=%d" % [str(k), int(buy_row[k])])
-			var done := _province_defense_complete(base_map, prov, pid)
+			var done := _province_ready_under_doctrine(base_map, prov, pid, holdings)
 			lines.append(
 				"%s — castle=%s need_w/s=%d/%d garrison=%d castle_room=%d room=%d peri=%s done=%s"
 				% [
