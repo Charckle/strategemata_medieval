@@ -257,6 +257,17 @@ const BLACKSMITH_RECIPES := {
 }
 
 
+# === Tourney (joust minigame) ===============================================
+## Host organize cost (into prize pool). Entry: humans pay; AI phantom-pays while cheat on.
+const TOURNEY_HOST_COST_BORDER := 200
+const TOURNEY_HOST_COST_LORDS := 400
+const TOURNEY_HOST_COST_CROWN := 600
+const TOURNEY_ENTRY_BORDER := 100
+const TOURNEY_ENTRY_LORDS := 200
+const TOURNEY_ENTRY_CROWN := 300
+## AI declines if their opinion of the host is below this (or at war).
+const TOURNEY_AI_MIN_OPINION := 50
+
 # === Diplomacy ==============================================================
 
 const DIPLO_OPINION_MIN := 0

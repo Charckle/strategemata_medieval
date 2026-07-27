@@ -4,7 +4,7 @@ class_name GameEvents
 ## Shared helpers for the global event log + per-player message inbox.
 ## Events are plain Dictionaries so they survive RPC / JSON.
 
-enum KIND { BATTLE, JOIN, BUILDING_CAPTURE, VIP, UPKEEP, FOOD, SIEGE, DIPLO }
+enum KIND { BATTLE, JOIN, BUILDING_CAPTURE, VIP, UPKEEP, FOOD, SIEGE, DIPLO, TOURNEY }
 
 const INBOX_CAP := 30
 ## Matches OBaseMap.START_YEAR — used for inbox date prefixes.
@@ -34,6 +34,7 @@ static func kind_name(kind: int) -> String:
 		KIND.FOOD: return "Food"
 		KIND.SIEGE: return "Siege"
 		KIND.DIPLO: return "Diplomacy"
+		KIND.TOURNEY: return "Tourney"
 	return "Event"
 
 
@@ -90,6 +91,8 @@ static func inbox_label(event: Dictionary, reader_id: int, unread: bool = false)
 			body = str(event.get("diplo_label", "Diplomacy"))
 			if dk != "" and body == "Diplomacy":
 				body = dk
+		KIND.TOURNEY:
+			body = str(event.get("tourney_label", "Tourney"))
 		_:
 			body = kind_name(int(event.get("kind", -1)))
 	var dated := "%d %s — %s" % [event_year(event), event_season_name(event), body]
@@ -135,6 +138,8 @@ static func report_title(event: Dictionary, reader_id: int) -> String:
 			return "Siege engines completed"
 		KIND.DIPLO:
 			return str(event.get("diplo_label", "Diplomacy"))
+		KIND.TOURNEY:
+			return str(event.get("tourney_label", "Tourney"))
 	return "Status report"
 
 
@@ -183,6 +188,12 @@ static func report_body(event: Dictionary, reader_id: int, player_name_cb: Calla
 				lines.append(dt)
 			else:
 				lines.append("Diplomatic update.")
+		KIND.TOURNEY:
+			var tt := str(event.get("text", ""))
+			if tt != "":
+				lines.append(tt)
+			else:
+				lines.append("Tourney update.")
 		_:
 			lines.append("No details available.")
 	return "\n".join(lines)

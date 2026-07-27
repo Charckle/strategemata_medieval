@@ -72,6 +72,7 @@ var _ladder_sort_metric: String = "fighting"
 var _diplo_inner_tabs: TabContainer = null
 var _relations_list: VBoxContainer = null
 var _trade_list: VBoxContainer = null
+var _tourney_list: VBoxContainer = null
 var _selected_diplo_pid: int = -1
 var _opinion_spin: SpinBox = null
 
@@ -1895,6 +1896,9 @@ func _bring_to_front(menu: Control) -> void:
 
 
 func _on_end_turn_btn_pressed() -> void:
+	if is_instance_valid(parent_n) and parent_n.has_method("can_end_turn_now") and not parent_n.can_end_turn_now():
+		show_info_popup("Cannot end turn while a tourney is being fought.")
+		return
 	parent_n.player_ended_turn.rpc_id(1, parent_n.my_pl_id)
 
 # Small transient popup shown near the cursor; closes when clicking away.
@@ -5919,6 +5923,21 @@ func _ensure_diplomacy_structure() -> void:
 		_diplo_inner_tabs = diplo_root.get_node("diplo_tabs")
 		_relations_list = _diplo_inner_tabs.get_node_or_null("Relations/Scroll/relations_list")
 		_trade_list = _diplo_inner_tabs.get_node_or_null("Trade/Scroll/trade_list")
+		_tourney_list = _diplo_inner_tabs.get_node_or_null("Tourney/Scroll/tourney_list")
+		if _tourney_list == null:
+			var tourney_root := VBoxContainer.new()
+			tourney_root.name = "Tourney"
+			tourney_root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			var tourney_scroll := ScrollContainer.new()
+			tourney_scroll.name = "Scroll"
+			tourney_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			_tourney_list = VBoxContainer.new()
+			_tourney_list.name = "tourney_list"
+			_tourney_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_tourney_list.add_theme_constant_override("separation", 6)
+			tourney_scroll.add_child(_tourney_list)
+			tourney_root.add_child(tourney_scroll)
+			_diplo_inner_tabs.add_child(tourney_root)
 		return
 	var old_scroll = diplo_root.get_node_or_null("ScrollContainer")
 	if old_scroll != null:
@@ -5954,8 +5973,22 @@ func _ensure_diplomacy_structure() -> void:
 	trade_scroll.add_child(_trade_list)
 	trade_root.add_child(trade_scroll)
 
+	var tourney_root := VBoxContainer.new()
+	tourney_root.name = "Tourney"
+	tourney_root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var tourney_scroll := ScrollContainer.new()
+	tourney_scroll.name = "Scroll"
+	tourney_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tourney_list = VBoxContainer.new()
+	_tourney_list.name = "tourney_list"
+	_tourney_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tourney_list.add_theme_constant_override("separation", 6)
+	tourney_scroll.add_child(_tourney_list)
+	tourney_root.add_child(tourney_scroll)
+
 	_diplo_inner_tabs.add_child(rel_root)
 	_diplo_inner_tabs.add_child(trade_root)
+	_diplo_inner_tabs.add_child(tourney_root)
 	diplo_root.add_child(_diplo_inner_tabs)
 
 
@@ -5963,6 +5996,7 @@ func refresh_diplomacy_ui() -> void:
 	_ensure_diplomacy_structure()
 	refresh_relations_ui()
 	refresh_vip_trade_ui()
+	refresh_tourney_ui()
 
 
 func refresh_alliances_list() -> void:
@@ -6141,6 +6175,395 @@ func _on_set_my_opinion(value: float, other_id: int) -> void:
 	if not is_instance_valid(parent_n) or not parent_n.has_method("do_set_opinion"):
 		return
 	parent_n.do_set_opinion(other_id, int(value))
+
+
+# --- Tourney (War → Diplomacy → Tourney) ------------------------------------
+
+var _tq_type: int = 0
+var _tq_draft_knight: Dictionary = {}
+var _tq_province_idx: int = 0
+var _tq_respond_mode: bool = false
+const _TQ_SHIELD_SIZE := 32
+
+
+func refresh_tourney_ui() -> void:
+	_ensure_diplomacy_structure()
+	if _tourney_list == null:
+		return
+	for child in _tourney_list.get_children():
+		_tourney_list.remove_child(child)
+		child.queue_free()
+	var base = parent_n
+	if not is_instance_valid(base):
+		return
+	var my_id: int = int(base.my_pl_id)
+	var title := Label.new()
+	title.text = "Tourney"
+	title.add_theme_font_size_override("font_size", 15)
+	_tourney_list.add_child(title)
+
+	if Tourney.is_playing(base):
+		var playing := Label.new()
+		playing.text = "A tourney is being fought. The overworld waits."
+		playing.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_tourney_list.add_child(playing)
+		_build_tourney_roster_section(base, my_id)
+		return
+
+	if Tourney.is_inviting(base):
+		var t: Dictionary = base.active_tourney
+		var host_id := int(t.get("host_id", -1))
+		var ttype := int(t.get("type", 0))
+		var info := Label.new()
+		info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		info.text = "%s organized a %s. Prize so far: %d marks. Entry: %d." % [
+			base.player_display_name(host_id),
+			JoustTypes.type_name(ttype),
+			int(t.get("prize_pool", 0)),
+			int(t.get("entry_fee", 0)),
+		]
+		_tourney_list.add_child(info)
+		var my_status := str(t.get("invites", {}).get(str(my_id), ""))
+		if host_id == my_id:
+			var wait := Label.new()
+			wait.text = "Waiting for other lords to answer (unanswered at end of turn = refuse)."
+			wait.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			_tourney_list.add_child(wait)
+		elif my_status == Tourney.INVITE_PENDING:
+			_tq_respond_mode = true
+			_tq_type = ttype
+			var fee_lbl := Label.new()
+			fee_lbl.text = "You are invited. Entry fee: %d marks." % int(t.get("entry_fee", 0))
+			_tourney_list.add_child(fee_lbl)
+			_build_knight_picker(base, my_id, ttype, false)
+			var row := HBoxContainer.new()
+			var acc := Button.new()
+			acc.text = "Accept & enter"
+			acc.pressed.connect(_on_tourney_accept)
+			var rej := Button.new()
+			rej.text = "Refuse"
+			rej.pressed.connect(_on_tourney_refuse)
+			row.add_child(acc)
+			row.add_child(rej)
+			_tourney_list.add_child(row)
+		else:
+			var st := Label.new()
+			st.text = "Your response: %s" % my_status
+			_tourney_list.add_child(st)
+		_build_tourney_roster_section(base, my_id)
+		return
+
+	_tq_respond_mode = false
+	var hint := Label.new()
+	hint.text = "Organize a tourney. Host cost goes into the prize; you enter free. One open tourney at a time."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(360, 0)
+	_tourney_list.add_child(hint)
+
+	var type_row := HBoxContainer.new()
+	type_row.add_theme_constant_override("separation", 6)
+	for i in 3:
+		var btn := Button.new()
+		btn.text = "%s (%d/%d)" % [JoustTypes.type_name(i), Tourney.host_cost(i), Tourney.entry_fee(i)]
+		btn.disabled = _tq_type == i
+		btn.pressed.connect(_on_tourney_pick_type.bind(i))
+		type_row.add_child(btn)
+	_tourney_list.add_child(type_row)
+
+	var desc := Label.new()
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.text = str(JoustTypes.rules_for_type(_tq_type).get("description", ""))
+	_tourney_list.add_child(desc)
+
+	_build_knight_picker(base, my_id, _tq_type, true)
+	var org := Button.new()
+	org.text = "Organize (pay %d marks)" % Tourney.host_cost(_tq_type)
+	org.pressed.connect(_on_tourney_organize)
+	_tourney_list.add_child(org)
+	_build_tourney_roster_section(base, my_id)
+
+
+func _build_tourney_roster_section(base, my_id: int) -> void:
+	_tourney_list.add_child(HSeparator.new())
+	var rl := Label.new()
+	rl.text = "Saved knights"
+	rl.add_theme_font_size_override("font_size", 14)
+	_tourney_list.add_child(rl)
+	var roster := Tourney.get_roster(base, my_id)
+	if roster.is_empty():
+		var empty := Label.new()
+		empty.text = "None yet — winners and chosen knights can be kept here."
+		_tourney_list.add_child(empty)
+		return
+	var my_tex: Texture2D = null
+	if base.players.has(my_id):
+		my_tex = Heraldry.texture_for_player(base.players[my_id], 24)
+	for i in roster.size():
+		var k: Dictionary = roster[i]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		var shield := TextureRect.new()
+		shield.custom_minimum_size = Vector2(24, 24)
+		shield.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		shield.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		if my_tex != null:
+			shield.texture = my_tex
+		row.add_child(shield)
+		var lbl := Label.new()
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl.text = "%s  (STR%d SKL%d)" % [k.get("name", "?"), int(k.get("strength", 0)), int(k.get("skill", 0))]
+		row.add_child(lbl)
+		var use_btn := Button.new()
+		use_btn.text = "Use"
+		use_btn.pressed.connect(_on_tourney_use_roster.bind(i))
+		var del_btn := Button.new()
+		del_btn.text = "Remove"
+		del_btn.pressed.connect(_on_tourney_remove_roster.bind(i))
+		row.add_child(use_btn)
+		row.add_child(del_btn)
+		_tourney_list.add_child(row)
+
+
+func _build_knight_picker(base, my_id: int, ttype: int, _for_host: bool) -> void:
+	var lance_type := int(JoustTypes.rules_for_type(ttype).get("lance_type", 0))
+	var provs := Tourney.owned_province_names(base, my_id)
+	if _tq_draft_knight.is_empty():
+		var pname := str(provs[_tq_province_idx]) if not provs.is_empty() and _tq_province_idx < provs.size() else ""
+		_tq_draft_knight = JoustGenerator.generate_knight(lance_type, "", pname)
+
+	var prov_row := HBoxContainer.new()
+	var prov_lbl := Label.new()
+	prov_lbl.text = "From province:"
+	prov_row.add_child(prov_lbl)
+	if provs.is_empty():
+		var none := Label.new()
+		none.text = "(no owned provinces)"
+		prov_row.add_child(none)
+	else:
+		_tq_province_idx = clampi(_tq_province_idx, 0, provs.size() - 1)
+		var prev := Button.new()
+		prev.text = "<"
+		prev.pressed.connect(func():
+			_tq_province_idx = (_tq_province_idx - 1 + provs.size()) % provs.size()
+			_tq_draft_knight["province_name"] = str(provs[_tq_province_idx])
+			refresh_tourney_ui()
+		)
+		var pl := Label.new()
+		pl.text = str(provs[_tq_province_idx])
+		var next := Button.new()
+		next.text = ">"
+		next.pressed.connect(func():
+			_tq_province_idx = (_tq_province_idx + 1) % provs.size()
+			_tq_draft_knight["province_name"] = str(provs[_tq_province_idx])
+			refresh_tourney_ui()
+		)
+		prov_row.add_child(prev)
+		prov_row.add_child(pl)
+		prov_row.add_child(next)
+	_tourney_list.add_child(prov_row)
+
+	_tourney_list.add_child(_make_knight_stats_card(base, my_id, _tq_draft_knight))
+
+	var gen_row := HBoxContainer.new()
+	var reroll := Button.new()
+	reroll.text = "Reroll knight"
+	reroll.pressed.connect(_on_tourney_reroll.bind(ttype))
+	var rename := Button.new()
+	rename.text = "Random name"
+	rename.pressed.connect(func():
+		var pname := str(_tq_draft_knight.get("province_name", ""))
+		_tq_draft_knight["name"] = JoustGenerator.generate_knight_name(pname)
+		refresh_tourney_ui()
+	)
+	var save_btn := Button.new()
+	save_btn.text = "Save to roster"
+	save_btn.pressed.connect(func():
+		Tourney.stamp_knight_owner(_tq_draft_knight, my_id, false)
+		Tourney.add_knight_to_roster(base, my_id, _tq_draft_knight)
+		show_info_popup("Knight saved.")
+		refresh_tourney_ui()
+	)
+	gen_row.add_child(reroll)
+	gen_row.add_child(rename)
+	gen_row.add_child(save_btn)
+	_tourney_list.add_child(gen_row)
+
+
+func _make_knight_stats_card(base, my_id: int, knight: Dictionary) -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_theme_stylebox_override("panel", _prov_context_card_style())
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 6)
+	panel.add_child(outer)
+
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	var shield := TextureRect.new()
+	shield.custom_minimum_size = Vector2(_TQ_SHIELD_SIZE, _TQ_SHIELD_SIZE)
+	shield.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	shield.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	if base.players.has(my_id):
+		shield.texture = Heraldry.texture_for_player(base.players[my_id], _TQ_SHIELD_SIZE)
+		shield.tooltip_text = str(base.player_display_name(my_id))
+	header.add_child(shield)
+	var name_lbl := Label.new()
+	name_lbl.text = str(knight.get("name", "Knight"))
+	name_lbl.add_theme_font_size_override("font_size", 16)
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(name_lbl)
+	outer.add_child(header)
+
+	var pers := int(knight.get("personality", 0))
+	var pers_name: String = (
+		str(JoustTypes.PERSONALITY_NAMES[pers])
+		if pers >= 0 and pers < JoustTypes.PERSONALITY_NAMES.size() else "?"
+	)
+	var from_prov := str(knight.get("province_name", ""))
+	outer.add_child(_tq_stat_row("Personality", pers_name.capitalize()))
+	if from_prov != "":
+		outer.add_child(_tq_stat_row("From", from_prov))
+
+	outer.add_child(_tq_stat_row(
+		"Attributes",
+		"STR %d   SKL %d   END %d   CRG %d" % [
+			int(knight.get("strength", 0)),
+			int(knight.get("skill", 0)),
+			int(knight.get("endurance", 0)),
+			int(knight.get("courage", 0)),
+		]
+	))
+
+	var horse: Dictionary = knight.get("horse", {})
+	var temp := int(horse.get("temperament", 0))
+	var temp_name: String = (
+		str(JoustTypes.TEMPERAMENT_NAMES[temp])
+		if temp >= 0 and temp < JoustTypes.TEMPERAMENT_NAMES.size() else "?"
+	)
+	outer.add_child(_tq_stat_row("Horse", str(horse.get("name", "?"))))
+	outer.add_child(_tq_stat_row(
+		"Mount",
+		"SPD %d   STD %d   STA %d   [%s]" % [
+			int(horse.get("speed", 0)),
+			int(horse.get("steadiness", 0)),
+			int(horse.get("stamina", 0)),
+			temp_name,
+		]
+	))
+
+	var armor: Dictionary = knight.get("armor", {})
+	var helm: Dictionary = armor.get("helm", {})
+	var paul: Dictionary = armor.get("pauldrons", {})
+	var breast: Dictionary = armor.get("breastplate", {})
+	var sh: Dictionary = armor.get("shield", {})
+	outer.add_child(_tq_stat_row("Armor weight", "%.1f" % JoustKnight.armor_total_weight(armor)))
+	outer.add_child(_tq_stat_row(
+		"Pieces",
+		"Helm %d/%d   Paul %d/%d   Breast %d/%d   Shield %d/%d" % [
+			int(helm.get("protection", 0)), int(helm.get("quality", 0)),
+			int(paul.get("protection", 0)), int(paul.get("quality", 0)),
+			int(breast.get("protection", 0)), int(breast.get("quality", 0)),
+			int(sh.get("protection", 0)), int(sh.get("quality", 0)),
+		]
+	))
+
+	var lance: Dictionary = knight.get("lance", {})
+	var lt := int(lance.get("lance_type", 0))
+	var lt_name: String = (
+		str(JoustTypes.LANCE_TYPE_NAMES[lt])
+		if lt >= 0 and lt < JoustTypes.LANCE_TYPE_NAMES.size() else "?"
+	)
+	outer.add_child(_tq_stat_row(
+		"Lance",
+		"%s (%s)  quality %d" % [str(lance.get("material", "?")), lt_name, int(lance.get("quality", 0))]
+	))
+	return panel
+
+
+func _tq_stat_row(label: String, value: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var left := Label.new()
+	left.text = label
+	left.custom_minimum_size = Vector2(110, 0)
+	left.add_theme_color_override("font_color", Color(0.85, 0.72, 0.45, 1))
+	var right := Label.new()
+	right.text = value
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	row.add_child(left)
+	row.add_child(right)
+	return row
+
+
+func _on_tourney_pick_type(i: int) -> void:
+	_tq_type = i
+	_tq_draft_knight = {}
+	refresh_tourney_ui()
+
+
+func _on_tourney_reroll(ttype: int) -> void:
+	var lance_type := int(JoustTypes.rules_for_type(ttype).get("lance_type", 0))
+	var pname := str(_tq_draft_knight.get("province_name", ""))
+	_tq_draft_knight = JoustGenerator.generate_knight(lance_type, "", pname)
+	refresh_tourney_ui()
+
+
+func _on_tourney_use_roster(index: int) -> void:
+	var roster := Tourney.get_roster(parent_n, parent_n.my_pl_id)
+	if index < 0 or index >= roster.size():
+		return
+	_tq_draft_knight = JoustKnight.duplicate_knight(roster[index])
+	refresh_tourney_ui()
+
+
+func _on_tourney_remove_roster(index: int) -> void:
+	Tourney.remove_knight_from_roster(parent_n, parent_n.my_pl_id, index)
+	refresh_tourney_ui()
+
+
+func _on_tourney_organize() -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("do_organize_tourney"):
+		return
+	if _tq_draft_knight.is_empty():
+		show_info_popup("Pick a knight first.")
+		return
+	var cost := Tourney.host_cost(_tq_type)
+	var marks := int(parent_n.players[parent_n.my_pl_id].game_data.get("marks", 0))
+	if marks < cost:
+		show_info_popup("Not enough marks (need %d)." % cost)
+		return
+	# Keep a copy on the roster for fun.
+	Tourney.stamp_knight_owner(_tq_draft_knight, parent_n.my_pl_id, false)
+	Tourney.add_knight_to_roster(parent_n, parent_n.my_pl_id, _tq_draft_knight)
+	parent_n.do_organize_tourney(_tq_type, _tq_draft_knight)
+	_tq_draft_knight = {}
+	refresh_tourney_ui()
+
+
+func _on_tourney_accept() -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("do_tourney_respond"):
+		return
+	if _tq_draft_knight.is_empty():
+		show_info_popup("Pick a knight first.")
+		return
+	var fee := int(parent_n.active_tourney.get("entry_fee", 0))
+	var marks := int(parent_n.players[parent_n.my_pl_id].game_data.get("marks", 0))
+	if marks < fee:
+		show_info_popup("Not enough marks (need %d)." % fee)
+		return
+	Tourney.stamp_knight_owner(_tq_draft_knight, parent_n.my_pl_id, false)
+	Tourney.add_knight_to_roster(parent_n, parent_n.my_pl_id, _tq_draft_knight)
+	parent_n.do_tourney_respond(true, _tq_draft_knight)
+	_tq_draft_knight = {}
+	refresh_tourney_ui()
+
+
+func _on_tourney_refuse() -> void:
+	if not is_instance_valid(parent_n) or not parent_n.has_method("do_tourney_respond"):
+		return
+	parent_n.do_tourney_respond(false, {})
+	refresh_tourney_ui()
 
 
 # --- VIP trade (War → Diplomacy → Trade) ------------------------------------

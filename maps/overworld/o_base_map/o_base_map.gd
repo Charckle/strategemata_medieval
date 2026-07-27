@@ -71,6 +71,10 @@ var _next_event_id: int = 1
 var player_inboxes: Dictionary = {}
 var player_msg_unread: Dictionary = {}
 
+## Active joust tourney (empty = none). See Tourney helpers.
+var active_tourney: Dictionary = {}
+var _tourney_overlay: CanvasLayer = null
+
 const ARMY_FIGURE_SCENE := preload("res://objects/overworld/army/army_map_unit/armiy_figure.tscn")
 const CARAVAN_SCENE := preload("res://objects/overworld/othr/caravan/caravan.tscn")
 const TRANSPORT_SHIP_SCENE := preload("res://objects/overworld/othr/transport_ship/transport_ship.tscn")
@@ -2166,6 +2170,344 @@ func request_set_opinion(viewer: int, target: int, value: int) -> void:
 func apply_set_opinion(viewer: int, target: int, value: int) -> void:
 	Diplomacy.set_opinion(self, viewer, target, value)
 	_refresh_diplo_gui()
+
+
+# --- Tourney (joust) --------------------------------------------------------
+
+func has_open_tourney() -> bool:
+	return Tourney.is_active(self)
+
+
+func can_end_turn_now() -> bool:
+	return not Tourney.is_playing(self)
+
+
+func do_organize_tourney(ttype: int, knight: Dictionary) -> void:
+	request_organize_tourney.rpc_id(1, my_pl_id, ttype, knight)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_organize_tourney(host_id: int, ttype: int, knight: Dictionary) -> void:
+	if not multiplayer.is_server():
+		return
+	if Tourney.is_active(self):
+		return
+	if GlobalStuff.is_ai_lord(players[host_id].type):
+		return
+	if not Diplomacy.is_diplomable(self, host_id):
+		return
+	ttype = clampi(ttype, 0, 2)
+	var cost := Tourney.host_cost(ttype)
+	var marks := int(players[host_id].game_data.get("marks", 0))
+	if marks < cost:
+		return
+	if not (knight is Dictionary) or str(knight.get("name", "")) == "":
+		return
+	players[host_id].game_data["marks"] = marks - cost
+	Tourney.stamp_knight_owner(knight, host_id, false)
+	var state := Tourney.make_invite_state(host_id, ttype, knight)
+	Tourney.stamp_entrant_heraldry(self, state["entrants"][0])
+	for pid in Diplomacy.diplomable_lords(self, host_id):
+		state["invites"][str(pid)] = Tourney.INVITE_PENDING
+	active_tourney = state
+	_sync_tourney_state.rpc(active_tourney)
+	update_player_data.rpc(players)
+	_push_money_ui()
+	_notify_tourney_invites(host_id, ttype)
+	_ai_resolve_tourney_invites()
+	_try_start_tourney_if_ready()
+
+
+func do_tourney_respond(accept: bool, knight: Dictionary = {}) -> void:
+	request_tourney_respond.rpc_id(1, my_pl_id, accept, knight)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_tourney_respond(pid: int, accept: bool, knight: Dictionary) -> void:
+	if not multiplayer.is_server():
+		return
+	if not Tourney.is_inviting(self):
+		return
+	var key := str(pid)
+	var invites: Dictionary = active_tourney.get("invites", {})
+	if str(invites.get(key, "")) != Tourney.INVITE_PENDING:
+		return
+	if accept:
+		if GlobalStuff.is_ai_lord(players[pid].type):
+			return
+		var fee := int(active_tourney.get("entry_fee", 0))
+		var marks := int(players[pid].game_data.get("marks", 0))
+		if marks < fee:
+			accept = false
+		elif not (knight is Dictionary) or str(knight.get("name", "")) == "":
+			return
+		else:
+			players[pid].game_data["marks"] = marks - fee
+			active_tourney["prize_pool"] = int(active_tourney.get("prize_pool", 0)) + fee
+			Tourney.stamp_knight_owner(knight, pid, false)
+			var entrants: Array = active_tourney.get("entrants", [])
+			entrants.append({
+				"pid": pid,
+				"knight": JoustKnight.duplicate_knight(knight),
+				"is_npc": false,
+			})
+			Tourney.stamp_entrant_heraldry(self, entrants[entrants.size() - 1])
+			active_tourney["entrants"] = entrants
+			invites[key] = Tourney.INVITE_ACCEPTED
+	if not accept:
+		invites[key] = Tourney.INVITE_REFUSED
+	active_tourney["invites"] = invites
+	_sync_tourney_state.rpc(active_tourney)
+	update_player_data.rpc(players)
+	_push_money_ui()
+	_try_start_tourney_if_ready()
+
+
+func _notify_tourney_invites(host_id: int, ttype: int) -> void:
+	var tname := JoustTypes.type_name(ttype)
+	var fee := Tourney.entry_fee(ttype)
+	var text := "%s invites you to a %s (entry %d marks). Open War → Diplomacy → Tourney to respond." % [
+		player_display_name(host_id), tname, fee
+	]
+	var recipients: Array = []
+	for pid in Diplomacy.diplomable_lords(self, host_id):
+		recipients.append(int(pid))
+	var event := {
+		"kind": GameEvents.KIND.TOURNEY,
+		"tourney_label": "Tourney invitation",
+		"text": text,
+		"place_name": "",
+		"turn": int(turn),
+		"season": int(season),
+		"host_id": host_id,
+		"tourney_kind": "invite",
+		"participant_ids": recipients.duplicate(),
+	}
+	var eid := _register_event(event)
+	_deliver_event_to_players(eid, recipients, host_id)
+
+
+func _ai_resolve_tourney_invites() -> void:
+	if not Tourney.is_inviting(self):
+		return
+	var host_id := int(active_tourney.get("host_id", -1))
+	var ttype := int(active_tourney.get("type", 0))
+	var rules := JoustTypes.rules_for_type(ttype)
+	var lance_type := int(rules.get("lance_type", 0))
+	var fee := int(active_tourney.get("entry_fee", 0))
+	var invites: Dictionary = active_tourney.get("invites", {})
+	var changed := false
+	for key in invites.keys():
+		if str(invites[key]) != Tourney.INVITE_PENDING:
+			continue
+		var pid := int(key)
+		if not players.has(pid) or not GlobalStuff.is_ai_lord(players[pid].type):
+			continue
+		if Tourney.ai_should_accept(self, pid, host_id):
+			var pay_real := not (Tourney.AI_TOURNEY_FREE_ENTRY_CHEAT and bool(GlobalStuff.ai_cheats_enabled))
+			if pay_real:
+				var marks := int(players[pid].game_data.get("marks", 0))
+				if marks < fee:
+					invites[key] = Tourney.INVITE_REFUSED
+					changed = true
+					continue
+				players[pid].game_data["marks"] = marks - fee
+			# Entry always counted in pot (phantom or real).
+			active_tourney["prize_pool"] = int(active_tourney.get("prize_pool", 0)) + fee
+			var pname_list := Tourney.owned_province_names(self, pid)
+			var pname := str(pname_list[0]) if not pname_list.is_empty() else ""
+			var knight := JoustGenerator.generate_knight(lance_type, "", pname)
+			Tourney.stamp_knight_owner(knight, pid, false)
+			var entrants: Array = active_tourney.get("entrants", [])
+			entrants.append({"pid": pid, "knight": knight, "is_npc": false})
+			Tourney.stamp_entrant_heraldry(self, entrants[entrants.size() - 1])
+			active_tourney["entrants"] = entrants
+			invites[key] = Tourney.INVITE_ACCEPTED
+		else:
+			invites[key] = Tourney.INVITE_REFUSED
+		changed = true
+	if changed:
+		active_tourney["invites"] = invites
+		_sync_tourney_state.rpc(active_tourney)
+
+
+func _tourney_all_invites_resolved() -> bool:
+	if not Tourney.is_inviting(self):
+		return false
+	var invites: Dictionary = active_tourney.get("invites", {})
+	for key in invites.keys():
+		if str(invites[key]) == Tourney.INVITE_PENDING:
+			return false
+	return true
+
+
+func _try_start_tourney_if_ready() -> void:
+	if not multiplayer.is_server():
+		return
+	if not _tourney_all_invites_resolved():
+		return
+	var entrants: Array = active_tourney.get("entrants", [])
+	var lord_count := 0
+	for e in entrants:
+		if not bool(e.get("is_npc", false)) and int(e.get("pid", -1)) >= 0:
+			lord_count += 1
+	if lord_count < 2:
+		# Cancel — host cost already sunk.
+		var host_id := int(active_tourney.get("host_id", -1))
+		_make_tourney_event(
+			"Tourney cancelled",
+			"No other lords joined. The lists are struck; the organize cost is forfeit.",
+			[host_id]
+		)
+		active_tourney = {}
+		_sync_tourney_state.rpc(active_tourney)
+		_refresh_diplo_gui()
+		return
+	_pad_tourney_npcs()
+	for e in active_tourney.get("entrants", []):
+		if e is Dictionary:
+			Tourney.stamp_entrant_heraldry(self, e)
+	active_tourney["phase"] = Tourney.PHASE_PLAYING
+	_sync_tourney_state.rpc(active_tourney)
+	_open_tourney_overlay.rpc(active_tourney)
+
+
+func _pad_tourney_npcs() -> void:
+	var entrants: Array = active_tourney.get("entrants", [])
+	var need := JoustBracket.next_power_of_two(entrants.size())
+	var ttype := int(active_tourney.get("type", 0))
+	var lance_type := int(JoustTypes.rules_for_type(ttype).get("lance_type", 0))
+	var names := Tourney.all_province_names(self)
+	JoustGenerator.reset_name_pool()
+	for e in entrants:
+		var n := str(e.get("knight", {}).get("name", ""))
+		JoustGenerator.mark_name_used(n)
+	while entrants.size() < need:
+		var npc_knight := JoustGenerator.generate_npc_from_provinces(lance_type, names)
+		Tourney.stamp_knight_owner(npc_knight, -1, true)
+		var npc := {
+			"pid": -1,
+			"knight": npc_knight,
+			"is_npc": true,
+		}
+		Tourney.stamp_entrant_heraldry(self, npc)
+		entrants.append(npc)
+	active_tourney["entrants"] = entrants
+
+
+func refuse_pending_tourney_invite(pid: int) -> void:
+	if not Tourney.is_inviting(self):
+		return
+	var key := str(pid)
+	var invites: Dictionary = active_tourney.get("invites", {})
+	if str(invites.get(key, "")) != Tourney.INVITE_PENDING:
+		return
+	invites[key] = Tourney.INVITE_REFUSED
+	active_tourney["invites"] = invites
+	_sync_tourney_state.rpc(active_tourney)
+	_try_start_tourney_if_ready()
+
+
+@rpc("authority", "call_local", "reliable")
+func _sync_tourney_state(state: Dictionary) -> void:
+	active_tourney = state.duplicate(true) if state is Dictionary else {}
+	_refresh_diplo_gui()
+
+
+@rpc("authority", "call_local", "reliable")
+func _open_tourney_overlay(state: Dictionary) -> void:
+	active_tourney = state.duplicate(true)
+	# Server peer runs the interactive lists (authoritative outcome). Others wait.
+	if not multiplayer.is_server():
+		if is_instance_valid(gui_node) and gui_node.has_method("show_info_popup"):
+			gui_node.show_info_popup("A tourney is underway — the lists are closed until it ends.")
+		return
+	if is_instance_valid(_tourney_overlay):
+		_tourney_overlay.queue_free()
+	var overlay_script = load("res://menus/gui/tourney/tourney_overlay.gd")
+	_tourney_overlay = overlay_script.new()
+	if is_instance_valid(gui_node):
+		gui_node.add_child(_tourney_overlay)
+	else:
+		add_child(_tourney_overlay)
+	var ttype := int(state.get("type", 0))
+	var rules := JoustTypes.rules_for_type(ttype)
+	_tourney_overlay.setup(
+		self,
+		my_pl_id,
+		rules,
+		state.get("entrants", []),
+		int(state.get("prize_pool", 0)),
+		str(rules.get("name", "Tourney"))
+	)
+	_tourney_overlay.finished.connect(_on_tourney_overlay_finished)
+
+
+func _on_tourney_overlay_finished(winner_pid: int, winner_is_npc: bool, champion_knight: Dictionary) -> void:
+	_tourney_overlay = null
+	request_tourney_finish.rpc_id(1, my_pl_id, winner_pid, winner_is_npc, champion_knight)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_tourney_finish(reporter_id: int, winner_pid: int, winner_is_npc: bool, champion_knight: Dictionary) -> void:
+	if not multiplayer.is_server():
+		return
+	if not Tourney.is_playing(self):
+		return
+	# First reporter (usually host peer / local) settles the pot.
+	var pool := int(active_tourney.get("prize_pool", 0))
+	var host_id := int(active_tourney.get("host_id", -1))
+	if winner_is_npc or winner_pid < 0:
+		_make_tourney_event(
+			"Tourney ended",
+			"An itinerant knight took the lists. The prize of %d marks vanishes with them." % pool,
+			Diplomacy.diplomable_lords(self)
+		)
+	elif players.has(winner_pid):
+		players[winner_pid].game_data["marks"] = int(players[winner_pid].game_data.get("marks", 0)) + pool
+		_make_tourney_event(
+			"Tourney champion",
+			"%s wins the tourney and claims %d marks!" % [player_display_name(winner_pid), pool],
+			Diplomacy.diplomable_lords(self)
+		)
+		# Only the human owner of that knight may keep them on their roster.
+		if champion_knight is Dictionary and not champion_knight.is_empty():
+			var owner_pid := int(champion_knight.get("owner_pid", winner_pid))
+			if (
+				owner_pid == winner_pid
+				and owner_pid >= 0
+				and not bool(champion_knight.get("is_npc_knight", false))
+				and players.has(owner_pid)
+				and not GlobalStuff.is_ai_lord(players[owner_pid].type)
+			):
+				Tourney.add_knight_to_roster(self, owner_pid, champion_knight)
+	active_tourney = {}
+	_sync_tourney_state.rpc(active_tourney)
+	_push_money_ui()
+	update_player_data.rpc(players)
+	# Silence unused
+	var _r := reporter_id
+	var _h := host_id
+
+
+func _make_tourney_event(label: String, text: String, recipients: Array) -> void:
+	var event := {
+		"kind": GameEvents.KIND.TOURNEY,
+		"tourney_label": label,
+		"text": text,
+		"place_name": "",
+		"turn": int(turn),
+		"season": int(season),
+		"tourney_kind": "report",
+		"participant_ids": recipients.duplicate(),
+	}
+	var eid := _register_event(event)
+	_deliver_event_to_players(eid, recipients, -1)
+
+
+func _push_money_ui() -> void:
+	if is_instance_valid(gui_node) and players.has(my_pl_id) and gui_node.has_method("update_money"):
+		gui_node.update_money(players[my_pl_id].game_data["marks"])
 
 
 ## Legacy checkbox API removed — kept as no-op stubs so old save UI hooks don't crash.
@@ -8612,8 +8954,11 @@ func get_objects_with_pathfinding_blocked_tiles() -> Array:
 func player_ended_turn(player_id):
 	if !multiplayer.is_server():
 		return
+	if Tourney.is_playing(self):
+		return
 	players[player_id].ended_turn = true
 	expire_vip_trades_for_player(int(player_id))
+	refuse_pending_tourney_invite(int(player_id))
 	
 	# update player data
 	update_player_data.rpc(players)

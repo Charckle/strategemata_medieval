@@ -30,6 +30,7 @@ static func export_state(map: Node) -> Dictionary:
 		"move_permits": _stringify_keys(map.move_permits.duplicate(true)),
 		"diplo_messages": _stringify_keys(map.diplo_messages.duplicate(true)),
 		"diplo_sent_turn": _stringify_keys(map.diplo_sent_turn.duplicate(true)),
+		"active_tourney": map.active_tourney.duplicate(true) if map.get("active_tourney") is Dictionary else {},
 		"players": _export_players(map.players),
 		"counters": {
 			"next_runtime_force": int(map._next_runtime_force),
@@ -75,6 +76,15 @@ static func apply_state(map: Node, state: Dictionary) -> void:
 	map.move_permits = _import_string_dict(state.get("move_permits", {}))
 	map.diplo_messages = _import_string_dict(state.get("diplo_messages", {}))
 	map.diplo_sent_turn = _import_diplo_sent(state.get("diplo_sent_turn", {}))
+	var at = state.get("active_tourney", {})
+	if at is Dictionary:
+		# Mid-fight overlays can't resume cleanly — drop playing state.
+		if str(at.get("phase", "")) == Tourney.PHASE_PLAYING:
+			map.active_tourney = {}
+		else:
+			map.active_tourney = at.duplicate(true)
+	else:
+		map.active_tourney = {}
 	map.players = _import_players(state.get("players", {}))
 	Heraldry.ensure_all(map.players)
 	if GlobalStuff.has_method("ensure_order_colors"):
