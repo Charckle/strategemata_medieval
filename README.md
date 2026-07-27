@@ -9,3 +9,6 @@
 - teren naj bo obarvan drugače glede na letni čas
 - vera, ki vpliva na bitko
 - veter premika dim zgradb
+- WEGO turn based strategy
+-- naredi, da lahko postavljaš zgradbe etc, aka two walls
+- Slovenia - extended mapa
