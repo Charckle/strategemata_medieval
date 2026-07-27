@@ -2269,10 +2269,16 @@ static func _execute_invasion_war_season(
 		return
 
 	# Initial raise at home (not while waiting for reinforce in-province).
-	if at_home and not bool(war.get("waiting_reinforce", false)) \
-			and (not bool(war.get("marching", false))):
-		fid = _invasion_reinforce_force(base_map, raise_prov, pid, fid, raise_need)
-		war["force_id"] = fid
+	# Also resume raise if we marched out, got crushed, and crawled home still flagged marching.
+	if at_home and not bool(war.get("waiting_reinforce", false)):
+		if bool(war.get("marching", false)) and fid != "" and base_map.forces.has(fid):
+			var home_str := _invasion_main_strength(base_map, pid, war, fid)
+			var home_march := _invasion_march_need_strength(base_map, target_prov, pid, fid)
+			if home_str < home_march:
+				war["marching"] = false
+		if not bool(war.get("marching", false)):
+			fid = _invasion_reinforce_force(base_map, raise_prov, pid, fid, raise_need)
+			war["force_id"] = fid
 
 	# Recover main force from park / field.
 	fid = _invasion_resolve_main_force(base_map, pid, war, fid)
@@ -2400,7 +2406,8 @@ static func _execute_invasion_war_season(
 		return
 
 	# Still at home: dump garrison, raise toward 1.3×, march at ≥1.0× once keep is drained.
-	if not marching and at_home and not bool(war.get("waiting_reinforce", false)):
+	# Run whenever at home (even if marching stuck true after a failed push) — refill first.
+	if at_home and not bool(war.get("waiting_reinforce", false)):
 		# Empty the keep into the field (leave reserve) — don't drip 40 forever.
 		fid = _invasion_dump_garrison_to_field(base_map, raise_prov, pid, fid)
 		war["force_id"] = fid
@@ -2414,17 +2421,20 @@ static func _execute_invasion_war_season(
 		var keep_drained := _invasion_home_garrison_drained(base_map, raise_prov)
 		var strong_enough := my_str >= raise_need or (my_str >= march_need and keep_drained)
 		if not strong_enough:
+			war["marching"] = false
 			war["halt_reason"] = "raising — str %d / need %d (march≥%d, men %d%s)" % [
 				my_str, raise_need, march_need, _invasion_count_in_force(base_map, fid, pid),
 				", keep drained" if keep_drained else ""
 			]
 			return
 		if not grain_ready:
+			war["marching"] = false
 			var cargo_grain := int(base_map.get_force_cargo(fid).get("grain", 0)) if base_map.has_method("get_force_cargo") else 0
 			var want := _war_grain_wanted(base_map, fid, enemy_town)
 			war["halt_reason"] = "waiting grain cargo %d / %d" % [cargo_grain, want]
 			return
 		if men < GlobalUnits.MIN_SPLIT_MEN:
+			war["marching"] = false
 			war["halt_reason"] = "force too small to march"
 			return
 		war["marching"] = true
@@ -2437,7 +2447,7 @@ static func _execute_invasion_war_season(
 		_invasion_move_to_objective(base_map, fid, obj)
 		return
 
-	# Committed: keep advancing (or attack anyway if weak with no park).
+	# Committed (away from home): keep advancing (or attack anyway if weak with no park).
 	if fid == "" or not base_map.forces.has(fid):
 		# Sortie from park to continue.
 		fid = _invasion_sortie_parked(base_map, pid, war)
