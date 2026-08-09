@@ -2,6 +2,8 @@ extends CanvasLayer
 
 const ArmyNames := preload("res://global_scripts/army_names.gd")
 const HeraldryEditorScene = preload("res://menus/gui/heraldry_editor/heraldry_editor.gd")
+const QuickHelpScene = preload("res://menus/gui/quick_help/quick_help.gd")
+const TurnBannerScene = preload("res://menus/gui/turn_banner/turn_banner.gd")
 
 @onready var map_menu := $map_menu
 @onready var economy_menu := $economy_menu
@@ -21,6 +23,10 @@ const HeraldryEditorScene = preload("res://menus/gui/heraldry_editor/heraldry_ed
 @onready var order_color_cycle_btn := $settings_menu/margin/vbox/tabs/Gameplay/order_color_row/order_color_btns/order_color_cycle_btn
 
 var _heraldry_editor: Control = null
+var _quick_help: Control = null
+var _turn_banner: Control = null
+var _pending_turn_banner := false
+var _show_quick_guide_chk: CheckBox = null
 @onready var map_tabs := $map_menu/margin/vbox/tabs
 @onready var minimap := $map_menu/margin/vbox/tabs/Map/Minimap
 
@@ -322,7 +328,7 @@ var _prov_people_manage_box: VBoxContainer = null
 var _prov_tax_manage_box: VBoxContainer = null
 var _prov_farming_manage_root: VBoxContainer = null
 var _prov_fields_lbl: Label = null
-var _prov_populate_idle_btn: Button = null
+var _prov_manage_fields_btn: Button = null
 var _prov_stock_lbl: Label = null
 var _prov_farm_stock_lbl: Label = null
 var _prov_labor_lbl: RichTextLabel = null
@@ -338,6 +344,10 @@ var _prov_labor_priority_opts: Dictionary = {} # category -> OptionButton
 var _prov_labor_panels: Dictionary = {} # category -> PanelContainer
 var _prov_labor_updating := false
 var _prov_idle_field_count: int = 0
+var _prov_grain_field_count: int = 0
+var _prov_horse_field_count: int = 0
+var _prov_planted_grain_count: int = 0
+var _prov_total_field_count: int = 0
 ## When opening province economy from a building click, highlight this labor row.
 var _labor_focus_category: String = ""
 
@@ -350,9 +360,18 @@ var _econ_demolish_base = null
 const _PROV_SURPLUS_COLOR := "#6dce6d"
 const _PROV_DEFICIT_COLOR := "#e85a4f"
 
-# Field population helper popup.
-var _populate_idle_popup: PanelContainer = null
-var _populate_idle_body: Label = null
+# Manage fields popup (idle / grain / horses targets).
+var _manage_fields_popup: PanelContainer = null
+var _manage_fields_idle_lbl: Label = null
+var _manage_fields_grain_spin: SpinBox = null
+var _manage_fields_horse_spin: SpinBox = null
+var _manage_fields_hint_lbl: Label = null
+var _manage_fields_apply_btn: Button = null
+var _manage_fields_updating := false
+var _manage_fields_confirm: PanelContainer = null
+var _manage_fields_confirm_lbl: Label = null
+var _manage_fields_pending_grain: int = -1
+var _manage_fields_pending_horse: int = -1
 
 # Economy building popup (build / demolish).
 var _econ_popup: PanelContainer = null
@@ -439,9 +458,13 @@ func _ready() -> void:
 	$Panel/war_btn.pressed.connect(_on_war_btn_pressed)
 	$Panel/settings_btn.pressed.connect(_on_settings_btn_pressed)
 	msg_btn.pressed.connect(_on_msg_btn_pressed)
+	_ensure_admin_tab()
+	_ensure_heraldry_editor()
+	_ensure_quick_help()
+	_ensure_quick_help_settings()
+	_ensure_save_ui()
 	_populate_gameplay_settings()
 	_populate_video_settings()
-	_ensure_admin_tab()
 	show_province_names_chk.toggled.connect(_on_show_province_names_toggled)
 	if show_army_names_chk != null:
 		show_army_names_chk.toggled.connect(_on_show_army_names_toggled)
@@ -454,8 +477,6 @@ func _ready() -> void:
 		order_color_cycle_btn.pressed.connect(_on_order_color_cycle_pressed)
 	if order_color_swatch != null:
 		order_color_swatch.gui_input.connect(_on_order_color_swatch_gui_input)
-	_ensure_heraldry_editor()
-	_ensure_save_ui()
 	_ensure_province_levy_widgets()
 	if caravan_tab_send_btn != null:
 		caravan_tab_send_btn.pressed.connect(_on_caravan_tab_send_pressed)
@@ -1109,6 +1130,7 @@ func _on_settings_btn_pressed() -> void:
 	settings_menu.size = Vector2(780, 800)
 	_toggle_menu(settings_menu)
 	if settings_menu.visible:
+		_populate_gameplay_settings()
 		_refresh_admin_province_list()
 		_refresh_admin_report()
 		_refresh_admin_edit()
@@ -1166,6 +1188,152 @@ func _ensure_heraldry_editor() -> void:
 	_heraldry_editor.accepted.connect(_on_heraldry_editor_accepted)
 	_heraldry_editor.cancelled.connect(_on_heraldry_editor_cancelled)
 	add_child(_heraldry_editor)
+
+
+func _ensure_quick_help() -> void:
+	if _quick_help != null and is_instance_valid(_quick_help):
+		return
+	_quick_help = QuickHelpScene.new()
+	_quick_help.name = "quick_help"
+	_quick_help.closed.connect(_on_quick_help_closed_for_turn_banner)
+	add_child(_quick_help)
+
+
+func _ensure_turn_banner() -> void:
+	if _turn_banner != null and is_instance_valid(_turn_banner):
+		return
+	_turn_banner = TurnBannerScene.new()
+	_turn_banner.name = "turn_banner"
+	add_child(_turn_banner)
+
+
+## Show heraldry / name / season+year for the local player's turn start.
+func show_turn_started_banner() -> void:
+	if not is_instance_valid(parent_n):
+		return
+	var players = parent_n.get("players")
+	var my_id = parent_n.get("my_pl_id")
+	if players == null or my_id == null or not players.has(my_id):
+		return
+	var p = players[my_id]
+	if GlobalStuff.is_auto_turn_player(p.type):
+		return
+	if int(p.status) != int(GlobalStuff.PLAYER_STATUS.PLAYING):
+		return
+	if is_quick_help_open():
+		_pending_turn_banner = true
+		return
+	_ensure_turn_banner()
+	var season_id := int(parent_n.get("season"))
+	var year := 1100
+	if parent_n.has_method("current_year"):
+		year = int(parent_n.current_year())
+	_pending_turn_banner = false
+	_turn_banner.show_for(p, season_id, year)
+
+
+func close_turn_banner() -> void:
+	if _turn_banner != null and is_instance_valid(_turn_banner) and _turn_banner.has_method("close"):
+		_turn_banner.close()
+
+
+func is_turn_banner_open() -> bool:
+	return _turn_banner != null and is_instance_valid(_turn_banner) \
+		and _turn_banner.has_method("is_open") and _turn_banner.is_open()
+
+
+func _on_quick_help_closed_for_turn_banner() -> void:
+	if not _pending_turn_banner:
+		return
+	_pending_turn_banner = false
+	show_turn_started_banner()
+
+
+func _ensure_quick_help_settings() -> void:
+	var gameplay: VBoxContainer = settings_menu.get_node_or_null("margin/vbox/tabs/Gameplay")
+	if gameplay == null or gameplay.get_node_or_null("quick_help_row") != null:
+		return
+	var after := gameplay.get_node_or_null("show_army_names_row")
+	var insert_at := after.get_index() + 1 if after != null else gameplay.get_child_count()
+
+	var sep := HSeparator.new()
+	sep.name = "quick_help_sep"
+	gameplay.add_child(sep)
+	gameplay.move_child(sep, insert_at)
+	insert_at += 1
+
+	var title := Label.new()
+	title.name = "quick_help_title"
+	title.text = "Quick guide"
+	title.add_theme_font_size_override("font_size", 16)
+	gameplay.add_child(title)
+	gameplay.move_child(title, insert_at)
+	insert_at += 1
+
+	var row := HBoxContainer.new()
+	row.name = "quick_help_row"
+	row.add_theme_constant_override("separation", 8)
+	gameplay.add_child(row)
+	gameplay.move_child(row, insert_at)
+	insert_at += 1
+
+	var lbl := Label.new()
+	lbl.text = "Show quick guide on new game"
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(lbl)
+
+	_show_quick_guide_chk = CheckBox.new()
+	_show_quick_guide_chk.name = "show_quick_guide_chk"
+	_show_quick_guide_chk.text = "Enabled"
+	_show_quick_guide_chk.button_pressed = GlobalSet.settings.get("show_quick_guide", 1) != 0
+	_show_quick_guide_chk.toggled.connect(_on_show_quick_guide_toggled)
+	row.add_child(_show_quick_guide_chk)
+
+	var open_row := HBoxContainer.new()
+	open_row.name = "quick_help_open_row"
+	open_row.add_theme_constant_override("separation", 8)
+	gameplay.add_child(open_row)
+	gameplay.move_child(open_row, insert_at)
+
+	var open_btn := Button.new()
+	open_btn.name = "open_quick_help_btn"
+	open_btn.text = "Open quick guide"
+	open_btn.pressed.connect(_on_open_quick_help_pressed)
+	open_row.add_child(open_btn)
+
+
+func open_quick_help(start_page: int = 0) -> void:
+	if is_turn_banner_open():
+		close_turn_banner()
+		_pending_turn_banner = true
+	_ensure_quick_help()
+	if _quick_help != null and _quick_help.has_method("open"):
+		_quick_help.open(start_page)
+
+
+func close_quick_help() -> void:
+	if _quick_help != null and is_instance_valid(_quick_help) and _quick_help.has_method("close"):
+		_quick_help.close()
+
+
+func is_quick_help_open() -> bool:
+	return _quick_help != null and is_instance_valid(_quick_help) \
+		and _quick_help.has_method("is_open") and _quick_help.is_open()
+
+
+func maybe_show_quick_help_on_new_game() -> void:
+	if GlobalSet.settings.get("show_quick_guide", 1) == 0:
+		return
+	open_quick_help()
+
+
+func _on_show_quick_guide_toggled(pressed: bool) -> void:
+	GlobalSet.settings["show_quick_guide"] = 1 if pressed else 0
+	SettingsLoad.save_settings()
+
+
+func _on_open_quick_help_pressed() -> void:
+	open_quick_help()
 
 
 func _on_heraldry_edit_pressed() -> void:
@@ -1281,6 +1449,10 @@ func _populate_gameplay_settings() -> void:
 	show_province_names_chk.button_pressed = enabled
 	if show_army_names_chk != null:
 		show_army_names_chk.button_pressed = GlobalSet.settings.get("show_army_names", 1) != 0
+	if _show_quick_guide_chk != null:
+		_show_quick_guide_chk.set_pressed_no_signal(
+			GlobalSet.settings.get("show_quick_guide", 1) != 0
+		)
 
 
 var _save_status_lbl: Label = null
@@ -1773,7 +1945,7 @@ func _hide_top_province_focus() -> void:
 ## Screen-space hit test for open menus / popups (Area2D click-through guard).
 func blocks_map_at_mouse() -> bool:
 	# Modal levy / arm forms: block the whole map while open.
-	if is_recruit_menu_open() or is_arm_peasants_menu_open():
+	if is_quick_help_open() or is_recruit_menu_open() or is_arm_peasants_menu_open():
 		return true
 	var pos := get_viewport().get_mouse_position()
 	for child in get_children():
@@ -1789,7 +1961,7 @@ func blocks_map_at_mouse() -> bool:
 
 ## True when a menu/popup overlay is open (not the always-on top/bottom chrome).
 func blocks_camera_pan() -> bool:
-	if is_recruit_menu_open() or is_arm_peasants_menu_open():
+	if is_quick_help_open() or is_recruit_menu_open() or is_arm_peasants_menu_open():
 		return true
 	for child in get_children():
 		if not (child is Control):
@@ -2210,14 +2382,14 @@ func _on_field_crop_pressed(crop: int) -> void:
 		_field_popup_base.do_set_field_crop(_field_popup_field, crop)
 
 
-func _ensure_populate_idle_popup() -> void:
-	if _populate_idle_popup != null:
+func _ensure_manage_fields_popup() -> void:
+	if _manage_fields_popup != null:
 		return
-	_populate_idle_popup = PanelContainer.new()
-	_populate_idle_popup.top_level = true
-	_populate_idle_popup.z_index = 130
-	_populate_idle_popup.mouse_filter = Control.MOUSE_FILTER_STOP
-	_populate_idle_popup.visible = false
+	_manage_fields_popup = PanelContainer.new()
+	_manage_fields_popup.top_level = true
+	_manage_fields_popup.z_index = 130
+	_manage_fields_popup.mouse_filter = Control.MOUSE_FILTER_STOP
+	_manage_fields_popup.visible = false
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		margin.add_theme_constant_override(side, 12)
@@ -2227,63 +2399,235 @@ func _ensure_populate_idle_popup() -> void:
 	var title := Label.new()
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 16)
-	title.text = "Field population helper"
+	title.text = "Manage fields"
 	var close_btn := Button.new()
 	close_btn.text = "X"
-	close_btn.pressed.connect(hide_populate_idle_popup)
+	close_btn.pressed.connect(hide_manage_fields_popup)
 	header.add_child(title)
 	header.add_child(close_btn)
-	PanelDragController.attach(_populate_idle_popup, header, close_btn)
-	_populate_idle_body = Label.new()
-	_populate_idle_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	PanelDragController.attach(_manage_fields_popup, header, close_btn)
+
+	_manage_fields_idle_lbl = Label.new()
+	_manage_fields_idle_lbl.text = "Idle: 0"
+
+	var grain_row := HBoxContainer.new()
+	grain_row.add_theme_constant_override("separation", 8)
+	var grain_lbl := Label.new()
+	grain_lbl.text = "Grain"
+	grain_lbl.custom_minimum_size = Vector2(72, 0)
+	_manage_fields_grain_spin = SpinBox.new()
+	_manage_fields_grain_spin.min_value = 0
+	_manage_fields_grain_spin.step = 1
+	_manage_fields_grain_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_manage_fields_grain_spin.value_changed.connect(_on_manage_fields_spin_changed)
+	grain_row.add_child(grain_lbl)
+	grain_row.add_child(_manage_fields_grain_spin)
+
+	var horse_row := HBoxContainer.new()
+	horse_row.add_theme_constant_override("separation", 8)
+	var horse_lbl := Label.new()
+	horse_lbl.text = "Horses"
+	horse_lbl.custom_minimum_size = Vector2(72, 0)
+	_manage_fields_horse_spin = SpinBox.new()
+	_manage_fields_horse_spin.min_value = 0
+	_manage_fields_horse_spin.step = 1
+	_manage_fields_horse_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_manage_fields_horse_spin.value_changed.connect(_on_manage_fields_spin_changed)
+	horse_row.add_child(horse_lbl)
+	horse_row.add_child(_manage_fields_horse_spin)
+
+	_manage_fields_hint_lbl = Label.new()
+	_manage_fields_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_manage_fields_hint_lbl.custom_minimum_size = Vector2(300, 0)
+	_manage_fields_hint_lbl.text = "Idle fills the rest. Grain ↔ horses goes through idle."
+
 	var btns := HBoxContainer.new()
 	btns.add_theme_constant_override("separation", 6)
-	var grain_btn := Button.new()
-	grain_btn.text = "Make grain fields"
-	grain_btn.pressed.connect(_on_populate_idle_crop_pressed.bind(1))
-	var horse_btn := Button.new()
-	horse_btn.text = "Make horse pastures"
-	horse_btn.pressed.connect(_on_populate_idle_crop_pressed.bind(2))
 	var cancel_btn := Button.new()
 	cancel_btn.text = "Cancel"
-	cancel_btn.pressed.connect(hide_populate_idle_popup)
-	btns.add_child(grain_btn)
-	btns.add_child(horse_btn)
+	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel_btn.pressed.connect(hide_manage_fields_popup)
+	_manage_fields_apply_btn = Button.new()
+	_manage_fields_apply_btn.text = "Apply"
+	_manage_fields_apply_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_manage_fields_apply_btn.pressed.connect(_on_manage_fields_apply_pressed)
 	btns.add_child(cancel_btn)
+	btns.add_child(_manage_fields_apply_btn)
+
 	vbox.add_child(header)
 	vbox.add_child(HSeparator.new())
-	vbox.add_child(_populate_idle_body)
+	vbox.add_child(_manage_fields_idle_lbl)
+	vbox.add_child(grain_row)
+	vbox.add_child(horse_row)
+	vbox.add_child(_manage_fields_hint_lbl)
 	vbox.add_child(btns)
 	margin.add_child(vbox)
-	_populate_idle_popup.add_child(margin)
-	add_child(_populate_idle_popup)
+	_manage_fields_popup.add_child(margin)
+	add_child(_manage_fields_popup)
 
 
-func show_populate_idle_popup() -> void:
-	_ensure_populate_idle_popup()
-	_populate_idle_body.text = "Convert %d idle fields" % _prov_idle_field_count
-	_populate_idle_popup.visible = true
-	_bring_to_front(_populate_idle_popup)
-	_place_anchored_popup(_populate_idle_popup, get_viewport().get_mouse_position() + Vector2(14, 0), 360.0)
-
-
-func hide_populate_idle_popup() -> void:
-	if _populate_idle_popup != null:
-		_populate_idle_popup.visible = false
-
-
-func _on_populate_idle_fields_pressed() -> void:
-	if _prov_idle_field_count <= 0:
+func _ensure_manage_fields_confirm() -> void:
+	if _manage_fields_confirm != null:
 		return
-	show_populate_idle_popup()
+	_manage_fields_confirm = PanelContainer.new()
+	_manage_fields_confirm.top_level = true
+	_manage_fields_confirm.z_index = 150
+	_manage_fields_confirm.mouse_filter = Control.MOUSE_FILTER_STOP
+	_manage_fields_confirm.visible = false
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 14)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	var title := Label.new()
+	title.text = "Lose harvest potential?"
+	title.add_theme_font_size_override("font_size", 16)
+	_manage_fields_confirm_lbl = Label.new()
+	_manage_fields_confirm_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_manage_fields_confirm_lbl.custom_minimum_size = Vector2(340, 0)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel_btn.pressed.connect(_close_manage_fields_confirm)
+	var ok_btn := Button.new()
+	ok_btn.text = "Confirm"
+	ok_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ok_btn.pressed.connect(_on_manage_fields_confirm_apply)
+	row.add_child(cancel_btn)
+	row.add_child(ok_btn)
+	vbox.add_child(title)
+	vbox.add_child(HSeparator.new())
+	vbox.add_child(_manage_fields_confirm_lbl)
+	vbox.add_child(row)
+	margin.add_child(vbox)
+	_manage_fields_confirm.add_child(margin)
+	add_child(_manage_fields_confirm)
 
 
-func _on_populate_idle_crop_pressed(crop: int) -> void:
-	hide_populate_idle_popup()
+func show_manage_fields_popup() -> void:
+	if _prov_total_field_count <= 0:
+		return
+	_ensure_manage_fields_popup()
+	_manage_fields_updating = true
+	_manage_fields_grain_spin.max_value = _prov_total_field_count
+	_manage_fields_horse_spin.max_value = _prov_total_field_count
+	_manage_fields_grain_spin.value = _prov_grain_field_count
+	_manage_fields_horse_spin.value = _prov_horse_field_count
+	_manage_fields_updating = false
+	_refresh_manage_fields_popup_state()
+	_manage_fields_popup.visible = true
+	_bring_to_front(_manage_fields_popup)
+	_place_anchored_popup(
+		_manage_fields_popup, get_viewport().get_mouse_position() + Vector2(14, 0), 360.0
+	)
+
+
+func hide_manage_fields_popup() -> void:
+	_close_manage_fields_confirm()
+	if _manage_fields_popup != null:
+		_manage_fields_popup.visible = false
+
+
+func _refresh_manage_fields_popup_state() -> void:
+	if _manage_fields_grain_spin == null or _manage_fields_horse_spin == null:
+		return
+	var total := _prov_total_field_count
+	var grain_n := int(_manage_fields_grain_spin.value)
+	var horse_n := int(_manage_fields_horse_spin.value)
+	_manage_fields_updating = true
+	_manage_fields_grain_spin.max_value = maxi(0, total - horse_n)
+	_manage_fields_horse_spin.max_value = maxi(0, total - grain_n)
+	grain_n = clampi(grain_n, 0, int(_manage_fields_grain_spin.max_value))
+	horse_n = clampi(horse_n, 0, int(_manage_fields_horse_spin.max_value))
+	_manage_fields_grain_spin.value = grain_n
+	_manage_fields_horse_spin.value = horse_n
+	_manage_fields_updating = false
+	var idle_n := total - grain_n - horse_n
+	if _manage_fields_idle_lbl != null:
+		_manage_fields_idle_lbl.text = "Idle: %d  (of %d fields)" % [idle_n, total]
+	var changed := grain_n != _prov_grain_field_count or horse_n != _prov_horse_field_count
+	if _manage_fields_apply_btn != null:
+		_manage_fields_apply_btn.disabled = not changed
+	var sown_drop := maxi(0, _prov_planted_grain_count - grain_n)
+	if _manage_fields_hint_lbl != null:
+		if sown_drop > 0:
+			_manage_fields_hint_lbl.text = (
+				"Will idle %d sown grain field(s) — harvest potential drops."
+				% sown_drop
+			)
+		else:
+			_manage_fields_hint_lbl.text = (
+				"Idle fills the rest. Grain ↔ horses goes through idle."
+			)
+
+
+func _on_manage_fields_spin_changed(_value: float) -> void:
+	if _manage_fields_updating:
+		return
+	_refresh_manage_fields_popup_state()
+
+
+func _on_manage_fields_pressed() -> void:
+	if _prov_total_field_count <= 0:
+		return
+	show_manage_fields_popup()
+
+
+func _on_manage_fields_apply_pressed() -> void:
+	if _manage_fields_grain_spin == null or _manage_fields_horse_spin == null:
+		return
+	var grain_n := int(_manage_fields_grain_spin.value)
+	var horse_n := int(_manage_fields_horse_spin.value)
+	var sown_drop := maxi(0, _prov_planted_grain_count - grain_n)
+	if sown_drop > 0:
+		_open_manage_fields_confirm(grain_n, horse_n, sown_drop)
+		return
+	_commit_manage_fields(grain_n, horse_n)
+
+
+func _open_manage_fields_confirm(grain_n: int, horse_n: int, sown_drop: int) -> void:
+	_ensure_manage_fields_confirm()
+	_manage_fields_pending_grain = grain_n
+	_manage_fields_pending_horse = horse_n
+	var yield_lost := sown_drop * GlobalUnits.GRAIN_YIELD_PER_FIELD
+	_manage_fields_confirm_lbl.text = (
+		"Idling %d sown grain field(s) will drop expected harvest by about %d.\n\nContinue?"
+		% [sown_drop, yield_lost]
+	)
+	_manage_fields_confirm.visible = true
+	_bring_to_front(_manage_fields_confirm)
+	_manage_fields_confirm.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	_manage_fields_confirm.size = Vector2(
+		minf(380, vp.x * 0.9), _manage_fields_confirm.get_combined_minimum_size().y
+	)
+	_manage_fields_confirm.position = (vp - _manage_fields_confirm.size) * 0.5
+
+
+func _close_manage_fields_confirm() -> void:
+	if _manage_fields_confirm != null:
+		_manage_fields_confirm.visible = false
+	_manage_fields_pending_grain = -1
+	_manage_fields_pending_horse = -1
+
+
+func _on_manage_fields_confirm_apply() -> void:
+	var grain_n := _manage_fields_pending_grain
+	var horse_n := _manage_fields_pending_horse
+	_close_manage_fields_confirm()
+	if grain_n < 0 or horse_n < 0:
+		return
+	_commit_manage_fields(grain_n, horse_n)
+
+
+func _commit_manage_fields(grain_n: int, horse_n: int) -> void:
+	hide_manage_fields_popup()
 	if selected_province_id == "" or not is_instance_valid(parent_n):
 		return
-	if parent_n.has_method("do_populate_idle_fields"):
-		parent_n.do_populate_idle_fields(selected_province_id, crop)
+	if parent_n.has_method("do_set_field_crop_counts"):
+		parent_n.do_set_field_crop_counts(selected_province_id, grain_n, horse_n)
 
 
 func _ensure_economy_building_popup() -> void:
@@ -3076,9 +3420,12 @@ func _on_castle_popup_economy_pressed() -> void:
 # --- Close everything (called on player switch / end-turn) ------------------
 
 func close_all_popups() -> void:
+	_pending_turn_banner = false
+	close_turn_banner()
+	close_quick_help()
 	hide_building_popup()
 	hide_field_popup()
-	hide_populate_idle_popup()
+	hide_manage_fields_popup()
 	hide_economy_building_popup()
 	hide_smith_recipe_popup()
 	_close_econ_demolish_prompt()
@@ -3113,9 +3460,15 @@ func close_all_popups() -> void:
 ## Escape: close X-dismissible menus (and hostages → sword if undecided).
 ## Does not close loot/cargo or no-X confirm prompts (raid/siege/militia/demolish/…).
 func close_menus_on_escape() -> void:
+	if is_quick_help_open():
+		close_quick_help()
+		return
+	if is_turn_banner_open():
+		close_turn_banner()
+		return
 	hide_building_popup()
 	hide_field_popup()
-	hide_populate_idle_popup()
+	hide_manage_fields_popup()
 	hide_economy_building_popup()
 	hide_smith_recipe_popup()
 	hide_castle_popup()
@@ -3153,6 +3506,10 @@ func _deselect_army_on_escape() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not event.is_action_pressed("ui_cancel"):
+		return
+	if is_quick_help_open():
+		close_quick_help()
+		get_viewport().set_input_as_handled()
 		return
 	close_menus_on_escape()
 	_deselect_army_on_escape()
@@ -6955,8 +7312,8 @@ func _reparent_to(node: Node, new_parent: Node) -> void:
 	new_parent.add_child(node)
 
 
-func _style_field_population_helper_btn(btn: Button) -> void:
-	btn.text = "Field population helper"
+func _style_manage_fields_btn(btn: Button) -> void:
+	btn.text = "Manage fields"
 	btn.custom_minimum_size = Vector2(240, 42)
 	btn.add_theme_font_size_override("font_size", 15)
 	var normal := StyleBoxFlat.new()
@@ -7242,12 +7599,12 @@ func _ensure_province_farming_widgets() -> void:
 	_prov_fields_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_prov_farming_manage_root.add_child(_prov_fields_lbl)
 
-	_prov_populate_idle_btn = Button.new()
-	_style_field_population_helper_btn(_prov_populate_idle_btn)
-	_prov_populate_idle_btn.disabled = true
-	_prov_populate_idle_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_prov_populate_idle_btn.pressed.connect(_on_populate_idle_fields_pressed)
-	_prov_farming_manage_root.add_child(_prov_populate_idle_btn)
+	_prov_manage_fields_btn = Button.new()
+	_style_manage_fields_btn(_prov_manage_fields_btn)
+	_prov_manage_fields_btn.disabled = true
+	_prov_manage_fields_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_prov_manage_fields_btn.pressed.connect(_on_manage_fields_pressed)
+	_prov_farming_manage_root.add_child(_prov_manage_fields_btn)
 
 	_prov_farm_stock_lbl = _make_prov_section_label("Stock: —")
 	_prov_farming_manage_root.add_child(_prov_farm_stock_lbl)
@@ -7939,6 +8296,10 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 		province_tab_income.text = "Income: —"
 		_set_prov_owner_shield(base_map, -1)
 		_prov_idle_field_count = 0
+		_prov_grain_field_count = 0
+		_prov_horse_field_count = 0
+		_prov_planted_grain_count = 0
+		_prov_total_field_count = 0
 		if _prov_manage_root != null:
 			_prov_manage_root.visible = false
 		if _prov_people_manage_box != null:
@@ -7950,7 +8311,7 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 		_set_province_sub_tab_hidden(_prov_farming_tab_index, true)
 		_set_province_sub_tab_hidden(_prov_army_tab_index, true)
 		_set_province_sub_tab_hidden(_prov_shipyard_tab_index, true)
-		hide_populate_idle_popup()
+		hide_manage_fields_popup()
 		hide_smith_recipe_popup()
 		_clear_prov_smith_rows()
 		return
@@ -8003,7 +8364,11 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 	_set_province_sub_tab_hidden(_prov_shipyard_tab_index, not can_ships)
 	if not can_manage:
 		_prov_idle_field_count = 0
-		hide_populate_idle_popup()
+		_prov_grain_field_count = 0
+		_prov_horse_field_count = 0
+		_prov_planted_grain_count = 0
+		_prov_total_field_count = 0
+		hide_manage_fields_popup()
 		hide_smith_recipe_popup()
 		_clear_prov_smith_rows()
 		return
@@ -8013,8 +8378,14 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 		if has_holding and not holding.is_empty():
 			var preview: Dictionary = holding.get("economy_preview", {})
 			_prov_idle_field_count = int(holding.get("idle_fields", 0))
-			var grain_n := int(holding.get("grain_fields", 0))
-			var planted_n := int(holding.get("planted_grain", 0))
+			_prov_grain_field_count = int(holding.get("grain_fields", 0))
+			_prov_horse_field_count = int(holding.get("horse_fields", 0))
+			_prov_planted_grain_count = int(holding.get("planted_grain", 0))
+			_prov_total_field_count = (
+				_prov_idle_field_count + _prov_grain_field_count + _prov_horse_field_count
+			)
+			var grain_n := _prov_grain_field_count
+			var planted_n := _prov_planted_grain_count
 			var season_i := int(parent_n.season) if is_instance_valid(parent_n) else -1
 			var in_winter := season_i == 0
 			if in_winter:
@@ -8023,7 +8394,7 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 					% [
 						grain_n,
 						grain_n,
-						int(holding.get("horse_fields", 0)),
+						_prov_horse_field_count,
 						_prov_idle_field_count,
 					]
 				)
@@ -8033,13 +8404,20 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 					% [
 						grain_n,
 						planted_n,
-						int(holding.get("horse_fields", 0)),
+						_prov_horse_field_count,
 						_prov_idle_field_count,
 					]
 				)
-			if _prov_populate_idle_btn != null:
-				_prov_populate_idle_btn.visible = true
-				_prov_populate_idle_btn.disabled = _prov_idle_field_count <= 0
+			if _prov_manage_fields_btn != null:
+				_prov_manage_fields_btn.visible = true
+				_prov_manage_fields_btn.disabled = _prov_total_field_count <= 0
+			if (
+				_manage_fields_popup != null
+				and _manage_fields_popup.visible
+				and not _manage_fields_updating
+			):
+				# Keep current spin targets if the player is mid-edit; only refresh caps/idle.
+				_refresh_manage_fields_popup_state()
 			_prov_stock_lbl.text = (
 				"Stock: grain %d · wood %d · stone %d · iron %d · horses %d · Expected harvest %.0f"
 				% [
@@ -8123,10 +8501,14 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			_update_prov_tax_buttons(holding, true)
 		else:
 			_prov_idle_field_count = 0
+			_prov_grain_field_count = 0
+			_prov_horse_field_count = 0
+			_prov_planted_grain_count = 0
+			_prov_total_field_count = 0
 			_prov_fields_lbl.text = "Fields: (no settlement holding here)"
-			if _prov_populate_idle_btn != null:
-				_prov_populate_idle_btn.visible = false
-				_prov_populate_idle_btn.disabled = true
+			if _prov_manage_fields_btn != null:
+				_prov_manage_fields_btn.visible = false
+				_prov_manage_fields_btn.disabled = true
 			_prov_stock_lbl.text = "Stock: —"
 			if _prov_farm_stock_lbl != null:
 				_prov_farm_stock_lbl.text = "Stock: —"
@@ -8139,7 +8521,7 @@ func _fill_province_tab(base_map: Node, province_id: String) -> void:
 			_rebuild_labor_sliders({})
 			_update_prov_ration_buttons({}, false)
 			_update_prov_tax_buttons({}, false)
-			hide_populate_idle_popup()
+			hide_manage_fields_popup()
 
 	_rebuild_prov_smith_change_rows(base_map, province_id, has_dejure)
 

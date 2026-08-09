@@ -287,7 +287,7 @@ func _ready() -> void:
 	update_players_population()
 	record_year_sample_if_needed(true)
 	autosave_game()
-	call_deferred("_check_solo_or_opening_win")
+	call_deferred("_after_new_game_boot")
 
 
 func _boot_from_save(state: Dictionary) -> void:
@@ -9012,6 +9012,8 @@ func switch_to_player(r_player_id):
 	center_camera_on_current_player_home()
 	if is_instance_valid(gui_node) and gui_node.has_method("refresh_msg_button"):
 		gui_node.refresh_msg_button()
+	if is_instance_valid(gui_node) and gui_node.has_method("show_turn_started_banner"):
+		gui_node.show_turn_started_banner()
 
 @rpc("authority", "call_local", "reliable")
 func check_if_end_turn():
@@ -9793,6 +9795,14 @@ func record_year_sample_if_needed(force: bool = false) -> void:
 			return
 	stats_history.append(GameScore.sample_year(self, year))
 	persist_score_state()
+
+
+func _after_new_game_boot() -> void:
+	_check_solo_or_opening_win()
+	if game_outcome_done:
+		return
+	if is_instance_valid(gui_node) and gui_node.has_method("maybe_show_quick_help_on_new_game"):
+		gui_node.maybe_show_quick_help_on_new_game()
 
 
 func _check_solo_or_opening_win() -> void:
@@ -11015,6 +11025,126 @@ func apply_populate_idle_fields(province_id: String, crop: int, player_id: int) 
 			continue
 		_apply_field_crop_change(f, crop)
 		touched = true
+	if not touched:
+		return
+	_refresh_province_labor(prov, player_id)
+	if prov.has_method("_update_grain_will"):
+		prov._update_grain_will()
+	if prov.has_method("refresh_field_visuals"):
+		prov.refresh_field_visuals(int(season))
+	if is_instance_valid(gui_node):
+		if gui_node.has_method("update_economy_menu"):
+			gui_node.update_economy_menu(self)
+		update_menus()
+
+
+## Set target grain/horse field counts (idle = remainder). Conversions go through idle.
+func do_set_field_crop_counts(province_id: String, grain_n: int, horse_n: int) -> void:
+	request_set_field_crop_counts.rpc_id(1, province_id, grain_n, horse_n, my_pl_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_set_field_crop_counts(
+	province_id: String, grain_n: int, horse_n: int, player_id: int
+) -> void:
+	if not multiplayer.is_server():
+		return
+	var prov := _get_province_by_id(province_id)
+	if prov == null or not prov.has_method("get_fields_for_player"):
+		return
+	if not prov.player_has_holding(player_id):
+		return
+	var total = prov.get_fields_for_player(player_id).size()
+	grain_n = clampi(grain_n, 0, total)
+	horse_n = clampi(horse_n, 0, total - grain_n)
+	apply_set_field_crop_counts.rpc(province_id, grain_n, horse_n, player_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func apply_set_field_crop_counts(
+	province_id: String, grain_n: int, horse_n: int, player_id: int
+) -> void:
+	var prov := _get_province_by_id(province_id)
+	if prov == null or not prov.has_method("get_fields_for_player"):
+		return
+	var fields: Array = prov.get_fields_for_player(player_id)
+	var total := fields.size()
+	grain_n = clampi(grain_n, 0, total)
+	horse_n = clampi(horse_n, 0, total - grain_n)
+
+	var idle_fields: Array = []
+	var grain_unsown: Array = []
+	var grain_sown: Array = []
+	var horse_fields: Array = []
+	for f in fields:
+		match int(f.get("crop")):
+			1: # GRAIN
+				if bool(f.get("planted")):
+					grain_sown.append(f)
+				else:
+					grain_unsown.append(f)
+			2: # HORSES
+				horse_fields.append(f)
+			_:
+				idle_fields.append(f)
+
+	var cur_grain := grain_unsown.size() + grain_sown.size()
+	var cur_horse := horse_fields.size()
+	if cur_grain == grain_n and cur_horse == horse_n:
+		return
+
+	var touched := false
+
+	# 1) Excess grain → idle (unsown first, then sown).
+	var grain_to_idle := cur_grain - grain_n
+	while grain_to_idle > 0 and not grain_unsown.is_empty():
+		_apply_field_crop_change(grain_unsown.pop_back(), 0)
+		grain_to_idle -= 1
+		touched = true
+	while grain_to_idle > 0 and not grain_sown.is_empty():
+		_apply_field_crop_change(grain_sown.pop_back(), 0)
+		grain_to_idle -= 1
+		touched = true
+
+	# 2) Excess horses → idle.
+	var horse_to_idle := cur_horse - horse_n
+	while horse_to_idle > 0 and not horse_fields.is_empty():
+		_apply_field_crop_change(horse_fields.pop_back(), 0)
+		horse_to_idle -= 1
+		touched = true
+
+	# Rebuild idle pool after reductions.
+	idle_fields.clear()
+	for f in fields:
+		if int(f.get("crop")) == 0:
+			idle_fields.append(f)
+
+	# 3) Idle → grain.
+	var remain_grain := 0
+	for f in fields:
+		if int(f.get("crop")) == 1:
+			remain_grain += 1
+	var grain_need := grain_n - remain_grain
+	while grain_need > 0 and not idle_fields.is_empty():
+		_apply_field_crop_change(idle_fields.pop_back(), 1)
+		grain_need -= 1
+		touched = true
+
+	# 4) Idle → horses.
+	idle_fields.clear()
+	for f in fields:
+		if int(f.get("crop")) == 0:
+			idle_fields.append(f)
+	var remain_horse := 0
+	for f in fields:
+		if int(f.get("crop")) == 2:
+			remain_horse += 1
+	var horse_need := horse_n - remain_horse
+	while horse_need > 0 and not idle_fields.is_empty():
+		_apply_field_crop_change(idle_fields.pop_back(), 2)
+		horse_need -= 1
+		touched = true
+
 	if not touched:
 		return
 	_refresh_province_labor(prov, player_id)
