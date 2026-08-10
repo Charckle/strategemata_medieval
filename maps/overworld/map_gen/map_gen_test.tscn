@@ -1,0 +1,112 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://maps/overworld/map_gen/map_gen_test.gd" id="1_script"]
+[ext_resource type="Script" path="res://maps/overworld/map_gen/map_matrix_preview.gd" id="2_preview"]
+
+[node name="MapGenTest" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_script")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.1, 0.1, 0.12, 1)
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="HBox" type="HBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="LeftPanel" type="VBoxContainer" parent="Margin/HBox"]
+custom_minimum_size = Vector2(280, 0)
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="Margin/HBox/LeftPanel"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Map Gen Test"
+
+[node name="Subtitle" type="Label" parent="Margin/HBox/LeftPanel"]
+layout_mode = 2
+autowrap_mode = 3
+text = "Matrix + plots + roads. Thin skirts around hubs (army can walk around). No 2x2 stacks. Brown = road."
+
+[node name="ProvinceRow" type="HBoxContainer" parent="Margin/HBox/LeftPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="ProvinceLabel" type="Label" parent="Margin/HBox/LeftPanel/ProvinceRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Provinces"
+
+[node name="ProvinceSpin" type="SpinBox" parent="Margin/HBox/LeftPanel/ProvinceRow"]
+unique_name_in_owner = true
+layout_mode = 2
+min_value = 3.0
+max_value = 20.0
+value = 6.0
+rounded = true
+
+[node name="RerollButton" type="Button" parent="Margin/HBox/LeftPanel"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+text = "Reroll"
+
+[node name="StatusLabel" type="Label" parent="Margin/HBox/LeftPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "—"
+
+[node name="MetaLabel" type="Label" parent="Margin/HBox/LeftPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Size —"
+
+[node name="IssuesHeader" type="Label" parent="Margin/HBox/LeftPanel"]
+layout_mode = 2
+text = "Validation"
+
+[node name="IssuesList" type="ItemList" parent="Margin/HBox/LeftPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="RightPanel" type="VBoxContainer" parent="Margin/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="PreviewHeader" type="Label" parent="Margin/HBox/RightPanel"]
+layout_mode = 2
+text = "Preview (squares)"
+
+[node name="Preview" type="Control" parent="Margin/HBox/RightPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("2_preview")
