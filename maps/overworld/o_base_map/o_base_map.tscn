@@ -11,6 +11,7 @@
 [ext_resource type="PackedScene" uid="uid://b8weathobjstx01" path="res://weather/weather_object/weather_object.tscn" id="8_weather"]
 [ext_resource type="Script" path="res://weather/shaders/cloud_shadow_viewport.gd" id="9_csvp"]
 [ext_resource type="Script" path="res://weather/shaders/cloud_shadows_display.gd" id="10_csdsp"]
+[ext_resource type="Script" path="res://maps/overworld/o_base_map/season_tint.gd" id="11_seasontint"]
 
 [sub_resource type="ViewportTexture" id="ViewportTexture_cloud_shadow"]
 viewport_path = NodePath("CloudShadowsViewport")
@@ -61,6 +62,9 @@ texture = SubResource("ViewportTexture_cloud_shadow")
 script = ExtResource("10_csdsp")
 
 [node name="WeatherObject" parent="." instance=ExtResource("8_weather")]
+
+[node name="SeasonTint" type="Node" parent="."]
+script = ExtResource("11_seasontint")
 
 [node name="BasebottomGUI" parent="." unique_id=956857993 instance=ExtResource("1_pughb")]
 

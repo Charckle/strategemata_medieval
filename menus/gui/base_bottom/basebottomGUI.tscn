@@ -672,6 +672,19 @@ layout_mode = 2
 button_pressed = true
 text = "Enabled"
 
+[node name="show_season_tint_row" type="HBoxContainer" parent="settings_menu/margin/vbox/tabs/Video"]
+layout_mode = 2
+
+[node name="label" type="Label" parent="settings_menu/margin/vbox/tabs/Video/show_season_tint_row"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Season map tint"
+
+[node name="show_season_tint_chk" type="CheckBox" parent="settings_menu/margin/vbox/tabs/Video/show_season_tint_row"]
+layout_mode = 2
+button_pressed = true
+text = "Enabled"
+
 [node name="Gameplay" type="VBoxContainer" parent="settings_menu/margin/vbox/tabs" unique_id=1765294011]
 visible = false
 layout_mode = 2
@@ -699,6 +712,19 @@ size_flags_horizontal = 3
 text = "Show army names on map"
 
 [node name="show_army_names_chk" type="CheckBox" parent="settings_menu/margin/vbox/tabs/Gameplay/show_army_names_row"]
+layout_mode = 2
+button_pressed = true
+text = "Enabled"
+
+[node name="show_move_range_row" type="HBoxContainer" parent="settings_menu/margin/vbox/tabs/Gameplay"]
+layout_mode = 2
+
+[node name="label" type="Label" parent="settings_menu/margin/vbox/tabs/Gameplay/show_move_range_row"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Show army move range on map"
+
+[node name="show_move_range_chk" type="CheckBox" parent="settings_menu/margin/vbox/tabs/Gameplay/show_move_range_row"]
 layout_mode = 2
 button_pressed = true
 text = "Enabled"

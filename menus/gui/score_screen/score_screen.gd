@@ -253,9 +253,9 @@ func _rebuild_unit_mix() -> void:
 			var n := int(units[uk])
 			if n <= 0:
 				continue
-			var line := Label.new()
-			line.text = "  %s: %d" % [GlobalUnits.unit_name(int(uk)), n]
-			_mix_box.add_child(line)
+			_mix_box.add_child(GlobalUnits.make_unit_text_row(
+				int(uk), "  %s: %d" % [GlobalUnits.unit_name(int(uk)), n], false
+			))
 
 
 func _on_graph_draw() -> void:
@@ -363,8 +363,24 @@ func _draw_unit_bars(plot: Rect2) -> void:
 		var y := plot.position.y + plot.size.y - h
 		var col := Color(0.55, 0.4, 0.2).lerp(Color(0.85, 0.7, 0.35), float(i) / float(maxi(entries.size() - 1, 1)))
 		_graph.draw_rect(Rect2(x + 4, y, maxf(8.0, bar_w - 8), h), col)
-		var label := GlobalUnits.unit_name(int(e["type"]))
-		_graph.draw_string(font, Vector2(x + 2, plot.position.y + plot.size.y + 14), label.left(4), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.18, 0.16, 0.14))
+		var ut := int(e["type"])
+		var icon := GlobalUnits.unit_icon_texture(ut)
+		var label := GlobalUnits.unit_name(ut)
+		if icon != null:
+			var iw := 24.0
+			var ix := x + (bar_w - iw) * 0.5
+			var iy := plot.position.y + plot.size.y + 2.0
+			_graph.draw_texture_rect(icon, Rect2(ix, iy, iw, iw), false)
+		else:
+			_graph.draw_string(
+				font,
+				Vector2(x + 2, plot.position.y + plot.size.y + 14),
+				label.left(4),
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				11,
+				Color(0.18, 0.16, 0.14)
+			)
 		i += 1
 
 

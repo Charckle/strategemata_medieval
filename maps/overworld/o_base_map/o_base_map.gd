@@ -394,6 +394,9 @@ func _init_weather() -> void:
 	var weather := get_node_or_null("WeatherObject")
 	if weather != null and weather.has_method("setup_and_roll"):
 		weather.setup_and_roll(int(season))
+	var season_tint := get_node_or_null("SeasonTint")
+	if season_tint != null and season_tint.has_method("setup_and_apply"):
+		season_tint.setup_and_apply(int(season))
 
 
 # --- Province focus ---------------------------------------------------------
@@ -6286,22 +6289,78 @@ func do_sortie(b: Node, spot: int, out_units: Array) -> void:
 	request_sortie_units.rpc_id(1, _building_key(b), spot, out_units, approach.x, approach.y)
 
 
-# Returns the nearest walkable, unoccupied approach cell next to a building node
-# that is also pathfindably connected to the rest of the map (i.e. not a pocket).
+# Free spawn cell near a building (sortie / deploy / levy / AI).
+# Prefers road → beside-road among free walkable cells within 2 orthogonal steps
+# of the footprint (approach + one beyond), nearest first. Falls back to the
+# first free path-connected approach cell. Skips boxed-in pockets.
 # Returns Vector2i(0x7FFFFFFF, 0x7FFFFFFF) when none exists.
 func get_free_approach_cell_for(b: Node) -> Vector2i:
+	var invalid := Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+	if b == null or pathfinding == null:
+		return invalid
 	var approach_cells = pathfinding.get_approach_cells(b)
 	var anchor := _get_any_connected_cell(b)
+	var footprint: Array = pathfinding.object_to_footprint.get(b, [])
+
+	var best_road := invalid
+	var best_road_d := 0x7FFFFFFF
+	var best_beside := invalid
+	var best_beside_d := 0x7FFFFFFF
+	if not footprint.is_empty():
+		var queue: Array = []
+		var seen := {}
+		for c in footprint:
+			seen[c] = true
+		for c in footprint:
+			for dir in pathfinding.EDGE_DIRS:
+				var n: Vector2i = c + dir
+				if seen.has(n):
+					continue
+				seen[n] = true
+				queue.append([n, 1])
+		var qi := 0
+		while qi < queue.size():
+			var cell: Vector2i = queue[qi][0]
+			var dist: int = int(queue[qi][1])
+			qi += 1
+			if pathfinding.walkable_cells.has(cell) and not pathfinding.occupancy.has(cell):
+				var connected := true
+				if anchor != invalid and cell != anchor \
+						and not pathfinding.has_path_from(cell, anchor):
+					connected = false
+				if connected:
+					if pathfinding.is_road_cell(cell):
+						if dist < best_road_d:
+							best_road_d = dist
+							best_road = cell
+					elif dist < best_beside_d:
+						for dir in pathfinding.EDGE_DIRS:
+							if pathfinding.is_road_cell(cell + dir):
+								best_beside_d = dist
+								best_beside = cell
+								break
+			if dist < 2:
+				for dir in pathfinding.EDGE_DIRS:
+					var n2: Vector2i = cell + dir
+					if seen.has(n2):
+						continue
+					seen[n2] = true
+					queue.append([n2, dist + 1])
+
+	if best_road != invalid:
+		return best_road
+	if best_beside != invalid:
+		return best_beside
+
+	# Fallback: first free approach cell (previous behavior).
 	for cell in approach_cells:
 		if pathfinding.occupancy.has(cell):
 			continue
-		# If we found an anchor elsewhere on the map, verify this cell can
-		# actually reach it through the AStar graph (not a boxed-in pocket).
-		if anchor != Vector2i(0x7FFFFFFF, 0x7FFFFFFF) and cell != anchor:
+		if anchor != invalid and cell != anchor:
 			if not pathfinding.has_path_from(cell, anchor):
 				continue
 		return cell
-	return Vector2i(0x7FFFFFFF, 0x7FFFFFFF)
+	return invalid
 
 
 ## BFS from a building's footprint for any free walkable cell (levy / emergency spawn).
@@ -8960,8 +9019,9 @@ func player_ended_turn(player_id):
 	expire_vip_trades_for_player(int(player_id))
 	refuse_pending_tourney_invite(int(player_id))
 	
-	# update player data
+	# update player data (clients); server also refreshes local label FX
 	update_player_data.rpc(players)
+	refresh_province_labels()
 	
 	# calculate if the client of the user has hotseat, and if it should switch to the next user
 	var peer_id = players[player_id].owner_peer_id
@@ -9000,7 +9060,16 @@ func get_unfinished_players_for_peer(peer_id:int) -> Array:
 
 @rpc("authority", "call_remote", "reliable")
 func update_player_data(player_data_):
+	var prev_ended := false
+	if players.has(my_pl_id):
+		prev_ended = bool(players[my_pl_id].ended_turn)
 	players = player_data_
+	var now_ended := false
+	if players.has(my_pl_id):
+		now_ended = bool(players[my_pl_id].ended_turn)
+	# Viewer-only province status FX hide when this lord ends their turn.
+	if prev_ended != now_ended:
+		refresh_province_labels()
 
 @rpc("authority", "call_local", "reliable")
 func switch_to_player(r_player_id):
@@ -9640,6 +9709,9 @@ func bump_season_i_turn():
 	var weather := get_node_or_null("WeatherObject")
 	if weather != null and weather.has_method("roll_weather_for_season"):
 		weather.roll_weather_for_season(int(season))
+	var season_tint := get_node_or_null("SeasonTint")
+	if season_tint != null and season_tint.has_method("apply_for_season"):
+		season_tint.apply_for_season(int(season), true)
 
 func refresh_all_settlement_visual_stages() -> void:
 	for prov in provinces.get_children():
@@ -11184,6 +11256,8 @@ func apply_set_holding_tax(province_id: String, level: int, player_id: int) -> v
 		prov.recalculate_marks_will_by_player()
 	if prov.has_method("recalculate_settlements_growth"):
 		prov.recalculate_settlements_growth()
+	if prov.has_method("refresh_map_label"):
+		prov.refresh_map_label()
 	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
 		gui_node.update_economy_menu(self)
 
@@ -11283,6 +11357,8 @@ func apply_set_holding_ration(province_id: String, level: int, player_id: int) -
 	prov.set_holding_ration(player_id, level)
 	if prov.has_method("recalculate_settlements_growth"):
 		prov.recalculate_settlements_growth()
+	if prov.has_method("refresh_map_label"):
+		prov.refresh_map_label()
 	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
 		gui_node.update_economy_menu(self)
 
@@ -11326,6 +11402,8 @@ func apply_set_holding_labor_category(
 	prov.set_labor_category(player_id, category, amount, int(season))
 	if prov.has_method("_update_material_will"):
 		prov._update_material_will()
+	if prov.has_method("refresh_map_label"):
+		prov.refresh_map_label()
 	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
 		gui_node.update_economy_menu(self)
 	if is_instance_valid(gui_node) and gui_node.has_method("refresh_open_economy_building_popup"):
@@ -11359,6 +11437,8 @@ func apply_set_holding_labor_priority(
 	prov.set_labor_priority(player_id, category, priority, int(season))
 	if prov.has_method("_update_material_will"):
 		prov._update_material_will()
+	if prov.has_method("refresh_map_label"):
+		prov.refresh_map_label()
 	if is_instance_valid(gui_node) and gui_node.has_method("update_economy_menu"):
 		gui_node.update_economy_menu(self)
 	if is_instance_valid(gui_node) and gui_node.has_method("refresh_open_economy_building_popup"):
@@ -11850,6 +11930,9 @@ func get_all_provinces_list_data(player_id: int) -> Array:
 		var income := 0
 		if int(prov.dejure) == player_id:
 			income = int(prov.resources["marks"]["will"].get(player_id, 0))
+		var fx := {"idle": false, "leave": false, "hunger": false}
+		if has_holding and prov.has_method("get_status_fx_flags"):
+			fx = prov.get_status_fx_flags(player_id)
 		var entry = {
 			"id": prov.name,
 			"name": display_name,
@@ -11857,6 +11940,9 @@ func get_all_provinces_list_data(player_id: int) -> Array:
 			"predicted_income": income,
 			"owned": prov.player_owner == player_id,
 			"holding": has_holding and int(prov.player_owner) != player_id,
+			"status_idle": bool(fx.get("idle", false)),
+			"status_leave": bool(fx.get("leave", false)),
+			"status_hunger": bool(fx.get("hunger", false)),
 		}
 		if prov.player_owner == player_id:
 			owned.append(entry)

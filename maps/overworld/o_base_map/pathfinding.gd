@@ -678,8 +678,19 @@ func clear_path_preview() -> void:
 func _update_reachable_overlay() -> void:
 	if reachable_overlay == null or selected_army == null:
 		return
+	if GlobalSet.settings.get("show_move_range", 1) == 0:
+		reachable_overlay.set_reachable({})
+		return
 	var from_cell := get_army_cell(selected_army)
 	reachable_overlay.set_reachable(get_reachable_cells(from_cell, selected_army.movement_left))
+
+
+func refresh_reachable_overlay() -> void:
+	if selected_army == null:
+		if reachable_overlay != null:
+			reachable_overlay.set_reachable({})
+		return
+	_update_reachable_overlay()
 
 
 func _unhandled_input(event: InputEvent) -> void:

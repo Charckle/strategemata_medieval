@@ -1,1 +1,15 @@
-{"audio":1,"master_volume":1,"sfx_volume":1,"music_volume":1,"music_enabled":1,"sfx_enabled":1,"fullscreen":0,"show_province_names":1,"show_army_names":1,"show_weather":1,"show_quick_guide":1}
+{
+	"audio": 1,
+	"master_volume": 1,
+	"sfx_volume": 1,
+	"music_volume": 1,
+	"music_enabled": 1,
+	"sfx_enabled": 1,
+	"fullscreen": 0,
+	"show_province_names": 1,
+	"show_army_names": 1,
+	"show_move_range": 1,
+	"show_weather": 1,
+	"show_season_tint": 1,
+	"show_quick_guide": 1
+}

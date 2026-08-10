@@ -550,6 +550,151 @@ func weapon_name(key: String) -> String:
 	return key.capitalize()
 
 
+# --- Kit icons (weapon stock + unit type) for menus ---
+const KIT_ICON_DIR := "res://sprites/overworld/army/weapons/"
+const KIT_ICON_BADGE_PX := 36
+const WEAPON_ICON_FILE := {
+	"maces": "macemen_32.png",
+	"pikes": "pikeman_32.png",
+	"bows": "archer_32.png",
+	"swords": "swordsman_32.png",
+	"crossbows": "crossbow_32.png",
+	"horses": "knight_32.png",
+	"armour": "knight_32.png",
+}
+const UNIT_ICON_FILE := {
+	UNIT_TYPE.PEASANT: "peasant_32.png",
+	UNIT_TYPE.MACEMEN: "macemen_32.png",
+	UNIT_TYPE.PIKEMEN: "pikeman_32.png",
+	UNIT_TYPE.ARCHER: "archer_32.png",
+	UNIT_TYPE.SWORDSMEN: "swordsman_32.png",
+	UNIT_TYPE.CROSSBOWMEN: "crossbow_32.png",
+	UNIT_TYPE.KNIGHTS: "knight_32.png",
+}
+
+var _kit_icon_tex_cache: Dictionary = {} # cache_key -> Texture2D (white disc + glyph)
+
+
+func weapon_icon_path(key: String) -> String:
+	var file := str(WEAPON_ICON_FILE.get(key, ""))
+	if file == "":
+		return ""
+	return KIT_ICON_DIR + file
+
+
+func unit_icon_path(type_: int) -> String:
+	var file := str(UNIT_ICON_FILE.get(type_, ""))
+	if file == "":
+		return ""
+	return KIT_ICON_DIR + file
+
+
+func weapon_icon_texture(key: String) -> Texture2D:
+	return _kit_icon_texture_for_path(weapon_icon_path(key))
+
+
+func unit_icon_texture(type_: int) -> Texture2D:
+	return _kit_icon_texture_for_path(unit_icon_path(type_))
+
+
+func _kit_icon_texture_for_path(path: String) -> Texture2D:
+	if path == "":
+		return null
+	if _kit_icon_tex_cache.has(path):
+		return _kit_icon_tex_cache[path]
+	if not ResourceLoader.exists(path):
+		return null
+	var src: Texture2D = load(path) as Texture2D
+	if src == null:
+		return null
+	var badged := _make_kit_badge_texture(src)
+	_kit_icon_tex_cache[path] = badged
+	return badged
+
+
+## Round white disc with the black kit glyph centered (readable on dark UI).
+func _make_kit_badge_texture(src: Texture2D) -> Texture2D:
+	var badge := KIT_ICON_BADGE_PX
+	var img := Image.create(badge, badge, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var cx := float(badge) * 0.5
+	var r := cx - 0.5
+	var r2 := r * r
+	for y in badge:
+		for x in badge:
+			var dx := float(x) + 0.5 - cx
+			var dy := float(y) + 0.5 - cx
+			if dx * dx + dy * dy <= r2:
+				img.set_pixel(x, y, Color.WHITE)
+	var src_img: Image = src.get_image()
+	if src_img != null:
+		if src_img.get_format() != Image.FORMAT_RGBA8:
+			src_img = src_img.duplicate()
+			src_img.convert(Image.FORMAT_RGBA8)
+		var ox := (badge - src_img.get_width()) / 2
+		var oy := (badge - src_img.get_height()) / 2
+		img.blend_rect(src_img, Rect2i(Vector2i.ZERO, src_img.get_size()), Vector2i(ox, oy))
+	return ImageTexture.create_from_image(img)
+
+
+func make_kit_icon_rect(tex: Texture2D) -> TextureRect:
+	var tr := TextureRect.new()
+	tr.custom_minimum_size = Vector2(KIT_ICON_BADGE_PX, KIT_ICON_BADGE_PX)
+	tr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tr.texture = tex
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return tr
+
+
+## Icon + label in an HBox. Returns the HBox (and the Label as meta "label").
+func make_weapon_text_row(key: String, text: String, expand_label: bool = true) -> HBoxContainer:
+	return _make_kit_text_row(weapon_icon_texture(key), text, expand_label)
+
+
+func make_unit_text_row(type_: int, text: String, expand_label: bool = true) -> HBoxContainer:
+	return _make_kit_text_row(unit_icon_texture(type_), text, expand_label)
+
+
+func _make_kit_text_row(tex: Texture2D, text: String, expand_label: bool) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if tex != null:
+		row.add_child(make_kit_icon_rect(tex))
+	var lbl := Label.new()
+	lbl.text = text
+	if expand_label:
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(lbl)
+	row.set_meta("label", lbl)
+	return row
+
+
+func apply_weapon_button_icon(btn: Button, key: String) -> void:
+	if btn == null:
+		return
+	var tex := weapon_icon_texture(key)
+	if tex == null:
+		return
+	btn.icon = tex
+	btn.expand_icon = false
+	btn.add_theme_constant_override("icon_max_width", KIT_ICON_BADGE_PX)
+
+
+func apply_unit_button_icon(btn: Button, type_: int) -> void:
+	if btn == null:
+		return
+	var tex := unit_icon_texture(type_)
+	if tex == null:
+		return
+	btn.icon = tex
+	btn.expand_icon = false
+	btn.add_theme_constant_override("icon_max_width", KIT_ICON_BADGE_PX)
+
+
 func blacksmith_recipe(weapon_key: String) -> Dictionary:
 	return BLACKSMITH_RECIPES.get(weapon_key, {}).duplicate()
 

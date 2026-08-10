@@ -1,0 +1,238 @@
+[gd_scene format=4 uid="uid://db5ayn2ivfhmj"]
+
+[ext_resource type="PackedScene" uid="uid://6ytluejirihy" path="res://maps/overworld/o_base_map/o_base_map.tscn" id="1_base"]
+[ext_resource type="TileSet" uid="uid://dp6okpca82gwy" path="res://sprites/overworld/map_tiles/summer/summer_set.tres" id="2_summer"]
+[ext_resource type="TileSet" uid="uid://crqsn33rvp36w" path="res://sprites/overworld/map_tiles/summer/road/road_set.tres" id="3_road"]
+[ext_resource type="PackedScene" uid="uid://hoxsoa8bteah" path="res://objects/overworld/province/province.tscn" id="4_nnujk"]
+[ext_resource type="Script" uid="uid://dtmcg6jhlkpsm" path="res://objects/overworld/province/province.gd" id="5_oec4o"]
+[ext_resource type="PackedScene" uid="uid://bpe0y7utvewqk" path="res://objects/overworld/town/town.tscn" id="6_f05eh"]
+[ext_resource type="Script" uid="uid://bcxski0n682ps" path="res://objects/overworld/town/town.gd" id="7_i00ph"]
+[ext_resource type="PackedScene" uid="uid://xb32olvqv02n" path="res://objects/overworld/castle/castle.tscn" id="8_xh8lq"]
+[ext_resource type="Script" uid="uid://cty56xh0e1l4l" path="res://objects/overworld/castle/castle.gd" id="9_75vwf"]
+
+[sub_resource type="LabelSettings" id="LabelSettings_name"]
+outline_size = 6
+outline_color = Color(0, 0, 0, 1)
+
+[sub_resource type="LabelSettings" id="LabelSettings_status"]
+font_size = 12
+outline_size = 5
+outline_color = Color(0, 0, 0, 1)
+
+[sub_resource type="LabelSettings" id="LabelSettings_owner"]
+font_size = 13
+outline_size = 5
+outline_color = Color(0, 0, 0, 1)
+
+[sub_resource type="ViewportTexture" id="ViewportTexture_ua2x6"]
+viewport_path = NodePath("CloudShadowsViewport")
+
+[node name="OBaseMap" unique_id=1581393454 instance=ExtResource("1_base")]
+
+[node name="base_layer" type="TileMapLayer" parent="tilemap" parent_id_path=PackedInt32Array(2009527472) index="0" unique_id=600847857]
+
+[node name="ground_01" type="TileMapLayer" parent="tilemap" parent_id_path=PackedInt32Array(2009527472) index="1" unique_id=949744322]
+tile_map_data = PackedByteArray("AAAjADsAAAACAAYAAAAjADoAAAACAAYAAAAjADkAAAACAAYAAAAkADkAAAACAAYAAAAkADgAAAAAAAAAAAAkADoAAAACAAYAAAAkADsAAAACAAYAAAAlADsAAAAAAAAAAAAlADoAAAAAAAAAAAAlADkAAAAAAAAAAAAlADwAAAAAAAAAAAAlAD0AAAAAAAAAAAAmAD0AAAAAAAAAAAAnADwAAAAAAAAAAAAnADsAAAAAAAAAAAAnADoAAAAAAAAAAAAnADkAAAAAAAAAAAAmADkAAAAAAAAAAAAmADgAAAAAAAAAAAAmADcAAAAAAAAAAAAlADcAAAAAAAAAAAAlADYAAAAAAAAAAAAkADYAAAAAAAAAAAAkADUAAAAAAAAAAAAjADUAAAAAAAAAAAAjADYAAAAAAAAAAAAiADcAAAAAAAAAAAAiADgAAAACAAYAAAAjADgAAAACAAYAAAAkADwAAAACAAYAAAAmADsAAAAAAAAAAAAmADwAAAAAAAAAAAAmADoAAAAAAAAAAAAlADgAAAAAAAAAAAAkADcAAAAAAAAAAAAjADcAAAAAAAAAAAAjADQAAAAAAAAAAAAiADQAAAAAAAAAAAAiADUAAAAAAAAAAAAiADYAAAAAAAAAAAAhADQAAAAAAAAAAAAhADUAAAAAAAAAAAAhADYAAAAAAAAAAAAhADcAAAAAAAAAAAAiADkAAAACAAYAAAAoADwAAAAAAAAAAAAoADsAAAAAAAAAAAAnAD0AAAAAAAAAAAAoAD0AAAAAAAAAAAAoADoAAAAAAAAAAAAoADkAAAAAAAAAAAAoADgAAAAAAAAAAAAoADcAAAAAAAAAAAAoADYAAAAAAAAAAAAnADYAAAAAAAAAAAAnADUAAAAAAAAAAAAnADQAAAAAAAAAAAAmADQAAAAAAAAAAAAmADMAAAAAAAAAAAAlADMAAAAAAAAAAAAlADIAAAAAAAAAAAAkADIAAAAAAAAAAAAjADIAAAAAAAAAAAAiADIAAAAAAAAAAAAiADMAAAAAAAAAAAApADwAAAAAAAAAAAAqADwAAAAAAAAAAAAqADsAAAAAAAAAAAAqADoAAAAAAAAAAAAqADkAAAAAAAAAAAApADkAAAAAAAAAAAApADgAAAAAAAAAAAApADcAAAAAAAAAAAAoADUAAAAAAAAAAAAlADUAAAAAAAAAAAAnADgAAAAAAAAAAAAnADcAAAAAAAAAAAAmADYAAAAAAAAAAAAmADUAAAAAAAAAAAAlADQAAAAAAAAAAAAkADQAAAAAAAAAAAAkADMAAAAAAAAAAAApADoAAAAAAAAAAAApADsAAAAAAAAAAAAjADMAAAAAAAAAAAAmAD4AAAAAAAAAAAAnAD4AAAAAAAAAAAAnAD8AAAAAAAAAAAAoAD8AAAAAAAAAAAAoAEAAAAAAAAAAAAAnAEAAAAAAAAAAAAAmAEAAAAAAAAAAAAAmAD8AAAAAAAAAAAAlAD8AAAAAAAAAAAAlAD4AAAAAAAAAAAAkAD4AAAACAAYAAAAkAD0AAAACAAYAAAAjAD0AAAACAAYAAAAjADwAAAACAAYAAAAiADwAAAACAAYAAAAiADsAAAACAAYAAAAhADsAAAACAAYAAAAhADoAAAACAAYAAAAhADkAAAACAAYAAAAiADoAAAACAAYAAAAjAD4AAAACAAYAAAAjAD8AAAACAAYAAAAkAD8AAAACAAYAAAAhADgAAAACAAYAAAAgADgAAAACAAYAAAAgADcAAAAAAAAAAAApAEAAAAAAAAAAAAApAEEAAAAAAAAAAAAqAEEAAAAAAAAAAAAqAEAAAAAAAAAAAAAqAD8AAAAAAAAAAAAqAD4AAAAAAAAAAAApAD4AAAAAAAAAAAApAD8AAAAAAAAAAAAoAD4AAAAAAAAAAAAqAD0AAAAAAAAAAAApAD0AAAAAAAAAAAAgADUAAAAAAAAAAAAgADYAAAAAAAAAAAArADsAAAAAAAAAAAArADoAAAAAAAAAAAArADkAAAAAAAAAAAArADgAAAAAAAAAAAArADcAAAACAAYAAAArADYAAAACAAYAAAAqADYAAAAAAAAAAAAqADUAAAAAAAAAAAApADUAAAAAAAAAAAArAEAAAAAAAAAAAAArAD8AAAAAAAAAAAArAD4AAAAAAAAAAAArAD0AAAAAAAAAAAArADwAAAAAAAAAAAArAEEAAAACAAYAAAAsAEEAAAACAAYAAAAsAEAAAAACAAYAAAAsAD8AAAACAAYAAAAsAD4AAAACAAYAAAAsAD0AAAACAAYAAAAsADwAAAACAAYAAAAsADsAAAACAAYAAAAsADoAAAAAAAAAAAAsADkAAAAAAAAAAAAqADgAAAAAAAAAAAApADYAAAAAAAAAAAAtADsAAAAAAAAAAAAtADoAAAAAAAAAAAAtADkAAAAAAAAAAAAtADgAAAACAAYAAAAtADcAAAACAAYAAAAtADYAAAACAAYAAAAsADYAAAACAAYAAAAsADgAAAACAAYAAAAqADcAAAAAAAAAAAAcACsAAAAAAAAAAAAcACwAAAAAAAAAAAAcAC0AAAAAAAAAAAAcAC4AAAAAAAAAAAAcAC8AAAAAAAAAAAAcADAAAAAAAAAAAAAcADEAAAAAAAAAAAAcADIAAAAAAAAAAAAcADMAAAAAAAAAAAAcADQAAAAAAAAAAAAcADUAAAAAAAAAAAAcADYAAAAAAAAAAAAcADcAAAAAAAAAAAAcADgAAAAAAAAAAAAcADkAAAAAAAAAAAAcADoAAAAAAAAAAAAcADsAAAAAAAAAAAAcADwAAAAAAAAAAAAcAD0AAAAAAAAAAAAcAD4AAAAAAAAAAAAcAD8AAAAAAAAAAAAdACsAAAAAAAAAAAAdACwAAAAAAAAAAAAdAC0AAAAAAAAAAAAdAC4AAAAAAAAAAAAdAC8AAAAAAAAAAAAdADAAAAAAAAAAAAAdADEAAAAAAAAAAAAdADIAAAAAAAAAAAAdADMAAAAAAAAAAAAdADQAAAAAAAAAAAAdADUAAAAAAAAAAAAdADYAAAAAAAAAAAAdADcAAAAAAAAAAAAdADgAAAAAAAAAAAAdADkAAAAAAAAAAAAdADoAAAAAAAAAAAAdADsAAAAAAAAAAAAdADwAAAAAAAAAAAAdAD0AAAAAAAAAAAAdAD4AAAAAAAAAAAAdAD8AAAAAAAAAAAAeACsAAAAAAAAAAAAeACwAAAAAAAAAAAAeAC0AAAAAAAAAAAAeAC4AAAAAAAAAAAAeAC8AAAAAAAAAAAAeADAAAAAAAAAAAAAeADEAAAAAAAAAAAAeADIAAAAAAAAAAAAeADMAAAAAAAAAAAAeADQAAAAAAAAAAAAeADUAAAAAAAAAAAAeADYAAAAAAAAAAAAeADcAAAAAAAAAAAAeADgAAAAAAAAAAAAeADkAAAAAAAAAAAAeADoAAAACAAYAAAAeADsAAAACAAYAAAAeADwAAAAAAAAAAAAeAD0AAAAAAAAAAAAeAD4AAAAAAAAAAAAeAD8AAAAAAAAAAAAfACsAAAAAAAAAAAAfACwAAAAAAAAAAAAfAC0AAAAAAAAAAAAfAC4AAAAAAAAAAAAfAC8AAAAAAAAAAAAfADAAAAAAAAAAAAAfADEAAAAAAAAAAAAfADIAAAAAAAAAAAAfADMAAAAAAAAAAAAfADQAAAAAAAAAAAAfADUAAAAAAAAAAAAfADYAAAACAAYAAAAfADcAAAACAAYAAAAfADgAAAACAAYAAAAfADkAAAACAAYAAAAfADoAAAACAAYAAAAfADsAAAACAAYAAAAfADwAAAACAAYAAAAfAD0AAAAAAAAAAAAfAD4AAAAAAAAAAAAfAD8AAAAAAAAAAAAgACsAAAAAAAAAAAAgACwAAAAAAAAAAAAgAC0AAAAAAAAAAAAgAC4AAAAAAAAAAAAgAC8AAAAAAAAAAAAgADAAAAAAAAAAAAAgADEAAAAAAAAAAAAgADIAAAAAAAAAAAAgADMAAAAAAAAAAAAgADQAAAAAAAAAAAAgADkAAAACAAYAAAAgADoAAAACAAYAAAAgADsAAAAAAAAAAAAgADwAAAACAAYAAAAgAD0AAAACAAYAAAAgAD4AAAAAAAAAAAAgAD8AAAAAAAAAAAAhACsAAAAAAAAAAAAhACwAAAAAAAAAAAAhAC0AAAAAAAAAAAAhAC4AAAAAAAAAAAAhAC8AAAAAAAAAAAAhADAAAAAAAAAAAAAhADEAAAAAAAAAAAAhADIAAAAAAAAAAAAhADMAAAAAAAAAAAAhADwAAAACAAYAAAAhAD0AAAACAAYAAAAhAD4AAAACAAYAAAAhAD8AAAACAAYAAAAiACsAAAACAAYAAAAiACwAAAACAAYAAAAiAC0AAAAAAAAAAAAiAC4AAAAAAAAAAAAiAC8AAAAAAAAAAAAiADAAAAAAAAAAAAAiADEAAAAAAAAAAAAiAD0AAAACAAYAAAAiAD4AAAACAAYAAAAiAD8AAAACAAYAAAAjACsAAAACAAYAAAAjACwAAAACAAYAAAAjAC0AAAAAAAAAAAAjAC4AAAAAAAAAAAAjAC8AAAAAAAAAAAAjADAAAAAAAAAAAAAjADEAAAAAAAAAAAAkACsAAAAAAAAAAAAkACwAAAACAAYAAAAkAC0AAAAAAAAAAAAkAC4AAAAAAAAAAAAkAC8AAAAAAAAAAAAkADAAAAAAAAAAAAAkADEAAAAAAAAAAAAlACsAAAACAAYAAAAlACwAAAACAAYAAAAlAC0AAAAAAAAAAAAlAC4AAAAAAAAAAAAlAC8AAAAAAAAAAAAlADAAAAAAAAAAAAAlADEAAAAAAAAAAAAmACsAAAACAAYAAAAmACwAAAACAAYAAAAmAC0AAAAAAAAAAAAmAC4AAAAAAAAAAAAmAC8AAAAAAAAAAAAmADAAAAAAAAAAAAAmADEAAAAAAAAAAAAmADIAAAAAAAAAAAAnACsAAAACAAYAAAAnACwAAAACAAYAAAAnAC0AAAAAAAAAAAAnAC4AAAAAAAAAAAAnAC8AAAAAAAAAAAAnADAAAAAAAAAAAAAnADEAAAAAAAAAAAAnADIAAAAAAAAAAAAnADMAAAAAAAAAAAAoACsAAAACAAYAAAAoACwAAAACAAYAAAAoAC0AAAAAAAAAAAAoAC4AAAAAAAAAAAAoAC8AAAAAAAAAAAAoADAAAAAAAAAAAAAoADEAAAAAAAAAAAAoADIAAAAAAAAAAAAoADMAAAAAAAAAAAAoADQAAAAAAAAAAAApACsAAAACAAYAAAApACwAAAACAAYAAAApAC0AAAACAAYAAAApAC4AAAAAAAAAAAApAC8AAAAAAAAAAAApADAAAAAAAAAAAAApADEAAAAAAAAAAAApADIAAAAAAAAAAAApADMAAAAAAAAAAAApADQAAAAAAAAAAAAqACsAAAACAAYAAAAqACwAAAACAAYAAAAqAC0AAAAAAAAAAAAqAC4AAAAAAAAAAAAqAC8AAAAAAAAAAAAqADAAAAAAAAAAAAAqADEAAAAAAAAAAAAqADIAAAAAAAAAAAAqADMAAAAAAAAAAAAqADQAAAAAAAAAAAArACsAAAAAAAAAAAArACwAAAACAAYAAAArAC0AAAACAAYAAAArAC4AAAAAAAAAAAArAC8AAAAAAAAAAAArADAAAAAAAAAAAAArADEAAAAAAAAAAAArADIAAAAAAAAAAAArADMAAAAAAAAAAAArADQAAAAAAAAAAAArADUAAAACAAYAAAAsACsAAAAAAAAAAAAsACwAAAAAAAAAAAAsAC0AAAACAAYAAAAsAC4AAAAAAAAAAAAsAC8AAAAAAAAAAAAsADAAAAAAAAAAAAAsADEAAAACAAYAAAAsADIAAAACAAYAAAAsADMAAAACAAYAAAAsADQAAAACAAYAAAAsADUAAAACAAYAAAAsADcAAAACAAYAAAAtACsAAAAAAAAAAAAtACwAAAAAAAAAAAAtAC0AAAAAAAAAAAAtAC4AAAAAAAAAAAAtAC8AAAAAAAAAAAAtADAAAAAAAAAAAAAtADEAAAACAAYAAAAtADIAAAACAAYAAAAtADMAAAACAAYAAAAtADQAAAACAAYAAAAtADUAAAACAAYAAAAtADwAAAACAAYAAAAtAD0AAAACAAYAAAAtAD4AAAAAAAAAAAAtAD8AAAAAAAAAAAAuACsAAAAAAAAAAAAuACwAAAAAAAAAAAAuAC0AAAAAAAAAAAAuAC4AAAAAAAAAAAAuAC8AAAAAAAAAAAAuADAAAAAAAAAAAAAuADEAAAAAAAAAAAAuADIAAAACAAYAAAAuADMAAAACAAYAAAAuADQAAAACAAYAAAAuADUAAAACAAYAAAAuADYAAAACAAYAAAAuADcAAAACAAYAAAAuADgAAAAAAAAAAAAuADkAAAAAAAAAAAAuADoAAAAAAAAAAAAuADsAAAAAAAAAAAAuADwAAAAAAAAAAAAuAD0AAAACAAYAAAAuAD4AAAACAAYAAAAuAD8AAAAAAAAAAAAvACsAAAAAAAAAAAAvACwAAAAAAAAAAAAvAC0AAAAAAAAAAAAvAC4AAAAAAAAAAAAvAC8AAAAAAAAAAAAvADAAAAAAAAAAAAAvADEAAAAAAAAAAAAvADIAAAAAAAAAAAAvADMAAAACAAYAAAAvADQAAAACAAYAAAAvADUAAAACAAYAAAAvADYAAAACAAYAAAAvADcAAAACAAYAAAAvADgAAAAAAAAAAAAvADkAAAAAAAAAAAAvADoAAAAAAAAAAAAvADsAAAAAAAAAAAAvADwAAAAAAAAAAAAvAD0AAAAAAAAAAAAvAD4AAAACAAYAAAAvAD8AAAAAAAAAAAAbADkAAAAAAAAAAAAbADoAAAAAAAAAAAAbADsAAAAAAAAAAAAbADwAAAAAAAAAAAAbAD0AAAAAAAAAAAAbAD4AAAAAAAAAAAAbAD8AAAAAAAAAAAAbAEAAAAAAAAAAAAAbAEEAAAAAAAAAAAAbAEIAAAAAAAAAAAAcAEAAAAAAAAAAAAAcAEEAAAAAAAAAAAAcAEIAAAAAAAAAAAAdAEAAAAAAAAAAAAAdAEEAAAAAAAAAAAAdAEIAAAAAAAAAAAAeAEAAAAAAAAAAAAAeAEEAAAAAAAAAAAAeAEIAAAAAAAAAAAAfAEAAAAAAAAAAAAAfAEEAAAAAAAAAAAAfAEIAAAAAAAAAAAAgAEAAAAAAAAAAAAAgAEEAAAAAAAAAAAAgAEIAAAAAAAAAAAAhAEAAAAAAAAAAAAAhAEEAAAAAAAAAAAAhAEIAAAAAAAAAAAAiAEAAAAAAAAAAAAAiAEEAAAAAAAAAAAAiAEIAAAAAAAAAAAAjAEAAAAACAAYAAAAjAEEAAAACAAYAAAAjAEIAAAACAAYAAAAkAEAAAAACAAYAAAAkAEEAAAAAAAAAAAAkAEIAAAACAAYAAAAlAEAAAAAAAAAAAAAlAEEAAAAAAAAAAAAlAEIAAAAAAAAAAAAmAEEAAAAAAAAAAAAmAEIAAAAAAAAAAAAnAEEAAAAAAAAAAAAnAEIAAAAAAAAAAAAoAEEAAAAAAAAAAAAoAEIAAAAAAAAAAAApAEIAAAAAAAAAAAAqAEIAAAAAAAAAAAArAEIAAAACAAYAAAAsAEIAAAAAAAAAAAAtAEAAAAAAAAAAAAAtAEEAAAAAAAAAAAAtAEIAAAAAAAAAAAAuAEAAAAAAAAAAAAAuAEEAAAAAAAAAAAAuAEIAAAAAAAAAAAAvAEAAAAAAAAAAAAAvAEEAAAAAAAAAAAAvAEIAAAAAAAAAAAAwADkAAAAAAAAAAAAwADoAAAAAAAAAAAAwADsAAAAAAAAAAAAwADwAAAAAAAAAAAAwAD0AAAAAAAAAAAAwAD4AAAACAAYAAAAwAD8AAAACAAYAAAAwAEAAAAAAAAAAAAAwAEEAAAAAAAAAAAAwAEIAAAAAAAAAAAAxADkAAAAAAAAAAAAxADoAAAAAAAAAAAAxADsAAAAAAAAAAAAxADwAAAAAAAAAAAAxAD0AAAAAAAAAAAAxAD4AAAAAAAAAAAAxAD8AAAACAAYAAAAxAEAAAAAAAAAAAAAxAEEAAAAAAAAAAAAxAEIAAAAAAAAAAAAwADQAAAACAAYAAAAwADMAAAACAAYAAAAwADIAAAACAAYAAAAwADUAAAACAAYAAAApACoAAAACAAYAAAAoACoAAAACAAYAAAAnACoAAAACAAYAAAAmACoAAAACAAYAAAAlACoAAAACAAYAAAAkACoAAAACAAYAAAAZAC0AAAAAAAAAAAAZAC4AAAAAAAAAAAAaAC4AAAAAAAAAAAAVADEAAAAAAAAAAAAaADQAAAAAAAAAAAAfACoAAAAAAAAAAAA=")
+tile_set = ExtResource("2_summer")
+
+[node name="roads" type="TileMapLayer" parent="tilemap" parent_id_path=PackedInt32Array(2009527472) index="2" unique_id=2115932107]
+tile_set = ExtResource("3_road")
+
+[node name="Province" parent="provinces" parent_id_path=PackedInt32Array(1550993670) index="0" unique_id=496899077 instance=ExtResource("4_nnujk")]
+script = ExtResource("5_oec4o")
+p_name = "Ljubljana"
+player_owner = 0
+
+[node name="Town" type="Node2D" parent="provinces/Province/settlements" parent_id_path=PackedInt32Array(496899077, 1960527604) index="0" unique_id=772232724 instance=ExtResource("6_f05eh")]
+position = Vector2(-576, 1456)
+script = ExtResource("7_i00ph")
+player_owner = 0
+
+[node name="Castle" type="Node2D" parent="provinces/Province/defense" parent_id_path=PackedInt32Array(496899077, 1932121289) index="0" unique_id=938396409 instance=ExtResource("8_xh8lq")]
+position = Vector2(-544, 1536)
+script = ExtResource("9_75vwf")
+player_owner = 0
+
+[node name="map_labels" parent="provinces/Province" index="4" unique_id=1283746501]
+visible = false
+z_index = 10
+
+[node name="name_label" parent="provinces/Province/map_labels" index="0" unique_id=1283746502]
+label_settings = SubResource("LabelSettings_name")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="status_label" parent="provinces/Province/map_labels" index="1" unique_id=1283746503]
+label_settings = SubResource("LabelSettings_status")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="owner_label" parent="provinces/Province/map_labels" index="2" unique_id=1283746504]
+label_settings = SubResource("LabelSettings_owner")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Province2" parent="provinces" parent_id_path=PackedInt32Array(1550993670) index="1" unique_id=1523074433 instance=ExtResource("4_nnujk")]
+script = ExtResource("5_oec4o")
+p_name = "Kranj"
+player_owner = 0
+
+[node name="Town" type="Node2D" parent="provinces/Province2/settlements" parent_id_path=PackedInt32Array(1523074433, 1960527604) index="0" unique_id=467007895 instance=ExtResource("6_f05eh")]
+position = Vector2(-928, 1120)
+script = ExtResource("7_i00ph")
+player_owner = 0
+
+[node name="Castle" type="Node2D" parent="provinces/Province2/defense" parent_id_path=PackedInt32Array(1523074433, 1932121289) index="0" unique_id=1500138860 instance=ExtResource("8_xh8lq")]
+position = Vector2(-864, 1248)
+script = ExtResource("9_75vwf")
+player_owner = 0
+
+[node name="map_labels" parent="provinces/Province2" index="4" unique_id=1283746501]
+visible = false
+z_index = 10
+
+[node name="name_label" parent="provinces/Province2/map_labels" index="0" unique_id=1283746502]
+label_settings = SubResource("LabelSettings_name")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="status_label" parent="provinces/Province2/map_labels" index="1" unique_id=1283746503]
+label_settings = SubResource("LabelSettings_status")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="owner_label" parent="provinces/Province2/map_labels" index="2" unique_id=1283746504]
+label_settings = SubResource("LabelSettings_owner")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Province3" parent="provinces" parent_id_path=PackedInt32Array(1550993670) index="2" unique_id=1834861932 instance=ExtResource("4_nnujk")]
+script = ExtResource("5_oec4o")
+p_name = "Kamnik"
+player_owner = 0
+
+[node name="Town" type="Node2D" parent="provinces/Province3/settlements" parent_id_path=PackedInt32Array(1834861932, 1960527604) index="0" unique_id=821567531 instance=ExtResource("6_f05eh")]
+position = Vector2(-384, 1168)
+script = ExtResource("7_i00ph")
+player_owner = 0
+
+[node name="Castle" type="Node2D" parent="provinces/Province3/defense" parent_id_path=PackedInt32Array(1834861932, 1932121289) index="0" unique_id=1900217780 instance=ExtResource("8_xh8lq")]
+position = Vector2(-224, 1120)
+script = ExtResource("9_75vwf")
+player_owner = 0
+
+[node name="map_labels" parent="provinces/Province3" index="4" unique_id=1283746501]
+visible = false
+z_index = 10
+
+[node name="name_label" parent="provinces/Province3/map_labels" index="0" unique_id=1283746502]
+label_settings = SubResource("LabelSettings_name")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="status_label" parent="provinces/Province3/map_labels" index="1" unique_id=1283746503]
+label_settings = SubResource("LabelSettings_status")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="owner_label" parent="provinces/Province3/map_labels" index="2" unique_id=1283746504]
+label_settings = SubResource("LabelSettings_owner")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Province4" parent="provinces" parent_id_path=PackedInt32Array(1550993670) index="3" unique_id=1414835405 instance=ExtResource("4_nnujk")]
+script = ExtResource("5_oec4o")
+p_name = "Vegonj"
+player_owner = 0
+
+[node name="Town" type="Node2D" parent="provinces/Province4/settlements" parent_id_path=PackedInt32Array(1414835405, 1960527604) index="0" unique_id=2074772816 instance=ExtResource("6_f05eh")]
+position = Vector2(-1472, 848)
+script = ExtResource("7_i00ph")
+player_owner = 0
+
+[node name="map_labels" parent="provinces/Province4" index="4" unique_id=1283746501]
+visible = false
+z_index = 10
+
+[node name="name_label" parent="provinces/Province4/map_labels" index="0" unique_id=1283746502]
+label_settings = SubResource("LabelSettings_name")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="status_label" parent="provinces/Province4/map_labels" index="1" unique_id=1283746503]
+label_settings = SubResource("LabelSettings_status")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="owner_label" parent="provinces/Province4/map_labels" index="2" unique_id=1283746504]
+label_settings = SubResource("LabelSettings_owner")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Province5" parent="provinces" parent_id_path=PackedInt32Array(1550993670) index="4" unique_id=1219820516 instance=ExtResource("4_nnujk")]
+script = ExtResource("5_oec4o")
+p_name = "Postojna"
+player_owner = 0
+
+[node name="Town" type="Node2D" parent="provinces/Province5/settlements" parent_id_path=PackedInt32Array(1219820516, 1960527604) index="0" unique_id=518296771 instance=ExtResource("6_f05eh")]
+position = Vector2(-1568, 2048)
+script = ExtResource("7_i00ph")
+player_owner = 0
+
+[node name="map_labels" parent="provinces/Province5" index="4" unique_id=1283746501]
+visible = false
+z_index = 10
+
+[node name="name_label" parent="provinces/Province5/map_labels" index="0" unique_id=1283746502]
+label_settings = SubResource("LabelSettings_name")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="status_label" parent="provinces/Province5/map_labels" index="1" unique_id=1283746503]
+label_settings = SubResource("LabelSettings_status")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="owner_label" parent="provinces/Province5/map_labels" index="2" unique_id=1283746504]
+label_settings = SubResource("LabelSettings_owner")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Province6" parent="provinces" parent_id_path=PackedInt32Array(1550993670) index="5" unique_id=308050490 instance=ExtResource("4_nnujk")]
+script = ExtResource("5_oec4o")
+p_name = "Planina"
+player_owner = 0
+
+[node name="Town" type="Node2D" parent="provinces/Province6/settlements" parent_id_path=PackedInt32Array(308050490, 1960527604) index="0" unique_id=564966087 instance=ExtResource("6_f05eh")]
+position = Vector2(-1408, 1808)
+script = ExtResource("7_i00ph")
+player_owner = 0
+
+[node name="map_labels" parent="provinces/Province6" index="4" unique_id=1283746501]
+visible = false
+z_index = 10
+
+[node name="name_label" parent="provinces/Province6/map_labels" index="0" unique_id=1283746502]
+label_settings = SubResource("LabelSettings_name")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="status_label" parent="provinces/Province6/map_labels" index="1" unique_id=1283746503]
+label_settings = SubResource("LabelSettings_status")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="owner_label" parent="provinces/Province6/map_labels" index="2" unique_id=1283746504]
+label_settings = SubResource("LabelSettings_owner")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="CloudShadows" parent="." index="13"]
+texture = SubResource("ViewportTexture_ua2x6")
+
+[editable path="provinces/Province"]
+[editable path="provinces/Province2"]
+[editable path="provinces/Province3"]
+[editable path="provinces/Province4"]
+[editable path="provinces/Province5"]
+[editable path="provinces/Province6"]

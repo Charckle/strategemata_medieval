@@ -45,9 +45,13 @@ var holdings: Dictionary = {}
 
 const MAP_LABEL_LINE_HEIGHT := 18.0
 const MAP_SHIELD_SIZE := 18
+const PROVINCE_STATUS_FX_SCRIPT := preload(
+	"res://objects/overworld/othr/province_status_fx/province_status_fx.gd"
+)
 
 var _label_center := Vector2.ZERO
 var _owner_shield: Sprite2D = null
+var _status_fx: Control = null
 
 func _ready() -> void:
 	create_de_resorce_dict()
@@ -223,7 +227,55 @@ func refresh_map_label() -> void:
 		_status_label.modulate = _get_status_color_for_name(status_text)
 	_owner_label.text = _format_owner_line(players_dict)
 	_refresh_owner_shield(players_dict)
+	refresh_status_fx()
 	_layout_map_labels()
+
+
+## Raw holding status flags for a player (no ownership / turn filter).
+func get_status_fx_flags(player_id: int) -> Dictionary:
+	if player_id < 0 or not player_has_holding(player_id):
+		return {"idle": false, "leave": false, "hunger": false}
+	var pop := owned_settlement_population(player_id)
+	var assigned := total_labor_assigned(player_id)
+	var ration_info := preview_holding_rations(player_id)
+	return {
+		"idle": (pop - assigned) > 0,
+		"leave": bool(ensure_holding(player_id).get("civilian_left_last_season", false)),
+		"hunger": not bool(ration_info.get("affordable", true)),
+	}
+
+
+## Viewer-only icons to the right of the province name (free labor / leave / hunger).
+func refresh_status_fx() -> void:
+	_ensure_status_fx()
+	if _status_fx == null or base_map == null:
+		return
+	var viewer_id := NO_DEFACTO
+	if base_map.get("my_pl_id") != null:
+		viewer_id = int(base_map.my_pl_id)
+	var idle := false
+	var leave := false
+	var hunger := false
+	if viewer_id >= 0 and has_dejure(viewer_id):
+		var players_dict: Dictionary = base_map.players if base_map.get("players") else {}
+		var their_turn := true
+		if players_dict.has(viewer_id):
+			their_turn = not bool(players_dict[viewer_id].ended_turn)
+		if their_turn:
+			var flags := get_status_fx_flags(viewer_id)
+			idle = bool(flags.get("idle", false))
+			leave = bool(flags.get("leave", false))
+			hunger = bool(flags.get("hunger", false))
+	_status_fx.set_flags(idle, leave, hunger)
+
+
+func _ensure_status_fx() -> void:
+	if _status_fx != null and is_instance_valid(_status_fx):
+		return
+	_status_fx = Control.new()
+	_status_fx.name = "status_fx"
+	_status_fx.set_script(PROVINCE_STATUS_FX_SCRIPT)
+	map_labels.add_child(_status_fx)
 
 
 func set_map_label_alpha(alpha: float) -> void:
@@ -293,25 +345,45 @@ func _get_status_color_for_name(status_text: String) -> Color:
 
 
 func _layout_map_labels() -> void:
-	# Shield left of province name; status / owner lines below. Group centered on origin.
+	# Shield left of province name; status FX right of name; status / owner below.
 	var lines: Array[Label] = [_name_label]
 	if _status_label.visible:
 		lines.append(_status_label)
 	lines.append(_owner_label)
+	var fx_active: bool = (
+		_status_fx != null
+		and _status_fx.has_method("has_active")
+		and bool(_status_fx.has_active())
+	)
+	var fx_w := 0.0
+	var fx_h := 0.0
+	if fx_active:
+		fx_w = float(_status_fx.row_width()) if _status_fx.has_method("row_width") else _status_fx.size.x
+		fx_h = float(_status_fx.row_height()) if _status_fx.has_method("row_height") else 14.0
+	var fx_gap := 4.0 if fx_active else 0.0
 	var total_h := MAP_LABEL_LINE_HEIGHT * lines.size()
 	var y := -total_h / 2.0
 	var name_y := y
 	var name_w := maxf(_name_label.get_minimum_size().x, float(_name_label.text.length()) * 7.0)
 	var shield_w := float(MAP_SHIELD_SIZE) if (_owner_shield != null and _owner_shield.visible) else 0.0
 	var gap := 4.0 if shield_w > 0.0 else 0.0
-	var row_w := shield_w + gap + name_w
+	var row_w := shield_w + gap + name_w + fx_gap + fx_w
 	var row_left := -row_w * 0.5
 	if _owner_shield != null and _owner_shield.visible and _owner_shield.texture != null:
 		_owner_shield.position = Vector2(row_left + shield_w * 0.5, name_y + MAP_LABEL_LINE_HEIGHT * 0.5)
 	elif _owner_shield != null:
 		_owner_shield.position = Vector2.ZERO
 	_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_name_label.position = Vector2(row_left + shield_w + gap, name_y)
+	var name_x := row_left + shield_w + gap
+	_name_label.position = Vector2(name_x, name_y)
+	if _status_fx != null:
+		if fx_active:
+			_status_fx.position = Vector2(
+				name_x + name_w + fx_gap,
+				name_y + (MAP_LABEL_LINE_HEIGHT - fx_h) * 0.5
+			)
+		else:
+			_status_fx.position = Vector2.ZERO
 	y += MAP_LABEL_LINE_HEIGHT
 	for i in range(1, lines.size()):
 		var lbl: Label = lines[i]
@@ -1414,8 +1486,12 @@ func tick_holding_rations(player_id: int, rng: RandomNumberGenerator = null) -> 
 
 	var dropped := old_pop - new_pop
 	# Overflow soft-cap flux is normal — only inbox when ration/tax alone would shrink.
+	var h_flag := ensure_holding(player_id)
+	# Recalculated each season: non-levy civilian leave (ration + tax), not levy.
 	if dropped <= 0 or base_delta_sum >= 0:
+		h_flag["civilian_left_last_season"] = false
 		return {}
+	h_flag["civilian_left_last_season"] = true
 	return {
 		"province_name": str(p_name),
 		"province_id": str(name),

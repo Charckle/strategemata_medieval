@@ -26,6 +26,8 @@ func populate_settings() -> void:
 	$margin/vbox/tabs/Video/content/fullscreen_row/fullscreen_btn.selected = $margin/vbox/tabs/Video/content/fullscreen_row/fullscreen_btn.get_item_index(int(fs))
 	var weather_on = GlobalSet.settings.get("show_weather", 1) != 0
 	$margin/vbox/tabs/Video/content/show_weather_row/show_weather_chk.button_pressed = weather_on
+	var season_tint_on = GlobalSet.settings.get("show_season_tint", 1) != 0
+	$margin/vbox/tabs/Video/content/show_season_tint_row/show_season_tint_chk.button_pressed = season_tint_on
 
 func _linear_to_db(linear: float) -> float:
 	if linear <= 0.0:
@@ -100,6 +102,10 @@ func _on_fullscreen_btn_item_selected(index: int) -> void:
 
 func _on_show_weather_chk_toggled(pressed: bool) -> void:
 	GlobalSet.settings["show_weather"] = 1 if pressed else 0
+	SettingsLoad.save_settings()
+
+func _on_show_season_tint_chk_toggled(pressed: bool) -> void:
+	GlobalSet.settings["show_season_tint"] = 1 if pressed else 0
 	SettingsLoad.save_settings()
 
 func _on_back_btn_pressed() -> void:
