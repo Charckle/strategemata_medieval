@@ -48,6 +48,7 @@ static func validate(matrix: MapMatrix) -> PackedStringArray:
 
 	issues.append_array(_validate_plots(matrix))
 	issues.append_array(_validate_roads(matrix))
+	issues.append_array(_validate_terrain(matrix))
 	return issues
 
 
@@ -123,6 +124,33 @@ static func _validate_plots(matrix: MapMatrix) -> PackedStringArray:
 			reported[key] = true
 			issues.append("Plots %d and %d are orthogonally adjacent." % [a, b])
 
+	return issues
+
+
+static func _validate_terrain(matrix: MapMatrix) -> PackedStringArray:
+	var issues: PackedStringArray = []
+	if matrix.terrain.size() != matrix.width * matrix.height:
+		issues.append("Terrain layer size mismatch.")
+		return issues
+	var reserved: Dictionary = {}
+	for plot in matrix.plots:
+		var origin: Vector2i = plot.get("origin", Vector2i.ZERO)
+		var size: Vector2i = plot.get("size", Vector2i.ONE)
+		for cell in matrix.footprint_cells(origin, size):
+			reserved[cell] = true
+	var bad := 0
+	for y in matrix.height:
+		for x in matrix.width:
+			var c := Vector2i(x, y)
+			var t := matrix.get_terrain(c)
+			if t == MapMatrix.Terrain.GRASS:
+				continue
+			if reserved.has(c) or matrix.has_road(c):
+				bad += 1
+				if bad <= 3:
+					issues.append("Terrain on reserved/road cell %s." % str(c))
+	if bad > 3:
+		issues.append("…and %d more terrain/reserved overlaps." % (bad - 3))
 	return issues
 
 

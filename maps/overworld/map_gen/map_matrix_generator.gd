@@ -40,11 +40,17 @@ static func generate(province_count: int, seed_value: int = 0) -> MapMatrix:
 			continue
 		if not MapMatrixRoadBuilder.build(matrix):
 			continue
+		var terrain_rng := RandomNumberGenerator.new()
+		terrain_rng.seed = matrix.seed_used ^ 0x7E44A1
+		MapMatrixTerrain.apply(matrix, terrain_rng)
 		if MapMatrixValidator.validate(matrix).is_empty():
 			return matrix
 	## Last resort: best effort on the last successful plot layout.
 	if last != null and last.plots.size() == want_plots:
 		MapMatrixRoadBuilder.build(last)
+		var terrain_rng2 := RandomNumberGenerator.new()
+		terrain_rng2.seed = last.seed_used ^ 0x7E44A1
+		MapMatrixTerrain.apply(last, terrain_rng2)
 	return last
 
 

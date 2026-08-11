@@ -15,6 +15,14 @@ enum PlotKind {
 	DEPOSIT_RANDOM,
 }
 
+## Ground cover (matches summer_set atlas usage).
+enum Terrain {
+	GRASS,
+	HILLS,
+	MOUNTAINS,
+	TREES,
+}
+
 var width: int = 0
 var height: int = 0
 var province_count: int = 0
@@ -23,6 +31,8 @@ var seed_used: int = 0
 var cells: PackedInt32Array = PackedInt32Array()
 ## Row-major road mask: 0 empty, 1 road
 var roads: PackedByteArray = PackedByteArray()
+## Row-major Terrain enum
+var terrain: PackedByteArray = PackedByteArray()
 ## province_id -> Vector2i seat cell
 var seats: Array[Vector2i] = []
 ## Each: { kind: PlotKind, province_id: int, origin: Vector2i, size: Vector2i }
@@ -67,6 +77,8 @@ func resize(w: int, h: int, provinces: int) -> void:
 	cells.fill(INVALID)
 	roads.resize(width * height)
 	roads.fill(0)
+	terrain.resize(width * height)
+	terrain.fill(Terrain.GRASS)
 	seats.clear()
 	seats.resize(province_count)
 	for i in province_count:
@@ -151,6 +163,22 @@ func road_count() -> int:
 		if v != 0:
 			n += 1
 	return n
+
+
+func get_terrain(cell: Vector2i) -> int:
+	if not in_bounds(cell):
+		return Terrain.GRASS
+	return int(terrain[index_of(cell)])
+
+
+func set_terrain(cell: Vector2i, kind: int) -> void:
+	if not in_bounds(cell):
+		return
+	terrain[index_of(cell)] = kind
+
+
+func clear_terrain() -> void:
+	terrain.fill(Terrain.GRASS)
 
 
 static func is_road_hub_kind(kind: int) -> bool:

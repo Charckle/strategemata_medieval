@@ -50,7 +50,7 @@ text = "Map Gen Test"
 [node name="Subtitle" type="Label" parent="Margin/HBox/LeftPanel"]
 layout_mode = 2
 autowrap_mode = 3
-text = "Matrix + plots + roads. Thin skirts around hubs (army can walk around). No 2x2 stacks. Brown = road."
+text = "Generate + terrain (hills/mountains ridges, trees). Bake & Play. Auto-rerolls until VALID."
 
 [node name="ProvinceRow" type="HBoxContainer" parent="Margin/HBox/LeftPanel"]
 layout_mode = 2
@@ -74,6 +74,13 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
 text = "Reroll"
+
+[node name="BakePlayButton" type="Button" parent="Margin/HBox/LeftPanel"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+disabled = true
+text = "Bake & Play"
 
 [node name="StatusLabel" type="Label" parent="Margin/HBox/LeftPanel"]
 unique_name_in_owner = true

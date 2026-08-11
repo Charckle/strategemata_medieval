@@ -47,14 +47,22 @@ func _draw() -> void:
 
 	for y in matrix.height:
 		for x in matrix.width:
-			var pid := matrix.get_cell(Vector2i(x, y))
+			var pos := Vector2i(x, y)
+			var pid := matrix.get_cell(pos)
 			var col := Color(0.25, 0.25, 0.28)
 			if pid >= 0 and pid < _palette.size():
 				col = _palette[pid]
+			## Terrain tint on top of province color.
+			match matrix.get_terrain(pos):
+				MapMatrix.Terrain.HILLS:
+					col = col.lerp(Color(0.55, 0.7, 0.35), 0.45)
+				MapMatrix.Terrain.MOUNTAINS:
+					col = col.lerp(Color(0.45, 0.45, 0.5), 0.7)
+				MapMatrix.Terrain.TREES:
+					col = col.lerp(Color(0.12, 0.45, 0.18), 0.55)
 			var r := Rect2(origin + Vector2(x, y) * cell, Vector2(cell, cell))
 			draw_rect(r, col)
-			if matrix.has_road(Vector2i(x, y)):
-				## Brown road overlay on empty land cells.
+			if matrix.has_road(pos):
 				var inset := maxf(1.0, cell * 0.18)
 				var rr := r.grow(-inset)
 				draw_rect(rr, Color(0.45, 0.28, 0.12, 0.92))

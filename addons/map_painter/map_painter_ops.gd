@@ -19,6 +19,9 @@ const CELL_OFFSET_2X2 := Vector2(64, 16)
 const TERRAIN_TILES := [
 	{"label": "Walkable ground", "atlas": Vector2i(0, 0), "walkable": true},
 	{"label": "Water / shore A", "atlas": Vector2i(0, 1), "walkable": false},
+	{"label": "Trees (blocked)", "atlas": Vector2i(0, 6), "walkable": false},
+	{"label": "Mountains (blocked)", "atlas": Vector2i(1, 6), "walkable": false},
+	{"label": "Hills (walkable)", "atlas": Vector2i(2, 6), "walkable": true},
 	{"label": "Terrain 0:4", "atlas": Vector2i(0, 4), "walkable": false},
 	{"label": "Terrain 0:5", "atlas": Vector2i(0, 5), "walkable": false},
 	{"label": "Terrain 1:4", "atlas": Vector2i(1, 4), "walkable": false},
