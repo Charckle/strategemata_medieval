@@ -58,8 +58,6 @@ func reset_to_defaults() -> void:
 		## Default: Test Map 01 (fast open). Random generates on demand.
 		_map_opt.select(1)
 	_preview_matrix = null
-	if _preview != null and _preview.has_method("set_matrix"):
-		_preview.set_matrix(null)
 	_refresh_map_controls()
 	_apply_fixed_map_ui()
 
@@ -497,9 +495,6 @@ func _on_map_selected(_idx: int) -> void:
 	else:
 		## Leaving Random cancels any in-flight generation.
 		_cancel_generation()
-		_preview_matrix = null
-		if _preview != null and _preview.has_method("set_matrix"):
-			_preview.set_matrix(null)
 		_apply_fixed_map_ui()
 
 
@@ -517,8 +512,9 @@ func _refresh_map_controls() -> void:
 	var random := _is_random_map()
 	if _province_row != null:
 		_province_row.visible = random
+	## Preview stays visible for authored maps too (square cache).
 	if _preview != null:
-		_preview.visible = random
+		_preview.visible = true
 	if _reroll_map_btn != null:
 		_reroll_map_btn.visible = random
 
@@ -526,9 +522,18 @@ func _refresh_map_controls() -> void:
 func _apply_fixed_map_ui() -> void:
 	_gen_loading = false
 	_set_gen_controls_enabled(true)
-	_preview_status.text = "Fixed map: Test Map 01"
-	_preview_status.add_theme_color_override("font_color", Color(0.75, 0.75, 0.78))
-	_start_btn.disabled = false
+	var matrix := MapMatrixSceneSampler.sample_cached(GlobalSet.TEST_MAP_01)
+	_preview_matrix = matrix
+	if _preview != null and _preview.has_method("set_matrix"):
+		_preview.set_matrix(matrix)
+	if matrix != null:
+		_preview_status.text = "Test Map 01 — %d provinces" % matrix.province_count
+		_preview_status.add_theme_color_override("font_color", Color(0.75, 0.75, 0.78))
+		_start_btn.disabled = false
+	else:
+		_preview_status.text = "Test Map 01 — preview unavailable"
+		_preview_status.add_theme_color_override("font_color", Color(0.95, 0.55, 0.35))
+		_start_btn.disabled = false
 
 
 func _set_gen_controls_enabled(enabled: bool) -> void:
