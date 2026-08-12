@@ -1,20 +1,36 @@
 extends PanelContainer
 
-## New Game setup: add Human/AI slots, edit human name + heraldry, pick order colour + AI doctrine.
+## New Game setup: map pick, Human/AI slots, heraldry, order colour + AI doctrine.
 ## Shield editing uses the shared heraldry modal (Accept / Cancel); row has quick Random.
 
 const HeraldryEditorScene = preload("res://menus/gui/heraldry_editor/heraldry_editor.gd")
+const MapMatrixPreviewScript = preload("res://maps/overworld/map_gen/map_matrix_preview.gd")
 
 const ROW_SHIELD_SIZE := 36
 const SWATCH_SIZE := 28
 const TYPE_HUMAN := 0
 const TYPE_AI := 1
+const MAP_ID_RANDOM := 0
+const MAP_ID_TEST_01 := 1
+const AUTO_REROLL_TRIES := 16
 
 var _slots: Array = []  # Array[Dictionary]
 var _rebuild_busy := false
 
 var _slots_box: VBoxContainer
 var _add_btn: Button
+var _map_opt: OptionButton
+var _province_row: HBoxContainer
+var _province_spin: SpinBox
+var _reroll_map_btn: Button
+var _preview: Control
+var _preview_status: Label
+var _start_btn: Button
+
+var _preview_matrix: MapMatrix = null
+var _gen_thread: Thread = null
+var _gen_token: int = 0
+var _gen_loading: bool = false
 
 ## Shield draft popup state
 var _heraldry_editor: Control
@@ -26,10 +42,26 @@ func _ready() -> void:
 	reset_to_defaults()
 
 
+func _exit_tree() -> void:
+	_cancel_generation()
+	_join_gen_thread()
+
+
 func reset_to_defaults() -> void:
 	_close_shield_editor()
+	_cancel_generation()
 	_slots = [GlobalSet.make_default_human_slot()]
 	_rebuild_slot_list()
+	if _province_spin != null:
+		_province_spin.value = 6
+	if _map_opt != null:
+		## Default: Test Map 01 (fast open). Random generates on demand.
+		_map_opt.select(1)
+	_preview_matrix = null
+	if _preview != null and _preview.has_method("set_matrix"):
+		_preview.set_matrix(null)
+	_refresh_map_controls()
+	_apply_fixed_map_ui()
 
 
 func _build_ui() -> void:
@@ -62,9 +94,57 @@ func _build_ui() -> void:
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(hint)
 
+	var map_row := HBoxContainer.new()
+	map_row.add_theme_constant_override("separation", 8)
+	root.add_child(map_row)
+
+	var map_lbl := Label.new()
+	map_lbl.text = "Map"
+	map_lbl.custom_minimum_size = Vector2(80, 0)
+	map_row.add_child(map_lbl)
+
+	_map_opt = OptionButton.new()
+	_map_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_map_opt.add_item("Random", MAP_ID_RANDOM)
+	_map_opt.add_item("Test Map 01", MAP_ID_TEST_01)
+	_map_opt.item_selected.connect(_on_map_selected)
+	map_row.add_child(_map_opt)
+
+	_province_row = HBoxContainer.new()
+	_province_row.add_theme_constant_override("separation", 8)
+	root.add_child(_province_row)
+
+	var prov_lbl := Label.new()
+	prov_lbl.text = "Provinces"
+	prov_lbl.custom_minimum_size = Vector2(80, 0)
+	_province_row.add_child(prov_lbl)
+
+	_province_spin = SpinBox.new()
+	_province_spin.min_value = 3
+	_province_spin.max_value = 20
+	_province_spin.value = 6
+	_province_spin.rounded = true
+	_province_spin.value_changed.connect(_on_province_count_changed)
+	_province_row.add_child(_province_spin)
+
+	_reroll_map_btn = Button.new()
+	_reroll_map_btn.text = "Reroll map"
+	_reroll_map_btn.pressed.connect(_on_reroll_map)
+	_province_row.add_child(_reroll_map_btn)
+
+	_preview_status = Label.new()
+	_preview_status.text = ""
+	root.add_child(_preview_status)
+
+	_preview = MapMatrixPreviewScript.new()
+	_preview.custom_minimum_size = Vector2(0, 180)
+	_preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.add_child(_preview)
+
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.custom_minimum_size = Vector2(0, 260)
+	scroll.custom_minimum_size = Vector2(0, 180)
 	root.add_child(scroll)
 
 	_slots_box = VBoxContainer.new()
@@ -88,11 +168,11 @@ func _build_ui() -> void:
 	back.pressed.connect(_on_back_pressed)
 	btns.add_child(back)
 
-	var start_btn := Button.new()
-	start_btn.text = "Start"
-	start_btn.custom_minimum_size = Vector2(120, 40)
-	start_btn.pressed.connect(_on_start_pressed)
-	btns.add_child(start_btn)
+	_start_btn = Button.new()
+	_start_btn.text = "Start"
+	_start_btn.custom_minimum_size = Vector2(120, 40)
+	_start_btn.pressed.connect(_on_start_pressed)
+	btns.add_child(_start_btn)
 
 
 func _ensure_heraldry_editor() -> void:
@@ -401,14 +481,136 @@ func _refresh_slot_shield(idx: int) -> void:
 
 
 func _on_back_pressed() -> void:
+	_cancel_generation()
 	_close_shield_editor()
 	visible = false
 
 
-func _on_start_pressed() -> void:
-	if _human_count() < 1:
+func _is_random_map() -> bool:
+	return _map_opt != null and _map_opt.get_selected_id() == MAP_ID_RANDOM
+
+
+func _on_map_selected(_idx: int) -> void:
+	_refresh_map_controls()
+	if _is_random_map():
+		_regenerate_preview()
+	else:
+		## Leaving Random cancels any in-flight generation.
+		_cancel_generation()
+		_preview_matrix = null
+		if _preview != null and _preview.has_method("set_matrix"):
+			_preview.set_matrix(null)
+		_apply_fixed_map_ui()
+
+
+func _on_province_count_changed(_v: float) -> void:
+	if _is_random_map() and not _gen_loading:
+		_regenerate_preview()
+
+
+func _on_reroll_map() -> void:
+	if _is_random_map() and not _gen_loading:
+		_regenerate_preview()
+
+
+func _refresh_map_controls() -> void:
+	var random := _is_random_map()
+	if _province_row != null:
+		_province_row.visible = random
+	if _preview != null:
+		_preview.visible = random
+	if _reroll_map_btn != null:
+		_reroll_map_btn.visible = random
+
+
+func _apply_fixed_map_ui() -> void:
+	_gen_loading = false
+	_set_gen_controls_enabled(true)
+	_preview_status.text = "Fixed map: Test Map 01"
+	_preview_status.add_theme_color_override("font_color", Color(0.75, 0.75, 0.78))
+	_start_btn.disabled = false
+
+
+func _set_gen_controls_enabled(enabled: bool) -> void:
+	## Map dropdown stays enabled so the player can cancel by picking Test Map 01.
+	if _province_spin != null:
+		_province_spin.editable = enabled
+	if _reroll_map_btn != null:
+		_reroll_map_btn.disabled = not enabled
+	if _add_btn != null:
+		_add_btn.disabled = not enabled or _slots.size() >= GlobalSet.MAX_SETUP_PLAYERS
+	if _slots_box != null:
+		_slots_box.modulate = Color(1, 1, 1, 1.0 if enabled else 0.55)
+		_slots_box.mouse_filter = Control.MOUSE_FILTER_STOP if enabled else Control.MOUSE_FILTER_IGNORE
+
+
+func _cancel_generation() -> void:
+	_gen_token += 1
+	_gen_loading = false
+
+
+func _join_gen_thread() -> void:
+	if _gen_thread != null:
+		_gen_thread.wait_to_finish()
+		_gen_thread = null
+
+
+func _regenerate_preview() -> void:
+	if not _is_random_map():
 		return
-	_close_shield_editor()
+	_cancel_generation()
+	_join_gen_thread()
+	var token := _gen_token
+	_gen_loading = true
+	_preview_matrix = null
+	if _preview != null and _preview.has_method("set_matrix"):
+		_preview.set_matrix(null)
+	_start_btn.disabled = true
+	_set_gen_controls_enabled(false)
+	_preview_status.text = "Loading…"
+	_preview_status.add_theme_color_override("font_color", Color(0.85, 0.8, 0.45))
+	var n := int(_province_spin.value) if _province_spin else 6
+	var seed_base := randi()
+	_gen_thread = Thread.new()
+	_gen_thread.start(_gen_worker.bind(token, n, seed_base))
+
+
+func _gen_worker(token: int, province_count: int, seed_base: int) -> void:
+	var matrix: MapMatrix = null
+	var ok := false
+	for attempt in AUTO_REROLL_TRIES:
+		matrix = MapMatrixGenerator.generate(province_count, seed_base + attempt * 9973)
+		if matrix != null and MapMatrixValidator.validate(matrix).is_empty():
+			ok = true
+			break
+	call_deferred("_on_gen_finished", token, matrix, ok)
+
+
+func _on_gen_finished(token: int, matrix: MapMatrix, ok: bool) -> void:
+	_join_gen_thread()
+	if token != _gen_token:
+		return
+	if not _is_random_map():
+		_gen_loading = false
+		return
+	_gen_loading = false
+	_set_gen_controls_enabled(true)
+	_preview_matrix = matrix if ok else null
+	if _preview != null and _preview.has_method("set_matrix"):
+		_preview.set_matrix(_preview_matrix)
+	if ok and matrix != null:
+		_preview_status.text = "VALID — %d provinces, seed %d" % [
+			matrix.province_count, matrix.seed_used
+		]
+		_preview_status.add_theme_color_override("font_color", Color(0.35, 0.85, 0.45))
+		_start_btn.disabled = false
+	else:
+		_preview_status.text = "INVALID map — hit Reroll map"
+		_preview_status.add_theme_color_override("font_color", Color(0.95, 0.4, 0.35))
+		_start_btn.disabled = true
+
+
+func _collect_slots() -> Array:
 	var clean_slots: Array = []
 	for s in _slots:
 		var entry := {
@@ -425,7 +627,43 @@ func _on_start_pressed() -> void:
 				d = LordAI.DOCTRINE_DEFENSE
 			entry["ai_doctrine"] = d
 		clean_slots.append(entry)
+	return clean_slots
+
+
+func _on_start_pressed() -> void:
+	if _human_count() < 1:
+		return
+	if _gen_loading:
+		return
+	_close_shield_editor()
+	var clean_slots := _collect_slots()
 	SaveGame.clear_session()
+
+	if _is_random_map():
+		if _preview_matrix == null:
+			return
+		if not MapMatrixValidator.validate(_preview_matrix).is_empty():
+			return
+		_start_btn.disabled = true
+		_preview_status.text = "Baking map…"
+		var map_root := MapMatrixBaker.bake(_preview_matrix)
+		if map_root == null:
+			_preview_status.text = "Bake failed — reroll"
+			_start_btn.disabled = false
+			return
+		GlobalSet.pending_game_setup = {
+			"map_path": GlobalSet.MAP_RANDOM,
+			"slots": clean_slots,
+			"world_seed": _preview_matrix.seed_used,
+		}
+		var tree := get_tree()
+		var old := tree.current_scene
+		tree.root.add_child(map_root)
+		tree.current_scene = map_root
+		if old != null:
+			old.queue_free()
+		return
+
 	GlobalSet.pending_game_setup = {
 		"map_path": GlobalSet.TEST_MAP_01,
 		"slots": clean_slots,

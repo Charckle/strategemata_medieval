@@ -15,6 +15,8 @@ var return_to_new_game := false
 var pending_game_setup: Dictionary = {}
 
 const TEST_MAP_01 := "res://maps/overworld/test_maps/test_map_01/test_map_01.tscn"
+## Sentinel map_path for procedurally baked maps (no .tscn on disk).
+const MAP_RANDOM := "generated://random"
 const MAX_SETUP_PLAYERS := 4
 
 

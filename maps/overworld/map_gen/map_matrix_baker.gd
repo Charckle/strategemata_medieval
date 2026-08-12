@@ -4,6 +4,7 @@ extends RefCounted
 ## Turns a validated MapMatrix into a playable OBaseMap instance (in memory).
 
 const Ops := preload("res://addons/map_painter/map_painter_ops.gd")
+const ProvinceNames := preload("res://global_scripts/province_names.gd")
 const LAND_ATLAS := Vector2i(0, 0)
 const TREES_ATLAS := Vector2i(0, 6)
 const MOUNTAINS_ATLAS := Vector2i(1, 6)
@@ -31,12 +32,12 @@ static func bake(matrix: MapMatrix) -> Node:
 	if roads != null:
 		_paint_roads(roads, matrix)
 
+	var names := ProvinceNames.pick_names(matrix.province_count, matrix.seed_used)
 	var provinces: Array[Node] = []
 	provinces.resize(matrix.province_count)
 	for pid in matrix.province_count:
-		var prov := Ops.create_province(
-			map_root, "Province %d" % (pid + 1), UNOWNED
-		)
+		var pname := str(names[pid]) if pid < names.size() else "Province %d" % (pid + 1)
+		var prov := Ops.create_province(map_root, pname, UNOWNED)
 		provinces[pid] = prov
 
 	for plot in matrix.plots:
